@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows10.0.19041.0</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>Tedd.Defrag.Desktop</RootNamespace>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+    <ApplicationTitle>Tedd Defrag</ApplicationTitle>
+    <ApplicationId>net.tedd.defrag</ApplicationId>
+    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+    <WindowsPackageType>None</WindowsPackageType>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#0B121C" />
+    <MauiFont Include="Resources/Fonts/*" />
+    <PackageReference Include="Microsoft.Maui.Controls" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
+    <ProjectReference Include="../Tedd.Defrag.Client/Tedd.Defrag.Client.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Windows/Tedd.Defrag.Windows.csproj" />
+  </ItemGroup>
+</Project>

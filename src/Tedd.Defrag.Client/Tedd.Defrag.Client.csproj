@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Tedd.Defrag.Core/Tedd.Defrag.Core.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Persistence/Tedd.Defrag.Persistence.csproj" />
+  </ItemGroup>
+</Project>

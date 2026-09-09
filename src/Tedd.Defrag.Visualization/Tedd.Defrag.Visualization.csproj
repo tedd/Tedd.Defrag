@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Tedd.Defrag.Core/Tedd.Defrag.Core.csproj" />
+  </ItemGroup>
+</Project>

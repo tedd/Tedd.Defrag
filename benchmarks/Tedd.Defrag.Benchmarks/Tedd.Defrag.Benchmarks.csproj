@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><Optimize>true</Optimize></PropertyGroup>
+  <ItemGroup><PackageReference Include="BenchmarkDotNet" /></ItemGroup>
+  <ItemGroup><Compile Include="../../tests/Fixtures/SyntheticVolume.cs" Link="Fixtures/SyntheticVolume.cs" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/Tedd.Defrag.Archive/Tedd.Defrag.Archive.csproj" /><ProjectReference Include="../../src/Tedd.Defrag.Planning/Tedd.Defrag.Planning.csproj" /><ProjectReference Include="../../src/Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" /></ItemGroup>
+</Project>

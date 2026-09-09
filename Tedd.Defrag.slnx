@@ -1,0 +1,20 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Tedd.Defrag.Archive/Tedd.Defrag.Archive.csproj" />
+    <Project Path="src/Tedd.Defrag.Cli/Tedd.Defrag.Cli.csproj" />
+    <Project Path="src/Tedd.Defrag.Client/Tedd.Defrag.Client.csproj" />
+    <Project Path="src/Tedd.Defrag.Core/Tedd.Defrag.Core.csproj" />
+    <Project Path="src/Tedd.Defrag.Desktop/Tedd.Defrag.Desktop.csproj" />
+    <Project Path="src/Tedd.Defrag.Engine/Tedd.Defrag.Engine.csproj" />
+    <Project Path="src/Tedd.Defrag.Maintenance/Tedd.Defrag.Maintenance.csproj" />
+    <Project Path="src/Tedd.Defrag.Ntfs/Tedd.Defrag.Ntfs.csproj" />
+    <Project Path="src/Tedd.Defrag.Persistence/Tedd.Defrag.Persistence.csproj" />
+    <Project Path="src/Tedd.Defrag.Planning/Tedd.Defrag.Planning.csproj" />
+    <Project Path="src/Tedd.Defrag.Scheduling/Tedd.Defrag.Scheduling.csproj" />
+    <Project Path="src/Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
+    <Project Path="src/Tedd.Defrag.Windows/Tedd.Defrag.Windows.csproj" />
+    <Project Path="src/Tedd.Defrag.Worker/Tedd.Defrag.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/"><Project Path="tests/Tedd.Defrag.Tests/Tedd.Defrag.Tests.csproj" /></Folder>
+  <Folder Name="/benchmarks/"><Project Path="benchmarks/Tedd.Defrag.Benchmarks/Tedd.Defrag.Benchmarks.csproj" /></Folder>
+</Solution>

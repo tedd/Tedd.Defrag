@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net11.0-windows10.0.19041.0</TargetFramework></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Tedd.Defrag.Core/Tedd.Defrag.Core.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Planning/Tedd.Defrag.Planning.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Windows/Tedd.Defrag.Windows.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Maintenance/Tedd.Defrag.Maintenance.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Persistence/Tedd.Defrag.Persistence.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Scheduling/Tedd.Defrag.Scheduling.csproj" />
+  </ItemGroup>
+</Project>

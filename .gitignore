@@ -427,3 +427,8 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Generated application distributions, recordings and benchmark intermediates.
+artifacts/
+BenchmarkDotNet.Artifacts/
+TestResults/

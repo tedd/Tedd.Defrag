@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net11.0-windows10.0.19041.0</TargetFramework><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /><PackageReference Include="xunit" /><PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/Tedd.Defrag.Engine/Tedd.Defrag.Engine.csproj" /><ProjectReference Include="../../src/Tedd.Defrag.Ntfs/Tedd.Defrag.Ntfs.csproj" /></ItemGroup>
+  <ItemGroup><Compile Include="../Fixtures/SyntheticVolume.cs" Link="Fixtures/SyntheticVolume.cs" /></ItemGroup>
+</Project>
