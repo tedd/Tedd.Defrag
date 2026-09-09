@@ -13,10 +13,10 @@ public partial class MainPage : ContentPage
 {
     private readonly DefragClient _client = new();
     private readonly DiskMapDrawable _map = new();
+    private readonly Dictionary<string, VolumeSession> _volumeSessions = new(StringComparer.OrdinalIgnoreCase);
+    private VolumeInfo[] _volumes = [];
     private VolumeInfo? _volume;
     private bool _polling, _refreshing, _submitting;
-    private Guid _job, _awaitingReport;
-    private JobSnapshot? _snapshot;
     private readonly IDispatcherTimer _timer;
     private TaskCompletionSource<Operation?>? _policyChoice;
     private static readonly PolicyOption[] Policies =
@@ -85,6 +85,7 @@ public partial class MainPage : ContentPage
         try
         {
             var volumes = await Task.Run(VolumeDiscovery.List);
+            _volumes = volumes;
             VolumesPanel.Children.Clear();
             foreach (var volume in volumes) AddVolume(volume);
             if (_volume != null && volumes.FirstOrDefault(v => v.Id == _volume.Id) is { } current)
@@ -110,7 +111,7 @@ public partial class MainPage : ContentPage
     }
     private void SelectVolume(VolumeInfo? volume)
     {
-        _volume = volume; _job = Guid.Empty; _snapshot = null; _map.Cells = []; _map.Reset();
+        _volume = volume; _map.Cells = []; _map.Reset();
         _map.EmptyMessage = volume == null ? "Connect a volume and refresh to begin." :
             volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS volume to analyze its allocation.";
         DiskMap.Invalidate();
@@ -128,11 +129,19 @@ public partial class MainPage : ContentPage
         FooterStatus.Text = volume == null ? "●  No available volumes · refresh to try again" : $"●  {volume.Root} selected · administrator access active";
         if (volume != null && !volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
             JobMessage.Text = "Analysis and optimization require an NTFS volume.";
+        if (volume != null && _volumeSessions.TryGetValue(volume.Id, out var session) && session.Snapshot != null)
+        {
+            Render(session);
+            PresentCompletionIfNeeded(session);
+        }
         UpdateVolumeActions();
+        _ = Poll();
     }
     private void UpdateVolumeActions()
     {
-        AnalyzeButton.IsEnabled = PreviewButton.IsEnabled = OptimizeButton.IsEnabled = !_submitting && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
+        var session = CurrentSession;
+        bool jobActive = HasActiveJob(session);
+        AnalyzeButton.IsEnabled = PreviewButton.IsEnabled = OptimizeButton.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
         foreach (var button in VolumesPanel.Children.OfType<Button>())
         {
             button.IsEnabled = !_submitting;
@@ -175,8 +184,9 @@ public partial class MainPage : ContentPage
                 if (!await DisplayAlertAsync("Review disk operation", details, "Start job", "Cancel")) return;
             }
             OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the persistent worker…";
-            _job = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
-            _awaitingReport = _job;
+            var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS volume first.");
+            session.JobId = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
+            session.AwaitingReport = session.JobId;
             _map.Reset(); FooterStatus.Text = "●  Job submitted · closing this view does not stop it"; await Poll();
         }
         catch (Exception e) { await DisplayAlertAsync("Job could not start", e.Message, "Close"); FooterStatus.Text = e.Message; }
@@ -184,23 +194,40 @@ public partial class MainPage : ContentPage
     }
     private async Task Poll()
     {
-        if (_polling || _job == Guid.Empty) return;
+        var session = CurrentSession;
+        if (_polling || session == null || session.JobId == Guid.Empty) return;
         _polling = true;
         try
         {
-            Guid id = _job; var reply = await _client.Send(new("get", Id: id));
-            if (id == _job && reply.Snapshot != null && reply.Snapshot.UpdatedAt != _snapshot?.UpdatedAt) Apply(reply.Snapshot);
+            Guid id = session.JobId; var reply = await _client.Send(new("get", Id: id));
+            if (id == session.JobId && reply.Snapshot != null &&
+                (reply.Snapshot.Id != session.Snapshot?.Id || reply.Snapshot.UpdatedAt != session.Snapshot.UpdatedAt))
+                Apply(reply.Snapshot, session);
         }
         catch (Exception e) { FooterStatus.Text = e.Message; }
         finally { _polling = false; }
     }
-    private void Apply(JobSnapshot snapshot)
+    private void Apply(JobSnapshot snapshot, VolumeSession session)
     {
-        _snapshot = snapshot; _map.Cells = snapshot.Map ?? _map.Cells; DiskMap.Invalidate();
-        if (snapshot.TotalBytes > 0)
+        session.Snapshot = snapshot;
+        if (snapshot.ObservedAt.HasValue && snapshot.TotalBytes > 0) session.LayoutSnapshot = snapshot;
+        if (snapshot.Map != null) session.Cells = snapshot.Map;
+        if (snapshot.Files != null) session.Files = snapshot.Files.Select(f => new FileRow(f.Path, f.Extents, Format.Bytes(f.Bytes), f.Status)).ToArray();
+        if (!ReferenceEquals(session, CurrentSession)) return;
+        Render(session);
+        PresentCompletionIfNeeded(session);
+    }
+    private void Render(VolumeSession session)
+    {
+        var snapshot = session.Snapshot ?? throw new InvalidOperationException("The volume session has no snapshot.");
+        var layout = session.LayoutSnapshot;
+        _map.Cells = session.Cells; DiskMap.Invalidate(); UpdateRange();
+        if (_volume != null && layout?.ObservedAt.HasValue == true)
+            MapSubtitle.Text = $"{_volume.FileSystem} · {_volume.BytesPerCluster:N0}-byte clusters · observed {layout.ObservedAt.Value.ToLocalTime():HH:mm:ss}";
+        if (layout?.TotalBytes > 0)
         {
-            FreeMetric.Text = Format.Bytes(snapshot.FreeBytes); CapacityDetail.Text = $"of {Format.Bytes(snapshot.TotalBytes)} capacity";
-            FragmentMetric.Text = snapshot.FragmentedFiles.ToString("N0"); StreamDetail.Text = $"of {snapshot.TotalFiles:N0} allocated streams";
+            FreeMetric.Text = Format.Bytes(layout.FreeBytes); CapacityDetail.Text = $"of {Format.Bytes(layout.TotalBytes)} capacity";
+            FragmentMetric.Text = layout.FragmentedFiles.ToString("N0"); StreamDetail.Text = $"of {layout.TotalFiles:N0} allocated streams";
         }
         MovedMetric.Text = snapshot.BytesMoved == 0 && snapshot.State is JobState.Queued or JobState.Scanning or JobState.Planning ? "Pending" : Format.Bytes(snapshot.BytesMoved);
         BudgetDetail.Text = snapshot.PlannedBytes > 0 ? $"{Format.Bytes(snapshot.PlannedBytes)} planned" : snapshot.State switch
@@ -213,25 +240,23 @@ public partial class MainPage : ContentPage
         JobTitle.Text = snapshot.Operation + " · " + snapshot.State; JobMessage.Text = snapshot.Message;
         JobProgress.Progress = Math.Clamp(snapshot.Progress, 0, 1); ProgressText.Text = snapshot.IsTerminal ? snapshot.State.ToString().ToUpperInvariant() : snapshot.Progress.ToString("P0");
         ObservationText.Text = snapshot.ObservedAt.HasValue ? $"Observed {snapshot.ObservedAt.Value.ToLocalTime():HH:mm:ss} · logical volume allocation" : "Reading the current volume layout";
-        PauseButton.IsEnabled = CancelButton.IsEnabled = !snapshot.IsTerminal && _job != Guid.Empty; PauseButton.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
-        if (snapshot.Files != null) FileList.ItemsSource = snapshot.Files.Select(f => new FileRow(f.Path, f.Extents, Format.Bytes(f.Bytes), f.Status)).ToArray();
+        PauseButton.IsEnabled = CancelButton.IsEnabled = !snapshot.IsTerminal && session.JobId != Guid.Empty; PauseButton.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
+        FileList.ItemsSource = session.Files;
         WarningsText.Text = string.Join("\n", snapshot.Warnings ?? []);
         FooterStatus.Text = $"●  {snapshot.Volume} · {snapshot.State} · worker-owned job";
-        if (snapshot.IsTerminal && snapshot.Id == _awaitingReport)
+        UpdateVolumeActions();
+    }
+    private void PresentCompletionIfNeeded(VolumeSession session)
+    {
+        if (session.Snapshot is { IsTerminal: true } snapshot && snapshot.Id == session.AwaitingReport)
         {
-            _awaitingReport = Guid.Empty;
+            session.AwaitingReport = Guid.Empty;
             _ = ShowCompletionReport(snapshot);
         }
     }
     private async void OnAnalyze(object? sender, EventArgs e) => await Submit(Operation.Analyze, true);
-    private async void OnPreview(object? sender, EventArgs e)
-    {
-        if (await ChoosePolicy() is { } operation) await Submit(operation, true);
-    }
-    private async void OnOptimize(object? sender, EventArgs e)
-    {
-        if (await ChoosePolicy() is { } operation) await Submit(operation, false);
-    }
+    private async void OnPreview(object? sender, EventArgs e) => await Submit(_selectedPolicy.Operation, true);
+    private async void OnOptimize(object? sender, EventArgs e) => await Submit(_selectedPolicy.Operation, false);
     private async void OnChooseMethod(object? sender, EventArgs e) => await ChoosePolicy();
     private Task<Operation?> ChoosePolicy()
     {
@@ -240,10 +265,11 @@ public partial class MainPage : ContentPage
         AlgorithmOverlay.IsVisible = true;
         return _policyChoice.Task;
     }
-    private void OnPolicyTapped(object? sender, TappedEventArgs e)
+    private void OnPolicySelected(object? sender, SelectionChangedEventArgs e)
     {
-        if (sender is not TapGestureRecognizer { BindingContext: PolicyOption option }) return;
+        if (e.CurrentSelection.FirstOrDefault() is not PolicyOption option) return;
         _selectedPolicy = option; UpdateSelectedPolicy(); CompletePolicyChoice(option.Operation);
+        PolicyList.SelectedItem = null;
     }
     private void OnCancelPolicy(object? sender, EventArgs e) => CompletePolicyChoice(null);
     private void CompletePolicyChoice(Operation? operation)
@@ -255,9 +281,9 @@ public partial class MainPage : ContentPage
     {
         SelectedMethodIcon.Text = _selectedPolicy.Icon; SelectedMethodName.Text = _selectedPolicy.Name; SelectedMethodDescription.Text = _selectedPolicy.Description;
     }
-    private async void OnPause(object? sender, EventArgs e) => await Control(_snapshot?.State == JobState.Paused ? "resume" : "pause");
+    private async void OnPause(object? sender, EventArgs e) => await Control(CurrentSession?.Snapshot?.State == JobState.Paused ? "resume" : "pause");
     private async void OnCancel(object? sender, EventArgs e) => await Control("cancel");
-    private async Task Control(string action) { try { if (_job != Guid.Empty) await _client.Send(new(action, Id: _job)); } catch (Exception e) { await DisplayAlertAsync("Job control", e.Message, "Close"); } }
+    private async Task Control(string action) { try { if (CurrentSession?.JobId is { } id && id != Guid.Empty) await _client.Send(new(action, Id: id)); } catch (Exception e) { await DisplayAlertAsync("Job control", e.Message, "Close"); } }
     private async void OnRefreshVolumes(object? sender, EventArgs e) => await RefreshVolumes();
     private void OnOverview(object? sender, EventArgs e) { ShowSettings(false); OnResetZoom(sender, e); }
     private void OnSettings(object? sender, EventArgs e) => ShowSettings(true);
@@ -303,8 +329,8 @@ public partial class MainPage : ContentPage
     private void OnFileSelected(object? sender, SelectionChangedEventArgs e) { if (e.CurrentSelection.FirstOrDefault() is FileRow row) { SelectedPath.Text = row.Path; CellDetail.Text = row.Path; } }
     private async void OnExport(object? sender, EventArgs e)
     {
-        if (_snapshot == null) return;
-        await ExportReport(_snapshot);
+        if (CurrentSession?.Snapshot is not { } snapshot) return;
+        await ExportReport(snapshot);
     }
     private async Task ExportReport(JobSnapshot snapshot)
     {
@@ -340,7 +366,26 @@ public partial class MainPage : ContentPage
             if (jobs.Length == 0) { await DisplayAlertAsync("Activity", "No jobs have been submitted.", "Close"); return; }
             string[] titles = jobs.Take(30).Select(j => $"{j.UpdatedAt.ToLocalTime():MM-dd HH:mm} · {j.Volume} · {j.Operation} · {j.State} · {j.Id.ToString()[..6]}").ToArray();
             string? choice = await DisplayActionSheetAsync("Select a job to inspect", "Close", null, titles);
-            int index = Array.IndexOf(titles, choice); if (index >= 0) { _job = jobs[index].Id; await Poll(); }
+            int index = Array.IndexOf(titles, choice);
+            if (index >= 0)
+            {
+                var job = jobs[index];
+                var volume = _volumes.FirstOrDefault(v => VolumeKey(v.Root).Equals(VolumeKey(job.Volume), StringComparison.OrdinalIgnoreCase));
+                if (volume == null)
+                {
+                    await DisplayAlertAsync("Activity", $"{job.Volume} is not currently available.", "Close");
+                    return;
+                }
+                var session = SessionFor(volume);
+                if (HasActiveJob(session) && session.JobId != job.Id)
+                {
+                    await DisplayAlertAsync("Activity", $"{job.Volume} has an active job. Select that drive to inspect or control it.", "Close");
+                    return;
+                }
+                session.JobId = job.Id;
+                if (session.Snapshot?.Id != session.JobId) session.Snapshot = null;
+                SelectVolume(volume);
+            }
         }
         catch (Exception ex) { await DisplayAlertAsync("Activity", ex.Message, "Close"); }
     }
@@ -355,8 +400,7 @@ public partial class MainPage : ContentPage
                 string? name = await DisplayPromptAsync("Weekly schedule", "Schedule name", initialValue: "Weekly maintenance"); if (string.IsNullOrWhiteSpace(name)) return;
                 string? day = await DisplayActionSheetAsync("Day", "Cancel", null, Enum.GetNames<DayOfWeek>()); if (!Enum.TryParse<DayOfWeek>(day, out var weekday)) return;
                 string? at = await DisplayPromptAsync("Local start time", "24-hour time (HH:mm)", initialValue: "02:00"); if (!TimeOnly.TryParse(at, out var time)) return;
-                if (await ChoosePolicy() is not { } operation) return;
-                var request = Request(operation, false);
+                var request = Request(_selectedPolicy.Operation, false);
                 if (!await DisplayAlertAsync("Save execution schedule", $"Run {request.Operation} on {request.Volume} every {weekday} at {time:HH:mm}? Resource limits and exclusions are copied from this view.", "Save schedule", "Cancel")) return;
                 await _client.Send(new("schedule-add", Schedule: new(name, request, [weekday], time)), startBroker: true);
                 await DisplayAlertAsync("Schedule saved", "The persistent broker runs this schedule. Use Install-ScheduledWorker.ps1 to start it automatically at logon.", "Close");
@@ -382,7 +426,25 @@ public partial class MainPage : ContentPage
         if (!long.TryParse(normalized, NumberStyles.None, CultureInfo.InvariantCulture, out long value)) throw new ArgumentException($"{name} must be a nonnegative whole number.");
         return value;
     }
+    private VolumeSession? CurrentSession => _volume == null ? null : SessionFor(_volume);
+    private VolumeSession SessionFor(VolumeInfo volume)
+    {
+        if (!_volumeSessions.TryGetValue(volume.Id, out var session)) _volumeSessions.Add(volume.Id, session = new());
+        return session;
+    }
+    private static bool HasActiveJob(VolumeSession? session) => session != null && session.JobId != Guid.Empty &&
+        (session.Snapshot == null || session.Snapshot.Id != session.JobId || !session.Snapshot.IsTerminal);
+    private static string VolumeKey(string volume) => volume.Trim().TrimEnd('\\');
     private static string Limit(long value, Func<long, string> format, string unlimited) => value == 0 ? unlimited : format(value);
+    private sealed class VolumeSession
+    {
+        public Guid JobId { get; set; }
+        public Guid AwaitingReport { get; set; }
+        public JobSnapshot? Snapshot { get; set; }
+        public JobSnapshot? LayoutSnapshot { get; set; }
+        public MapCell[] Cells { get; set; } = [];
+        public FileRow[]? Files { get; set; }
+    }
     private sealed record FileRow(string Path, int Extents, string BytesLabel, string Status);
     private sealed record PolicyOption(string Icon, string Name, string Description, Operation Operation);
 }
