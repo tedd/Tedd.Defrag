@@ -28,7 +28,7 @@ internal static class Program
                 if (settings.ManualResourceGroups.TryGetValue(request.Volume, out var manual)) resources = [.. resources, .. manual.Select(s => "manual:" + s)];
                 var waiting = Stopwatch.StartNew();
                 using var lease = new StorageLease(topology.Id, resources, settings.AllowParallelOnSharedStorage, CancellationToken.None,
-                    () => store.ReadControl(id) == "cancel" || waiting.Elapsed.TotalMinutes >= request.MaxMinutes);
+                    () => store.ReadControl(id) == "cancel" || (request.MaxMinutes > 0 && waiting.Elapsed.TotalMinutes >= request.MaxMinutes));
                 new JobExecutor(store).Run(request, CancellationToken.None);
             }
             catch (Exception e)
@@ -177,7 +177,7 @@ internal sealed class Broker
                         var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = elevate, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
                         if (elevate) info.Verb = "runas";
                         info.ArgumentList.Add("--execute"); info.ArgumentList.Add(job.Id.ToString());
-                        if (!elevate)
+                        if (!elevate && job.Resources.MemoryMiB > 0)
                         {
                             info.Environment["DOTNET_GCHeapHardLimit"] = ((long)job.Resources.MemoryMiB * 1024 * 1024 * 55 / 100).ToString("X", CultureInfo.InvariantCulture);
                             info.Environment["DOTNET_GCConserveMemory"] = "7";

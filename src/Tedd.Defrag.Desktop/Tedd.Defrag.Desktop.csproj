@@ -7,12 +7,17 @@
     <SingleProject>true</SingleProject>
     <ApplicationTitle>Tedd Defrag</ApplicationTitle>
     <ApplicationId>net.tedd.defrag</ApplicationId>
-    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
     <WindowsPackageType>None</WindowsPackageType>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <ApplicationManifest>Platforms\Windows\app.manifest</ApplicationManifest>
+    <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(RuntimeIdentifier)' != ''">true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</EnableCompressionInSingleFile>
+    <PublishReadyToRun Condition="'$(RuntimeIdentifier)' != ''">true</PublishReadyToRun>
   </PropertyGroup>
   <ItemGroup>
     <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#0B121C" />
@@ -20,6 +25,7 @@
     <PackageReference Include="Microsoft.Maui.Controls" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
     <ProjectReference Include="../Tedd.Defrag.Client/Tedd.Defrag.Client.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Update/Tedd.Defrag.Update.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Windows/Tedd.Defrag.Windows.csproj" />
   </ItemGroup>

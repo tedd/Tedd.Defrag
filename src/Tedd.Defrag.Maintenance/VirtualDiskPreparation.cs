@@ -18,11 +18,12 @@ public static class VirtualDiskPreparation
             var attributes = File.GetAttributes(path);
             if ((attributes & (FileAttributes.Compressed | FileAttributes.SparseFile | FileAttributes.Encrypted)) != 0)
                 throw new IOException("Pre-zeroing requires an ordinary uncompressed, unencrypted, non-sparse temporary file.");
-            while (written < request.MaxMoveBytes)
+            long writeLimit = request.MaxMoveBytes == 0 ? long.MaxValue : request.MaxMoveBytes;
+            while (written < writeLimit)
             {
                 token.ThrowIfCancellationRequested(); checkpoint();
                 long available = new DriveInfo(volume.Root).AvailableFreeSpace - request.FreeSpaceReserveBytes;
-                int count = (int)Math.Min(zero.Length, Math.Min(available, request.MaxMoveBytes - written));
+                int count = (int)Math.Min(zero.Length, Math.Min(available, writeLimit - written));
                 if (count <= 0) break;
                 stream.Write(zero.AsSpan(0, count)); written += count; progress(written);
             }

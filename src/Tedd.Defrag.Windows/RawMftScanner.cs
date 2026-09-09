@@ -18,7 +18,7 @@ public sealed class RawMftScanner
         using var buffer = new AlignedReadBuffer(1024 * 1024);
         // Keep space for resolved paths, the final layout and temporary allocations. Check
         // every batch rather than waiting for the UI update timer or the OS hard limit.
-        long scanHeapBudget = request.Resources.MemoryMiB * 1024L * 1024 / 4;
+        long scanHeapBudget = request.Resources.MemoryMiB == 0 ? long.MaxValue : request.Resources.MemoryMiB * 1024L * 1024 / 4;
         long totalRecords = volume.MftLength / volume.RecordSize;
         var watch = Stopwatch.StartNew(); long lastUpdate = -1000;
         foreach (var run in runs)
@@ -52,7 +52,7 @@ public sealed class RawMftScanner
                 {
                     progress?.Invoke(.1 + .8 * scanned / Math.Max(1d, totalRecords), scanned, "Scanning NTFS master file table"); lastUpdate = watch.ElapsedMilliseconds;
                     using var process = Process.GetCurrentProcess();
-                    if (process.PrivateMemorySize64 > request.Resources.MemoryMiB * 1024L * 1024 * .65)
+                    if (request.Resources.MemoryMiB > 0 && process.PrivateMemorySize64 > request.Resources.MemoryMiB * 1024L * 1024 * .65)
                     { warnings.Add("File scan stopped at the memory headroom threshold; allocation bitmap remains available."); complete = false; break; }
                 }
             }

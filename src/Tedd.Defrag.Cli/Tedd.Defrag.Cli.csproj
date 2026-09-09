@@ -1,10 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net11.0-windows10.0.19041.0</TargetFramework></PropertyGroup>
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0-windows10.0.19041.0</TargetFramework>
+    <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(RuntimeIdentifier)' != ''">true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</EnableCompressionInSingleFile>
+    <PublishReadyToRun Condition="'$(RuntimeIdentifier)' != ''">true</PublishReadyToRun>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Tedd.TUI" />
     <PackageReference Include="Tedd.TUI.Platform.Console" />
     <PackageReference Include="Tedd.TUI.Platform.WindowsTerminal" />
     <ProjectReference Include="../Tedd.Defrag.Client/Tedd.Defrag.Client.csproj" />
+    <ProjectReference Include="../Tedd.Defrag.Update/Tedd.Defrag.Update.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Windows/Tedd.Defrag.Windows.csproj" />
   </ItemGroup>

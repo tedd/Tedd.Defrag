@@ -13,6 +13,7 @@
 | Engine | Scan/plan/execute/reconcile state machine, cooperative control, budgets and verification |
 | Worker | Persistent per-user broker; separately capped execution processes |
 | Client | Framed current-user named-pipe protocol and worker discovery/launch |
+| Update | GitHub release discovery, SHA-256 verification, safe extraction, atomic directory replacement and rollback |
 | Desktop | Native MAUI controls and one map drawing surface; no filesystem mutation in the UI process |
 | Cli | Tedd.TUI NuGet terminal host, command parsing, structured outputs and stable exit codes |
 | Archive | Frozen scalar/linear baselines and the first planner/index implementation |
@@ -53,7 +54,7 @@ For each custom move:
 
 Native failures can be ambiguous. The job records `reconcile-required`, prevents repeated attempts for the file and performs a final fresh scan where possible. Journals are diagnostic evidence, not an executable redo log. The broker marks interrupted jobs for reanalysis; it never replays saved LCN addresses. Cross-process volume locks and default resource locks prevent competing workers after broker failure. The optional shared-storage override depends on broker-managed per-resource counts; preserving that limit across broker crashes needs additional recovery testing.
 
-The job object enforces CPU rate and committed-memory limits. Because the CLR starts before joining that job, the worker explicitly refreshes the GC memory limit and assigns at most 60% of the process cap to its heap. Raw scanning checks managed memory at each batch and stops at 25% of the process cap, reserving space for path resolution and the final layout. The worker also uses native background mode. A hard memory cap can still terminate/fail an operation; it cannot promise successful analysis of an arbitrarily large volume. Scans mark their coverage when interrupted by the memory threshold.
+The job object always enforces the configured CPU rate and applies committed-memory limits only when a nonzero cap is configured. With a cap, the worker refreshes the CLR memory limit after joining the job and assigns at most 60% of the process cap to its heap. Raw scanning stops at 25% of the configured cap, reserving space for path resolution and the final layout. Zero leaves memory under normal operating-system and runtime management. The worker can also use native background mode. A hard memory cap can still terminate or fail an operation; scans mark their coverage when interrupted by the memory threshold.
 
 ReTRIM/automatic/slab operations call Windows' installed `defrag.exe` with fixed validated switches via `ProcessStartInfo.ArgumentList`. Localized output is displayed as text; success is determined from process exit and subsequent analysis. It is not converted to per-cluster activity. These operations have no exact app-controlled I/O pacing or resumable internal moves.
 

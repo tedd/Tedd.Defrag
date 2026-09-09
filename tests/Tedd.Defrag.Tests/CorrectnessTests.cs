@@ -65,6 +65,31 @@ public class CorrectnessTests
         var move = Assert.Single(plan.Moves); Assert.Equal(4, move.Clusters); Assert.Equal(110, move.DestinationLcn);
         LayoutMutation.Apply(layout, move); Assert.Single(layout.Files[0].Extents); Assert.Equal(104, BitmapOperations.CountAllocated(layout.Bitmap));
     }
+    [Fact]
+    public void UnlimitedDefaultsAndUncappedResourcesAreValid()
+    {
+        var request = new JobRequest { Volume = "V:" };
+        request.Validate();
+        Assert.Equal(0, request.MaxMoveBytes); Assert.Equal(0, request.MaxMinutes);
+        Assert.Equal(0, request.Resources.MemoryMiB); Assert.Equal(0, request.Resources.IoMiBPerSecond);
+        Assert.Equal(20, request.MinimumFragments);
+        (request.Resources with { MemoryMiB = int.MaxValue, IoMiBPerSecond = int.MaxValue }).Validate();
+    }
+    [Fact]
+    public void DefragThresholdAndFileSizeLimitCandidateSelection()
+    {
+        var bitmap = new byte[256];
+        var few = new FileLayout(1, @"V:\few.bin", "", 0, 3 * 4096, 0, 0,
+            [new(0, 100, 1), new(1, 102, 1), new(2, 104, 1)]);
+        var manyExtents = Enumerable.Range(0, 20).Select(i => new Extent(i, 200 + i * 2, 1)).ToArray();
+        var many = new FileLayout(2, @"V:\many.bin", "", 0, 20 * 4096, 0, 0, manyExtents);
+        foreach (var extent in few.Extents.Concat(many.Extents)) BitmapOperations.SetRange(bitmap, extent.Lcn, extent.Length, true);
+        var request = new JobRequest { Volume = "V:", Operation = Operation.MinimumWrite, MinimumFileBytes = 10 * 4096, MaximumFileBytes = 30 * 4096 };
+
+        var plan = new LayoutPlanner().Plan(Layout(bitmap, [few, many]), request);
+
+        Assert.NotEmpty(plan.Moves); Assert.All(plan.Moves, move => Assert.Equal(many.FileId, move.FileId));
+    }
     [Theory]
     [InlineData(Operation.MinimumWrite)] [InlineData(Operation.FilesOnly)] [InlineData(Operation.Pack)] [InlineData(Operation.PackAndDefrag)]
     [InlineData(Operation.Alphabetical)] [InlineData(Operation.Size)] [InlineData(Operation.Created)] [InlineData(Operation.Modified)] [InlineData(Operation.Extension)]
@@ -160,6 +185,6 @@ public class CorrectnessTests
         var now = new DateTime(2026, 9, 13, 11, 0, 0);
         Assert.True(ScheduleClock.IsDue(schedule, now)); Assert.False(ScheduleClock.IsDue(schedule with { LastRun = DateOnly.FromDateTime(now) }, now));
     }
-    private static JobRequest Request(Operation op) => new() { Volume = "V:", Operation = op, Resources = new() { AcOnly = false } };
+    private static JobRequest Request(Operation op) => new() { Volume = "V:", Operation = op, MinimumFragments = 2, Resources = new() { AcOnly = false } };
     private static VolumeLayout Layout(byte[] bitmap, FileLayout[] files) => new(SyntheticVolume.Create().Volume, bitmap.Length * 8L, bitmap, files, DateTimeOffset.UtcNow, files.Length, 0, true, []);
 }

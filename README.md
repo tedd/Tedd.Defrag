@@ -1,6 +1,8 @@
 # Tedd Defrag
 
-A Windows-first .NET 11 NTFS optimizer with a native **.NET MAUI** dashboard, **Tedd.TUI** terminal interface, and persistent, isolated workers. Sixteen projects separate storage access, planning, visualization, scheduling, execution, clients, and measurements.
+A Windows-first .NET 11 NTFS optimizer with a native **.NET MAUI** dashboard, **Tedd.TUI** terminal interface, and persistent, isolated workers. Seventeen projects separate storage access, planning, visualization, scheduling, execution, updating, clients, and measurements.
+
+[Project site](https://tedd.github.io/Tedd.Defrag/) · [Download the latest release](https://github.com/tedd/Tedd.Defrag/releases/latest) · [Source code](https://github.com/tedd/Tedd.Defrag)
 
 **Status: engineering preview.** Read-only native analysis has been exercised on C:, including a partial scan under a 1 GiB memory cap. Native NTFS relocation is implemented but has not been validated on a disposable volume. Do not treat this as a production-qualified disk utility. Early-boot execution and registry hive replacement are deliberately unavailable.
 
@@ -16,19 +18,19 @@ dotnet run --project src/Tedd.Defrag.Desktop
 dotnet run --project src/Tedd.Defrag.Cli -- tui C:
 ```
 
-The dashboard lists real volumes and initially selects the system NTFS volume, or the first available NTFS volume. Its map remains empty until you choose **Analyze** or **Preview**. Opening the application does not submit a job. If no supported volume is available, disk-operation controls remain disabled. Disk access requests elevation. Preview is the CLI default; actual changes require `--execute`. Closing either interface detaches it from the job.
+The dashboard requests administrator access at startup, lists real volumes, and initially selects the system NTFS volume or the first available NTFS volume. Its map remains empty until you choose **Analyze** or **Preview**. Opening the application does not submit a job. If no supported volume is available, disk-operation controls remain disabled. Preview is the CLI default; actual changes require `--execute`. Closing either interface detaches it from the job.
 
 Simulation mode and the `--demo` option have been removed. Legacy simulation requests are rejected and their schedules are disabled, so they cannot become real disk operations. Synthetic volume fixtures are compiled only into tests and benchmarks.
 
-Publish a self-contained Windows distribution, including its worker and CLI:
+Publish a versioned, self-contained Windows distribution. The Desktop, CLI, and isolated worker are each single-file ReadyToRun executables and are placed together in one ZIP:
 
 ```powershell
-./scripts/Publish.ps1
-# artifacts/app-win-x64/Tedd.Defrag.Desktop.exe
-# artifacts/app-win-x64/cli/Tedd.Defrag.Cli.exe
+./scripts/Publish.ps1 -Runtime win-x64 -Version 0.1.0
+# artifacts/dist/Tedd.Defrag-win-x64.zip
+# artifacts/dist/Tedd.Defrag-win-x64.zip.sha256
 ```
 
-The entire output folder is required. `TEDD_DEFRAG_WORKER` can point to another built worker executable.
+Extract the ZIP and run either `Tedd.Defrag.Desktop.exe` or `Tedd.Defrag.Cli.exe`; no .NET installation is required. Keep all three executables together because the separately elevated worker isolates privileged disk operations. Release builds check GitHub for a newer version at startup. With consent, they download the matching architecture, verify its published SHA-256 checksum, stop an idle worker, atomically replace the extracted application directory, and restart. Active jobs must finish or be cancelled first. `TEDD_DEFRAG_WORKER` can point to another built worker executable.
 
 ## Capabilities
 
@@ -36,7 +38,7 @@ The entire output folder is required. `TEDD_DEFRAG_WORKER` can point to another 
 |---|---|
 | NTFS scan | Batched raw MFT reads; validated update-sequence fixups, signed runlists, names and streams; MFT extension mapping; allocation bitmap from Windows |
 | Placement | Minimum-write, files-only, pack, pack + defrag, alphabetical, size, creation/modification time, extension, directory locality, shrink boundary |
-| Constraints | Recursive path/glob exclusions, selected objects only, metadata policy, relocation-byte/time budgets, no supporting moves of unrelated files |
+| Constraints | Recursive path/glob exclusions, selected objects only, file size and fragment-count filters, optional relocation-byte/time budgets, no supporting moves of unrelated files |
 | Maintenance | Windows ReTRIM, slab consolidation, automatic optimization; capability reporting; bounded virtual-disk pre-zeroing with delete-on-close files |
 | Metadata | Movable MFT data and directory-index targets through supported filesystem APIs; incomplete or unsupported streams remain constrained |
 | Visualization | Layered allocation/fragmentation/metadata/exclusion/activity counts; bounded drawing surface; zoom, cell inspection, live progress and JSON reports |
@@ -52,10 +54,10 @@ The raw scanner does not recursively traverse directories. It deduplicates file 
 
 | Control | Semantics |
 |---|---|
-| Memory | Windows job-object **committed-memory** limit for the worker and its descendants; not a working-set/RAM reservation. The scanner stops before exhausting headroom. The bitmap may require a larger cap. |
+| Memory | Optional Windows job-object **committed-memory** limit for the worker and its descendants; `0` leaves memory unlimited. The scanner stops before exhausting a configured cap. |
 | CPU | Windows job-object hard rate limit; percentage of machine CPU scheduling capacity, subject to any enclosing job restrictions. |
 | Affinity | Optional hexadecimal logical-processor mask, e.g. `0xF0`. Supported on a single processor group. No guarantee of L1/L2/L3 cache isolation or kernel-thread placement. |
-| Bandwidth | Cooperative average pacing of **custom relocation and zeroing payload**. It does not cap raw scan reads, total physical traffic, Windows optimizer traffic, or SSD write amplification. |
+| Bandwidth | Optional cooperative average pacing of **custom relocation and zeroing payload**; `0` disables pacing and nonzero values have no application maximum. It does not cap raw scan reads, total physical traffic, Windows optimizer traffic, or SSD write amplification. |
 | Priority | Windows background processing mode in the isolated worker; the broker and interfaces retain normal responsiveness. |
 | Idle/power | Sustained inactivity in the worker's interactive session; other active sessions with unknown activity pause execution. AC power can be required. No new custom moves while paused; an in-flight filesystem request can finish. |
 | Concurrency | Limits simultaneous volumes and jobs sharing discovered resources. A per-volume cross-process mutex remains mandatory, including with the shared-storage override. |
@@ -80,6 +82,8 @@ Tedd.Defrag.Cli.exe jobs watch <id> --events
 Tedd.Defrag.Cli.exe schedule add --name nightly --volume D: --days Sunday --at 02:00 --execute --idle-only
 Tedd.Defrag.Cli.exe settings --parallel 3 --shared --per-device 2
 ```
+
+Write budget, time limit, process-memory cap, and relocation bandwidth default to `0`, meaning unlimited. File defragmentation defaults to streams with at least 20 fragments; `--min-file-mib` and `--max-file-mib` optionally restrict file size.
 
 `--allow-ssd` explicitly permits custom relocation on SSD/unknown media. TRIM support is probed independently of seek penalty. Windows maintenance refuses relocation exclusions it cannot enforce. Its progress text comes from Windows and is not parsed into invented percentages; the map is rescanned afterward. Pausing external optimization stops its process; submit a fresh job to continue.
 

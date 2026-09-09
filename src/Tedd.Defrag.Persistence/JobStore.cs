@@ -22,7 +22,15 @@ public sealed class JobStore
         JsonSerializer.Serialize(stream, request, Json); stream.Flush(true);
     }
     public JobRequest ReadRequest(Guid id) => Read<JobRequest>(Path.Combine(JobDirectory(id), "request.json")) ?? throw new FileNotFoundException("Job request was not found.");
-    public void Save(JobSnapshot snapshot) => AtomicWrite(Path.Combine(JobDirectory(snapshot.Id), "snapshot.json"), snapshot);
+    public string ReportPath(Guid id) => Path.Combine(JobDirectory(id), "report.json");
+    public void Save(JobSnapshot snapshot)
+    {
+        AtomicWrite(Path.Combine(JobDirectory(snapshot.Id), "snapshot.json"), snapshot);
+        // A terminal report is immutable in intent and deliberately omits the large drawing map.
+        // Save it automatically so completion evidence does not depend on the UI remaining open.
+        if (snapshot.IsTerminal) AtomicWrite(ReportPath(snapshot.Id), snapshot with { Map = null });
+    }
+    public JobSnapshot? ReadReport(Guid id) => Read<JobSnapshot>(ReportPath(id));
     public JobSnapshot? ReadSnapshot(Guid id)
     {
         string path = Path.Combine(JobDirectory(id), "snapshot.json");

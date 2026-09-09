@@ -25,4 +25,27 @@ public class PersistenceTests
         try { for (int i = 0; i < 250; i++) store.Save(initial with { FilesScanned = i, UpdatedAt = DateTimeOffset.UtcNow }); }
         finally { stop.Cancel(); await Task.WhenAll(readers); Directory.Delete(root, true); }
     }
+
+    [Fact]
+    public void TerminalSnapshotAutomaticallyCreatesCompactReport()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new JobStore(root);
+            var snapshot = new JobSnapshot(Guid.NewGuid(), "V:", Operation.MinimumWrite, JobState.Completed,
+                "4 MiB relocated and verified in 2 moves.", 1, 4 * 1024 * 1024, 100, 3, 90, DateTimeOffset.UtcNow,
+                Map: [new(1, 1, 0, 0, 0, 0, 0)], PlannedBytes: 4 * 1024 * 1024,
+                PlannedMoves: 2, AttemptedMoves: 2, VerifiedMoves: 2, InitialFragmentedFiles: 5, ElapsedMilliseconds: 1250);
+
+            store.Save(snapshot);
+
+            var report = store.ReadReport(snapshot.Id);
+            Assert.NotNull(report);
+            Assert.Null(report.Map);
+            Assert.Equal(2, report.VerifiedMoves);
+            Assert.Equal(4 * 1024 * 1024, report.BytesMoved);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
 }

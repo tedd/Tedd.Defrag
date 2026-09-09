@@ -36,9 +36,9 @@ public sealed record VolumeLayout(VolumeInfo Volume, long TotalClusters, byte[] 
 
 public sealed record ResourcePolicy
 {
-    public int MemoryMiB { get; init; } = 1024;
+    public int MemoryMiB { get; init; }
     public int CpuPercent { get; init; } = 25;
-    public int IoMiBPerSecond { get; init; } = 32;
+    public int IoMiBPerSecond { get; init; }
     public ulong AffinityMask { get; init; }
     public bool Background { get; init; } = true;
     public bool IdleOnly { get; init; }
@@ -47,12 +47,12 @@ public sealed record ResourcePolicy
     public int MapCells { get; init; } = 8192;
     public static ResourcePolicy Quiet => new() { MemoryMiB = 512, CpuPercent = 10, IoMiBPerSecond = 8, IdleOnly = true };
     public static ResourcePolicy Balanced => new();
-    public static ResourcePolicy Performance => new() { MemoryMiB = 2048, CpuPercent = 80, IoMiBPerSecond = 256, Background = false, AcOnly = false };
+    public static ResourcePolicy Performance => new() { CpuPercent = 80, Background = false, AcOnly = false };
     public void Validate()
     {
-        if (MemoryMiB is < 256 or > 65536 || CpuPercent is < 1 or > 100 || IoMiBPerSecond is < 1 or > 8192 ||
+        if ((MemoryMiB != 0 && MemoryMiB < 256) || CpuPercent is < 1 or > 100 || IoMiBPerSecond < 0 ||
             IdleSeconds is < 1 or > 86400 || MapCells is < 256 or > 65536)
-            throw new ArgumentException("Resource policy is out of range (memory 256–65536 MiB, CPU 1–100%, I/O 1–8192 MiB/s). ");
+            throw new ArgumentException("Resource policy is out of range (memory 0 or at least 256 MiB, CPU 1–100%, I/O 0 or greater). ");
     }
 }
 public sealed record JobRequest
@@ -64,8 +64,11 @@ public sealed record JobRequest
     public string[] SelectedPaths { get; init; } = [];
     public string[] Exclusions { get; init; } = [];
     public ResourcePolicy Resources { get; init; } = new();
-    public long MaxMoveBytes { get; init; } = 10L * 1024 * 1024 * 1024;
-    public int MaxMinutes { get; init; } = 60;
+    public long MaxMoveBytes { get; init; }
+    public int MaxMinutes { get; init; }
+    public int MinimumFragments { get; init; } = 20;
+    public long MinimumFileBytes { get; init; }
+    public long MaximumFileBytes { get; init; }
     public long ShrinkBoundaryBytes { get; init; }
     public bool AllowSsdRelocation { get; init; }
     public bool ConfirmVirtualDiskZeroing { get; init; }
@@ -78,7 +81,8 @@ public sealed record JobRequest
     {
         if (LegacySimulation) throw new NotSupportedException("Simulation jobs are no longer supported. Create a new job for a real volume.");
         Resources.Validate();
-        if (string.IsNullOrWhiteSpace(Volume) || Id == Guid.Empty || !Enum.IsDefined(Operation) || MaxMoveBytes < 0 || MaxMinutes is < 1 or > 10080 ||
+        if (string.IsNullOrWhiteSpace(Volume) || Id == Guid.Empty || !Enum.IsDefined(Operation) || MaxMoveBytes < 0 || MaxMinutes < 0 ||
+            MinimumFragments < 2 || MinimumFileBytes < 0 || MaximumFileBytes < 0 || (MaximumFileBytes > 0 && MaximumFileBytes < MinimumFileBytes) ||
             SelectedPaths.Length > 10000 || Exclusions.Length > 10000 || FreeSpaceReserveBytes < 256L * 1024 * 1024)
             throw new ArgumentException("Invalid job parameters.");
         if (Operation == Operation.PrepareShrink && ShrinkBoundaryBytes <= 0) throw new ArgumentException("Supply a positive shrink boundary.");
@@ -100,7 +104,9 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     double Progress, long BytesMoved, long FilesScanned, int FragmentedFiles, int TotalFiles, DateTimeOffset UpdatedAt,
     DateTimeOffset? ObservedAt = null, MapCell[]? Map = null, FileSummary[]? Files = null,
     string[]? Warnings = null, long PlannedBytes = 0, long TotalBytes = 0, long FreeBytes = 0,
-    int CpuPercent = 0, int MemoryMiB = 0, int IoMiBPerSecond = 0)
+    int CpuPercent = 0, int MemoryMiB = 0, int IoMiBPerSecond = 0,
+    int PlannedMoves = 0, int AttemptedMoves = 0, int VerifiedMoves = 0, int FailedMoves = 0,
+    int FilesConsidered = 0, int FilesBlocked = 0, int InitialFragmentedFiles = 0, long ElapsedMilliseconds = 0)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
 }

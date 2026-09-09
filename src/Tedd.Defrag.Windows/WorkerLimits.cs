@@ -22,11 +22,14 @@ public sealed unsafe class WorkerLimits : IDisposable
         if (_job.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
         try
         {
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION memory = default;
-            memory.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT.JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT.JOB_OBJECT_LIMIT_JOB_MEMORY;
-            memory.ProcessMemoryLimit = (nuint)(policy.MemoryMiB * 1024L * 1024);
-            memory.JobMemoryLimit = memory.ProcessMemoryLimit;
-            Check(PInvoke.SetInformationJobObject(_job, JOBOBJECTINFOCLASS.JobObjectExtendedLimitInformation, new ReadOnlySpan<byte>(&memory, sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))));
+            if (policy.MemoryMiB > 0)
+            {
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION memory = default;
+                memory.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT.JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT.JOB_OBJECT_LIMIT_JOB_MEMORY;
+                memory.ProcessMemoryLimit = (nuint)(policy.MemoryMiB * 1024L * 1024);
+                memory.JobMemoryLimit = memory.ProcessMemoryLimit;
+                Check(PInvoke.SetInformationJobObject(_job, JOBOBJECTINFOCLASS.JobObjectExtendedLimitInformation, new ReadOnlySpan<byte>(&memory, sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))));
+            }
             JOBOBJECT_CPU_RATE_CONTROL_INFORMATION cpu = new() { ControlFlags = JOB_OBJECT_CPU_RATE_CONTROL.JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL.JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP };
             cpu.CpuRate = (uint)policy.CpuPercent * 100;
             Check(PInvoke.SetInformationJobObject(_job, JOBOBJECTINFOCLASS.JobObjectCpuRateControlInformation, new ReadOnlySpan<byte>(&cpu, sizeof(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION))));
@@ -34,9 +37,12 @@ public sealed unsafe class WorkerLimits : IDisposable
             Check(PInvoke.AssignProcessToJobObject(_job, process.SafeHandle));
             // The CLR started before this process joined the capped job. Refresh its heap budget
             // now, leaving committed memory for native I/O, JIT code, stacks and serialization.
-            ulong heapLimit = (ulong)Math.Min(policy.MemoryMiB * 1024L * 1024 * 3 / 5, GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
-            AppContext.SetData("GCHeapHardLimit", heapLimit);
-            GC.RefreshMemoryLimit();
+            if (policy.MemoryMiB > 0)
+            {
+                ulong heapLimit = (ulong)Math.Min(policy.MemoryMiB * 1024L * 1024 * 3 / 5, GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
+                AppContext.SetData("GCHeapHardLimit", heapLimit);
+                GC.RefreshMemoryLimit();
+            }
             if (policy.AffinityMask != 0)
             {
                 if (PInvoke.GetActiveProcessorGroupCount() != 1) throw new NotSupportedException("Affinity masks are limited to single processor-group systems. Leave affinity automatic on systems with more than 64 logical processors.");

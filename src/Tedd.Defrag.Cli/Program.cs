@@ -3,6 +3,7 @@ using System.Text.Json;
 using Tedd.Defrag.Client;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Persistence;
+using Tedd.Defrag.Update;
 using Tedd.Defrag.Windows;
 
 namespace Tedd.Defrag.Cli;
@@ -11,12 +12,16 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["--apply-update", var requestPath]) return await ReleaseUpdater.ApplyUpdateAsync(requestPath);
         bool json = args.Contains("--json");
         try
         {
             var parsed = new Arguments(args);
             string command = parsed.Positionals.ElementAtOrDefault(0)?.ToLowerInvariant() ?? "tui";
             if (command is "help" or "--help" or "-h" || parsed.Has("help")) { Console.WriteLine(Help); return 0; }
+            if (command is "version" or "--version" || parsed.Has("version")) { Console.WriteLine(ReleaseUpdater.DisplayVersion); return 0; }
+            if (command == "update") { await OfferUpdate(args, true); return 0; }
+            if (!json && !parsed.Has("no-update-check") && await OfferUpdate(args, false)) return 0;
             var client = new DefragClient();
             if (command == "volumes")
             {
@@ -81,6 +86,47 @@ internal static class Program
         catch (OverflowException e) { Error(e, json); return 2; }
         catch (Exception e) { Error(e, json); return 1; }
     }
+    private static async Task<bool> OfferUpdate(string[] launchArguments, bool explicitRequest)
+    {
+        if (!ReleaseUpdater.IsPackaged)
+        {
+            if (explicitRequest) Console.WriteLine($"Tedd.Defrag {ReleaseUpdater.DisplayVersion}. Update checks are enabled in release distributions.");
+            return false;
+        }
+        AvailableRelease? release;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(explicitRequest ? 15 : 3));
+            release = await ReleaseUpdater.CheckForUpdateAsync(timeout.Token);
+        }
+        catch when (!explicitRequest) { return false; }
+        if (release is null)
+        {
+            if (explicitRequest) Console.WriteLine($"Tedd.Defrag {ReleaseUpdater.DisplayVersion} is current.");
+            return false;
+        }
+        if (Console.IsInputRedirected)
+        {
+            if (explicitRequest) Console.WriteLine($"Tedd.Defrag {release.DisplayVersion} is available: {release.ReleasePageUri}");
+            return false;
+        }
+        Console.Error.Write($"Tedd.Defrag {release.DisplayVersion} is available. Download, replace this installation, and restart? [y/N] ");
+        string? answer = Console.ReadLine();
+        if (!string.Equals(answer?.Trim(), "y", StringComparison.OrdinalIgnoreCase) && !string.Equals(answer?.Trim(), "yes", StringComparison.OrdinalIgnoreCase)) return false;
+        try
+        {
+            try { await new DefragClient().Send(new("stop")); }
+            catch (TimeoutException) { }
+            Console.Error.WriteLine("Downloading and verifying the update…");
+            await ReleaseUpdater.LaunchUpdateAsync(release, "Tedd.Defrag.Cli.exe", launchArguments);
+            return true;
+        }
+        catch (InvalidOperationException exception)
+        {
+            Console.Error.WriteLine($"Update postponed: {exception.Message}");
+            return false;
+        }
+    }
     private static JobRequest MakeRequest(Arguments args, string command, string volume)
     {
         string policy = args.Get("policy", "MinimumWrite");
@@ -92,7 +138,9 @@ internal static class Program
             IdleOnly = args.Has("idle-only") || resources.IdleOnly, AcOnly = !args.Has("allow-battery") && resources.AcOnly, Background = !args.Has("foreground") && resources.Background };
         return new() { Volume = volume, Operation = operation, Preview = !args.Has("execute"), Resources = resources,
             SelectedPaths = [.. args.All("path"), .. args.All("file"), .. args.All("folder")], Exclusions = args.All("exclude"),
-            MaxMoveBytes = checked(args.Long("budget-mib", 10240) * 1024 * 1024), MaxMinutes = args.Int("minutes", 60),
+            MaxMoveBytes = checked(args.Long("budget-mib", 0) * 1024 * 1024), MaxMinutes = args.Int("minutes", 0),
+            MinimumFragments = args.Int("min-fragments", 20),
+            MinimumFileBytes = checked(args.Long("min-file-mib", 0) * 1024 * 1024), MaximumFileBytes = checked(args.Long("max-file-mib", 0) * 1024 * 1024),
             ShrinkBoundaryBytes = checked(args.Long("boundary-mib", 0) * 1024 * 1024), AllowSsdRelocation = args.Has("allow-ssd"),
             ConfirmVirtualDiskZeroing = args.Has("confirm-virtual-zero"), FreeSpaceReserveBytes = checked(args.Long("reserve-mib", 2048) * 1024 * 1024) };
     }
@@ -131,6 +179,8 @@ internal static class Program
     private const string Help = """
         TEDD / DEFRAG · .NET 11
 
+        version                                  Print the compiled application version
+        update                                   Check GitHub Releases and offer an in-place update
         volumes [--json]                       List local volumes and capabilities
         tui [C:]                               Interactive Tedd.TUI dashboard
         analyze C: [--json]                     Analyze allocation and file fragmentation
@@ -143,10 +193,12 @@ internal static class Program
         --wait --json          Wait and emit structured result; --events emits NDJSON
         --exclude <path/glob>  Repeat for recursive paths or patterns; exclusions always win
         --preset quiet|balanced|performance
-        --cpu 25 --memory 1024 --io 32    CPU %, process commit MiB, relocation MiB/s
+        --cpu 25 --memory 0 --io 0        CPU %, process commit MiB, relocation MiB/s; 0 means unlimited
         --affinity 0xF0        Advanced logical CPU mask (single processor group)
         --idle-only --allow-battery --foreground
-        --budget-mib 10240 --minutes 60 --allow-ssd
+        --budget-mib 0 --minutes 0 --allow-ssd   0 means unlimited
+        --min-fragments 20 --min-file-mib 0 --max-file-mib 0
+        --no-update-check       Skip the automatic GitHub release check for this run
         --boundary-mib <n>     PrepareShrink boundary
 
         Policies: MinimumWrite, FilesOnly, Pack, PackAndDefrag, Alphabetical,

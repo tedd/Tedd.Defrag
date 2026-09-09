@@ -3,6 +3,7 @@ using System.Text.Json;
 using Tedd.Defrag.Client;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Persistence;
+using Tedd.Defrag.Update;
 using Tedd.Defrag.Visualization;
 using Tedd.Defrag.Windows;
 
@@ -14,24 +15,68 @@ public partial class MainPage : ContentPage
     private readonly DiskMapDrawable _map = new();
     private VolumeInfo? _volume;
     private bool _polling, _refreshing, _submitting;
-    private Guid _job;
+    private Guid _job, _awaitingReport;
     private JobSnapshot? _snapshot;
     private readonly IDispatcherTimer _timer;
-    private static readonly (string Name, Operation Operation)[] Policies =
-    [ ("Minimum-write defrag", Operation.MinimumWrite), ("Defragment files", Operation.FilesOnly), ("Pack toward beginning", Operation.Pack),
-      ("Pack + defragment", Operation.PackAndDefrag), ("Alphabetical layout", Operation.Alphabetical), ("Order by size", Operation.Size),
-      ("Order by creation time", Operation.Created), ("Order by modification time", Operation.Modified), ("Order by extension", Operation.Extension),
-      ("Directory locality", Operation.DirectoryLocality), ("Prepare for shrink", Operation.PrepareShrink), ("Optimize movable MFT", Operation.OptimizeMft),
-      ("Directory indexes", Operation.DirectoryIndexes), ("ReTRIM", Operation.ReTrim), ("Slab consolidation", Operation.SlabConsolidate),
-      ("Windows automatic", Operation.Automatic), ("Prepare virtual disk · zero", Operation.ZeroFreeSpace) ];
+    private TaskCompletionSource<Operation?>? _policyChoice;
+    private static readonly PolicyOption[] Policies =
+    [
+        new("↯", "Minimum-write defrag", "Prioritizes heavily fragmented files and preserves their first extent when possible. Honors file scope and exclusions.", Operation.MinimumWrite),
+        new("✦", "Windows automatic", "Lets Windows select the appropriate whole-volume action for the media, such as HDD defrag or SSD retrim.", Operation.Automatic),
+        new("▰", "Defragment files", "Makes eligible fragmented files contiguous without trying to reorganize the whole volume.", Operation.FilesOnly),
+        new("⇤", "Pack + defragment", "Moves eligible files toward lower addresses while consolidating their extents. Higher write volume.", Operation.PackAndDefrag),
+        new("≪", "Pack toward beginning", "Consolidates free space by moving allocated extents toward the start of the volume.", Operation.Pack),
+        new("⌁", "ReTRIM", "Resends deallocation hints to supported SSDs and thin-provisioned storage; no file relocation.", Operation.ReTrim),
+        new("⌂", "Directory locality", "Places files from the same directory near each other. Useful for directory-oriented access patterns.", Operation.DirectoryLocality),
+        new("◷", "Order by modification time", "Places older and newer content in modification-time order across the volume.", Operation.Modified),
+        new(".x", "Order by extension", "Groups files by extension, then by path. This rewrites layout for a specialized access pattern.", Operation.Extension),
+        new("A↓", "Alphabetical layout", "Places files in path order. Predictable, but potentially write-intensive.", Operation.Alphabetical),
+        new("▥", "Order by size", "Places files from smallest to largest. Specialized and potentially write-intensive.", Operation.Size),
+        new("◴", "Order by creation time", "Places files in creation-time order. Specialized and potentially write-intensive.", Operation.Created),
+        new("⇥", "Prepare for shrink", "Moves extents below a required boundary so the partition can be reduced.", Operation.PrepareShrink),
+        new("▦", "Slab consolidation", "Asks Windows to consolidate slabs on supported thin-provisioned storage.", Operation.SlabConsolidate),
+        new("M", "Optimize movable MFT", "Attempts to relocate movable MFT data. Advanced NTFS maintenance.", Operation.OptimizeMft),
+        new("D", "Directory indexes", "Optimizes movable NTFS directory index streams.", Operation.DirectoryIndexes),
+        new("0", "Prepare virtual disk · zero", "Fills available guest free space with zeros for a later host-side compact operation. Very write-intensive.", Operation.ZeroFreeSpace)
+    ];
+    private PolicyOption _selectedPolicy = Policies[0];
     public MainPage()
     {
         InitializeComponent(); DiskMap.Drawable = _map;
-        PolicyPicker.ItemsSource = Policies.Select(p => p.Name).ToArray(); PolicyPicker.SelectedIndex = 0;
-        ResourcePreset.ItemsSource = new[] { "Quiet · idle maintenance", "Balanced · everyday", "Performance · dedicated" }; ResourcePreset.SelectedIndex = 1;
+        PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
+        ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · unlimited I/O", "Performance · dedicated" }; ResourcePreset.SelectedIndex = 1;
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
-        Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); };
+        Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await CheckForUpdate(); };
         Unloaded += (_, _) => _timer.Stop();
+    }
+    private async Task CheckForUpdate()
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            AvailableRelease? release = await ReleaseUpdater.CheckForUpdateAsync(timeout.Token);
+            if (release is null) return;
+            bool install = await DisplayAlertAsync("Update available",
+                $"Tedd.Defrag {release.DisplayVersion} is available. Download the verified release, replace this installation, and restart?",
+                "Download and restart", "Later");
+            if (!install) return;
+            try { await _client.Send(new("stop")); }
+            catch (TimeoutException) { }
+            catch (InvalidOperationException exception)
+            {
+                await DisplayAlertAsync("Update postponed", exception.Message, "Close");
+                return;
+            }
+            FooterStatus.Text = $"Downloading and verifying Tedd.Defrag {release.DisplayVersion}…";
+            await ReleaseUpdater.LaunchUpdateAsync(release, "Tedd.Defrag.Desktop.exe", []);
+            Environment.Exit(0);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception)
+        {
+            FooterStatus.Text = "Update check unavailable · the application remains ready";
+            System.Diagnostics.Debug.WriteLine(exception);
+        }
     }
     private async Task RefreshVolumes()
     {
@@ -78,9 +123,9 @@ public partial class MainPage : ContentPage
         FragmentMetric.Text = "—"; StreamDetail.Text = "Awaiting analysis"; MovedMetric.Text = "0 B";
         FileList.ItemsSource = null; JobTitle.Text = "Ready when you are"; JobMessage.Text = "Analyze this volume before planning changes.";
         JobProgress.Progress = 0; ProgressText.Text = "READY"; WarningsText.Text = ""; PauseButton.IsEnabled = CancelButton.IsEnabled = false;
-        ObservationText.Text = "Awaiting analysis"; BudgetDetail.Text = "Within your write budget";
+        ObservationText.Text = "Awaiting analysis"; BudgetDetail.Text = "No relocation limit";
         CellDetail.Text = "Hover to inspect a cell. Click to center the next zoom."; UpdateRange();
-        FooterStatus.Text = volume == null ? "●  No available volumes · refresh to try again" : $"●  {volume.Root} selected · disk access requests elevation";
+        FooterStatus.Text = volume == null ? "●  No available volumes · refresh to try again" : $"●  {volume.Root} selected · administrator access active";
         if (volume != null && !volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
             JobMessage.Text = "Analysis and optimization require an NTFS volume.";
         UpdateVolumeActions();
@@ -101,11 +146,13 @@ public partial class MainPage : ContentPage
         var request = new JobRequest { Volume = volume.Root, Operation = operation, Preview = preview,
             SelectedPaths = string.IsNullOrWhiteSpace(SelectedPath.Text) ? [] : [SelectedPath.Text.Trim()],
             Exclusions = (ExclusionEntry.Text ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
-            Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = (int)MemorySlider.Value, IoMiBPerSecond = (int)IoSlider.Value,
+            Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = ParseInt(MemoryEntry.Text, "Memory cap"), IoMiBPerSecond = ParseInt(IoEntry.Text, "Relocation bandwidth"),
                 AffinityMask = string.IsNullOrWhiteSpace(AffinityEntry.Text) ? 0 : Convert.ToUInt64(AffinityEntry.Text.Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
                 IdleOnly = IdleSwitch.IsToggled, AcOnly = AcSwitch.IsToggled, Background = BackgroundSwitch.IsToggled },
-            MaxMoveBytes = checked(long.Parse(BudgetEntry.Text, CultureInfo.InvariantCulture) * 1024 * 1024), MaxMinutes = int.Parse(MinutesEntry.Text, CultureInfo.InvariantCulture),
-            ShrinkBoundaryBytes = string.IsNullOrWhiteSpace(BoundaryEntry.Text) ? 0 : checked(long.Parse(BoundaryEntry.Text, CultureInfo.InvariantCulture) * 1024 * 1024),
+            MaxMoveBytes = ParseMiB(BudgetEntry.Text, "Write budget"), MaxMinutes = ParseInt(MinutesEntry.Text, "Time limit"),
+            MinimumFragments = ParseInt(MinFragmentsEntry.Text, "Minimum fragments", 20),
+            MinimumFileBytes = ParseMiB(MinFileSizeEntry.Text, "Minimum file size"), MaximumFileBytes = ParseMiB(MaxFileSizeEntry.Text, "Maximum file size"),
+            ShrinkBoundaryBytes = ParseMiB(BoundaryEntry.Text, "Shrink boundary"),
             ConfirmVirtualDiskZeroing = operation == Operation.ZeroFreeSpace && !preview,
             AllowSsdRelocation = !preview // The run confirmation below explicitly discloses SSD/unknown-media relocation.
         };
@@ -122,13 +169,14 @@ public partial class MainPage : ContentPage
             {
                 string details = operation == Operation.ZeroFreeSpace ?
                     "Pre-zeroing is for virtual-disk workflows that require it. It can expand thin storage and consume host capacity; it does not compact the disk itself." :
-                    $"Run {operation} on {request.Volume}, with a {Format.Bytes(request.MaxMoveBytes)} relocation budget and {request.MaxMinutes}-minute limit?";
+                    $"Run {_selectedPolicy.Name} on {request.Volume}, with {Limit(request.MaxMoveBytes, Format.Bytes, "no relocation limit")} and {Limit(request.MaxMinutes, n => $"{n}-minute limit", "no time limit")}?";
                 if (_volume?.SeekPenalty != true && operation is not (Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace))
                     details += "\n\nThis is SSD or unknown media. Custom relocation adds writes and may provide no performance benefit.";
                 if (!await DisplayAlertAsync("Review disk operation", details, "Start job", "Cancel")) return;
             }
             OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the persistent worker…";
             _job = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
+            _awaitingReport = _job;
             _map.Reset(); FooterStatus.Text = "●  Job submitted · closing this view does not stop it"; await Poll();
         }
         catch (Exception e) { await DisplayAlertAsync("Job could not start", e.Message, "Close"); FooterStatus.Text = e.Message; }
@@ -154,7 +202,14 @@ public partial class MainPage : ContentPage
             FreeMetric.Text = Format.Bytes(snapshot.FreeBytes); CapacityDetail.Text = $"of {Format.Bytes(snapshot.TotalBytes)} capacity";
             FragmentMetric.Text = snapshot.FragmentedFiles.ToString("N0"); StreamDetail.Text = $"of {snapshot.TotalFiles:N0} allocated streams";
         }
-        MovedMetric.Text = Format.Bytes(snapshot.BytesMoved); BudgetDetail.Text = snapshot.PlannedBytes > 0 ? $"{Format.Bytes(snapshot.PlannedBytes)} in current plan" : "Relocation payload, not NAND writes";
+        MovedMetric.Text = snapshot.BytesMoved == 0 && snapshot.State is JobState.Queued or JobState.Scanning or JobState.Planning ? "Pending" : Format.Bytes(snapshot.BytesMoved);
+        BudgetDetail.Text = snapshot.PlannedBytes > 0 ? $"{Format.Bytes(snapshot.PlannedBytes)} planned" : snapshot.State switch
+        {
+            JobState.Queued or JobState.Scanning => "Relocation begins after analysis",
+            JobState.Planning => "Calculating eligible placements",
+            JobState.Paused or JobState.WaitingForIdle => snapshot.Message,
+            _ => "Relocation payload, not NAND writes"
+        };
         JobTitle.Text = snapshot.Operation + " · " + snapshot.State; JobMessage.Text = snapshot.Message;
         JobProgress.Progress = Math.Clamp(snapshot.Progress, 0, 1); ProgressText.Text = snapshot.IsTerminal ? snapshot.State.ToString().ToUpperInvariant() : snapshot.Progress.ToString("P0");
         ObservationText.Text = snapshot.ObservedAt.HasValue ? $"Observed {snapshot.ObservedAt.Value.ToLocalTime():HH:mm:ss} · logical volume allocation" : "Reading the current volume layout";
@@ -162,15 +217,58 @@ public partial class MainPage : ContentPage
         if (snapshot.Files != null) FileList.ItemsSource = snapshot.Files.Select(f => new FileRow(f.Path, f.Extents, Format.Bytes(f.Bytes), f.Status)).ToArray();
         WarningsText.Text = string.Join("\n", snapshot.Warnings ?? []);
         FooterStatus.Text = $"●  {snapshot.Volume} · {snapshot.State} · worker-owned job";
+        if (snapshot.IsTerminal && snapshot.Id == _awaitingReport)
+        {
+            _awaitingReport = Guid.Empty;
+            _ = ShowCompletionReport(snapshot);
+        }
     }
     private async void OnAnalyze(object? sender, EventArgs e) => await Submit(Operation.Analyze, true);
-    private async void OnPreview(object? sender, EventArgs e) => await Submit(Policies[PolicyPicker.SelectedIndex].Operation, true);
-    private async void OnOptimize(object? sender, EventArgs e) => await Submit(Policies[PolicyPicker.SelectedIndex].Operation, false);
+    private async void OnPreview(object? sender, EventArgs e)
+    {
+        if (await ChoosePolicy() is { } operation) await Submit(operation, true);
+    }
+    private async void OnOptimize(object? sender, EventArgs e)
+    {
+        if (await ChoosePolicy() is { } operation) await Submit(operation, false);
+    }
+    private async void OnChooseMethod(object? sender, EventArgs e) => await ChoosePolicy();
+    private Task<Operation?> ChoosePolicy()
+    {
+        if (_policyChoice != null) return _policyChoice.Task;
+        _policyChoice = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        AlgorithmOverlay.IsVisible = true;
+        return _policyChoice.Task;
+    }
+    private void OnPolicyTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is not TapGestureRecognizer { BindingContext: PolicyOption option }) return;
+        _selectedPolicy = option; UpdateSelectedPolicy(); CompletePolicyChoice(option.Operation);
+    }
+    private void OnCancelPolicy(object? sender, EventArgs e) => CompletePolicyChoice(null);
+    private void CompletePolicyChoice(Operation? operation)
+    {
+        AlgorithmOverlay.IsVisible = false;
+        var completion = _policyChoice; _policyChoice = null; completion?.TrySetResult(operation);
+    }
+    private void UpdateSelectedPolicy()
+    {
+        SelectedMethodIcon.Text = _selectedPolicy.Icon; SelectedMethodName.Text = _selectedPolicy.Name; SelectedMethodDescription.Text = _selectedPolicy.Description;
+    }
     private async void OnPause(object? sender, EventArgs e) => await Control(_snapshot?.State == JobState.Paused ? "resume" : "pause");
     private async void OnCancel(object? sender, EventArgs e) => await Control("cancel");
     private async Task Control(string action) { try { if (_job != Guid.Empty) await _client.Send(new(action, Id: _job)); } catch (Exception e) { await DisplayAlertAsync("Job control", e.Message, "Close"); } }
     private async void OnRefreshVolumes(object? sender, EventArgs e) => await RefreshVolumes();
-    private void OnOverview(object? sender, EventArgs e) { SelectedPath.Text = ""; OnResetZoom(sender, e); }
+    private void OnOverview(object? sender, EventArgs e) { ShowSettings(false); OnResetZoom(sender, e); }
+    private void OnSettings(object? sender, EventArgs e) => ShowSettings(true);
+    private void ShowSettings(bool settings)
+    {
+        OverviewContent.IsVisible = ActionContent.IsVisible = !settings; SettingsContent.IsVisible = settings;
+        OverviewButton.BackgroundColor = Color.FromArgb(settings ? "#00000000" : "#193A40");
+        OverviewButton.TextColor = Color.FromArgb(settings ? "#E5EEF4" : "#54D5CB");
+        SettingsButton.BackgroundColor = Color.FromArgb(settings ? "#193A40" : "#00000000");
+        SettingsButton.TextColor = Color.FromArgb(settings ? "#54D5CB" : "#E5EEF4");
+    }
     private void OnZoomIn(object? sender, EventArgs e) { _map.Zoom(true); DiskMap.Invalidate(); UpdateRange(); }
     private void OnZoomOut(object? sender, EventArgs e) { _map.Zoom(false); DiskMap.Invalidate(); UpdateRange(); }
     private void OnResetZoom(object? sender, EventArgs e) { _map.Reset(); DiskMap.Invalidate(); UpdateRange(); }
@@ -184,20 +282,50 @@ public partial class MainPage : ContentPage
         CellDetail.Text = $"Cell {index:N0} · {c.Clusters:N0} clusters · {c.Allocated / n:P0} allocated · {c.Fragmented / n:P0} fragmented · {c.Metadata / n:P0} metadata";
     }
     private void OnResourceChanged(object? sender, ValueChangedEventArgs e)
-    { if (CpuValue == null || MemoryValue == null || IoValue == null || IoSlider == null) return; CpuValue.Text = $"{(int)CpuSlider.Value}%"; MemoryValue.Text = $"{(int)MemorySlider.Value:N0} MiB"; IoValue.Text = $"{(int)IoSlider.Value} MiB/s"; }
+    { if (CpuValue == null || CpuSlider == null) return; CpuValue.Text = $"{(int)CpuSlider.Value}%"; }
     private void OnPresetChanged(object? sender, EventArgs e)
     {
         if (ResourcePreset.SelectedIndex < 0 || CpuSlider == null) return;
         var p = ResourcePreset.SelectedIndex switch { 0 => ResourcePolicy.Quiet, 2 => ResourcePolicy.Performance, _ => ResourcePolicy.Balanced };
-        CpuSlider.Value = p.CpuPercent; MemorySlider.Value = p.MemoryMiB; IoSlider.Value = p.IoMiBPerSecond; IdleSwitch.IsToggled = p.IdleOnly; AcSwitch.IsToggled = p.AcOnly; BackgroundSwitch.IsToggled = p.Background;
+        CpuSlider.Value = p.CpuPercent; MemoryEntry.Text = p.MemoryMiB.ToString(CultureInfo.InvariantCulture); IoEntry.Text = p.IoMiBPerSecond.ToString(CultureInfo.InvariantCulture); IdleSwitch.IsToggled = p.IdleOnly; AcSwitch.IsToggled = p.AcOnly; BackgroundSwitch.IsToggled = p.Background;
+    }
+    private void OnToggleAdvanced(object? sender, EventArgs e)
+    { AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible; AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide advanced" : "Show advanced"; }
+    private void OnScopeChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (ScopeSummary == null) return;
+        string selection = string.IsNullOrWhiteSpace(SelectedPath?.Text) ? "All files" : "Selected path";
+        int exclusions = (ExclusionEntry?.Text ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Length;
+        string fragments = string.IsNullOrWhiteSpace(MinFragmentsEntry?.Text) ? "20" : MinFragmentsEntry.Text;
+        string size = string.IsNullOrWhiteSpace(MinFileSizeEntry?.Text) && string.IsNullOrWhiteSpace(MaxFileSizeEntry?.Text) ? "all sizes" : "size-filtered";
+        ScopeSummary.Text = $"{selection} · {(exclusions == 0 ? "exclusions none" : $"{exclusions:N0} exclusions")} · {fragments}-fragment defrag threshold · {size}";
     }
     private void OnFileSelected(object? sender, SelectionChangedEventArgs e) { if (e.CurrentSelection.FirstOrDefault() is FileRow row) { SelectedPath.Text = row.Path; CellDetail.Text = row.Path; } }
     private async void OnExport(object? sender, EventArgs e)
     {
         if (_snapshot == null) return;
+        await ExportReport(_snapshot);
+    }
+    private async Task ExportReport(JobSnapshot snapshot)
+    {
         string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), $"Tedd-Defrag-{DateTime.Now:yyyyMMdd-HHmmss}.json");
-        try { await File.WriteAllTextAsync(path, JsonSerializer.Serialize(_snapshot, new JsonSerializerOptions(JobStore.Json) { WriteIndented = true })); await DisplayAlertAsync("Report saved", path, "Close"); }
+        try
+        {
+            var report = new JobStore().ReadReport(snapshot.Id) ?? snapshot with { Map = null };
+            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(report, new JsonSerializerOptions(JobStore.Json) { WriteIndented = true }));
+            await DisplayAlertAsync("Report saved", path, "Close");
+        }
         catch (Exception ex) { await DisplayAlertAsync("Export failed", ex.Message, "Close"); }
+    }
+    private async Task ShowCompletionReport(JobSnapshot snapshot)
+    {
+        string report = $"{snapshot.State}: {snapshot.Message}\n\n" +
+            $"Planned moves: {snapshot.PlannedMoves:N0}\nAttempted moves: {snapshot.AttemptedMoves:N0}\n" +
+            $"Verified moves: {snapshot.VerifiedMoves:N0}\nFailed moves: {snapshot.FailedMoves:N0}\n" +
+            $"Relocated and verified: {Format.Bytes(snapshot.BytesMoved)}\n" +
+            $"Fragmented streams: {snapshot.InitialFragmentedFiles:N0} before, {snapshot.FragmentedFiles:N0} after\n" +
+            $"Elapsed: {TimeSpan.FromMilliseconds(snapshot.ElapsedMilliseconds):g}";
+        if (await DisplayAlertAsync("Job report", report, "Export report", "Close")) await ExportReport(snapshot);
     }
     private async void OnSaveConcurrency(object? sender, EventArgs e)
     {
@@ -227,7 +355,8 @@ public partial class MainPage : ContentPage
                 string? name = await DisplayPromptAsync("Weekly schedule", "Schedule name", initialValue: "Weekly maintenance"); if (string.IsNullOrWhiteSpace(name)) return;
                 string? day = await DisplayActionSheetAsync("Day", "Cancel", null, Enum.GetNames<DayOfWeek>()); if (!Enum.TryParse<DayOfWeek>(day, out var weekday)) return;
                 string? at = await DisplayPromptAsync("Local start time", "24-hour time (HH:mm)", initialValue: "02:00"); if (!TimeOnly.TryParse(at, out var time)) return;
-                var request = Request(Policies[PolicyPicker.SelectedIndex].Operation, false);
+                if (await ChoosePolicy() is not { } operation) return;
+                var request = Request(operation, false);
                 if (!await DisplayAlertAsync("Save execution schedule", $"Run {request.Operation} on {request.Volume} every {weekday} at {time:HH:mm}? Resource limits and exclusions are copied from this view.", "Save schedule", "Cancel")) return;
                 await _client.Send(new("schedule-add", Schedule: new(name, request, [weekday], time)), startBroker: true);
                 await DisplayAlertAsync("Schedule saved", "The persistent broker runs this schedule. Use Install-ScheduledWorker.ps1 to start it automatically at logon.", "Close");
@@ -239,5 +368,21 @@ public partial class MainPage : ContentPage
         }
         catch (Exception ex) { await DisplayAlertAsync("Schedules", ex.Message, "Close"); }
     }
+    private static int ParseInt(string? text, string name, int defaultValue = 0)
+    {
+        long value = ParseWholeNumber(text, name, defaultValue);
+        if (value > int.MaxValue) throw new ArgumentException($"{name} is too large.");
+        return (int)value;
+    }
+    private static long ParseMiB(string? text, string name) => checked(ParseWholeNumber(text, name) * 1024 * 1024);
+    private static long ParseWholeNumber(string? text, string name, long defaultValue = 0)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return defaultValue;
+        string normalized = text.Trim().Replace(",", "", StringComparison.Ordinal).Replace(" ", "", StringComparison.Ordinal).Replace("_", "", StringComparison.Ordinal);
+        if (!long.TryParse(normalized, NumberStyles.None, CultureInfo.InvariantCulture, out long value)) throw new ArgumentException($"{name} must be a nonnegative whole number.");
+        return value;
+    }
+    private static string Limit(long value, Func<long, string> format, string unlimited) => value == 0 ? unlimited : format(value);
     private sealed record FileRow(string Path, int Extents, string BytesLabel, string Status);
+    private sealed record PolicyOption(string Icon, string Name, string Description, Operation Operation);
 }

@@ -47,7 +47,7 @@ public sealed unsafe class NtfsVolume : IDisposable
     public byte[] ReadBitmap(int memoryMiB, Action<double>? progress, CancellationToken token)
     {
         long bytes = (TotalClusters + 7) / 8;
-        if (bytes > memoryMiB * 1024L * 1024 / 4 || bytes > Array.MaxLength) throw new IOException("Allocation bitmap exceeds one quarter of the memory budget. Increase the memory cap.");
+        if ((memoryMiB > 0 && bytes > memoryMiB * 1024L * 1024 / 4) || bytes > Array.MaxLength) throw new IOException("Allocation bitmap exceeds the configured memory cap or runtime array limit.");
         byte[] bitmap = new byte[(int)bytes], buffer = new byte[1024 * 1024 + 16];
         Span<byte> input = stackalloc byte[8]; long next = 0;
         while (next < TotalClusters)

@@ -23,7 +23,8 @@ public sealed class LayoutPlanner
         for (int i = 0; i < layout.Files.Length; i++) order.Add(i);
         order.Span.Sort((a, b) => Compare(layout.Files[a], layout.Files[b], request.Operation));
         using var moves = new PooledBuffer<PlannedMove>(1024);
-        long remaining = request.MaxMoveBytes / layout.Volume.BytesPerCluster, planned = 0, cursor = 0;
+        long remaining = request.MaxMoveBytes == 0 ? long.MaxValue : request.MaxMoveBytes / layout.Volume.BytesPerCluster;
+        long planned = 0, cursor = 0;
         long chunk = Math.Max(1, 16L * 1024 * 1024 / layout.Volume.BytesPerCluster);
         int blocked = 0, considered = 0;
         foreach (int index in order.Span)
@@ -34,6 +35,8 @@ public sealed class LayoutPlanner
             bool metadata = (file.Flags & StreamFlags.Metadata) != 0, directory = (file.Flags & StreamFlags.Directory) != 0;
             if (request.Operation == Operation.OptimizeMft ? (file.FileId & 0xFFFFFFFFFFFF) != 0 : metadata) continue;
             if (request.Operation == Operation.DirectoryIndexes ? !directory : directory && request.Operation != Operation.DirectoryLocality) continue;
+            if (file.Size < request.MinimumFileBytes || (request.MaximumFileBytes > 0 && file.Size > request.MaximumFileBytes)) continue;
+            if (request.Operation is Operation.MinimumWrite or Operation.FilesOnly && file.Extents.Length < request.MinimumFragments) continue;
             considered++;
             if (!file.Movable || rules.IsExcluded(file.Path)) { blocked++; continue; }
             var extents = file.Extents;
