@@ -3,25 +3,34 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#081019">
-  <meta name="description" content="Tedd.Defrag is a free, open-source Windows NTFS optimizer with a native desktop dashboard and full CLI.">
-  <title>Tedd.Defrag — Defrag. Open Source. Free.</title>
+  <meta name="theme-color" content="#071018">
+  <meta name="description" content="See fragmented NTFS storage, preview the plan, and optimize with control. Tedd.Defrag is a free, open-source Windows desktop app and CLI.">
+  <title>Tedd.Defrag — See the mess. Preview the fix.</title>
   <link rel="icon" href="assets/app-icon.svg" type="image/svg+xml">
+  <script>document.documentElement.classList.add('js')</script>
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
+
+  <div class="preview-notice" role="note">
+    <strong>Engineering preview</strong>
+    <span>Read-only analysis has been exercised; native relocation is not yet production-qualified.</span>
+    <a href="#preview-status">Read before use</a>
+  </div>
+
   <header class="site-header">
     <a class="brand" href="#top" aria-label="Tedd.Defrag home">
       <img src="assets/app-icon.svg" width="34" height="34" alt="">
-      <span>TEDD<span class="brand-dot">/</span>DEFRAG</span>
+      <span>TEDD<span class="brand-slash">/</span>DEFRAG</span>
     </a>
     <nav aria-label="Primary navigation">
-      <a href="#method">How it works</a>
-      <a href="#ssd">SSD</a>
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#ssd">SSD guidance</a>
       <a href="https://github.com/tedd/Tedd.Defrag">Source</a>
-      <a class="nav-download" href="https://github.com/tedd/Tedd.Defrag/releases/latest/download/Tedd.Defrag-win-x64.zip">Download</a>
+      <a class="nav-cta" href="https://github.com/tedd/Tedd.Defrag/releases/latest">Get it free</a>
     </nav>
   </header>
 
@@ -29,122 +38,187 @@
     <section class="hero" id="top">
       <div class="hero-grid" aria-hidden="true"></div>
       <div class="hero-copy">
-        <p class="eyebrow"><span></span> Windows-first NTFS optimization</p>
-        <h1><span>Defrag.</span><span class="outline">Open Source.</span><span class="accent">Free.</span></h1>
-        <p class="lede">See the disk. Choose the method. Preview every move. Tedd.Defrag combines a native dashboard, a scriptable CLI, and a conservative relocation engine in one stand-alone download.</p>
+        <p class="eyebrow"><span></span> Free Windows NTFS optimizer</p>
+        <h1>Understand your drive.<br><em>Control every move.</em></h1>
+        <p class="lede">Tedd.Defrag turns fragmented storage into a clear plan. Analyze the drive, see what needs attention, preview the operation, and decide exactly what gets moved.</p>
         <div class="hero-actions">
-          <a class="button primary" href="https://github.com/tedd/Tedd.Defrag/releases/latest/download/Tedd.Defrag-win-x64.zip">
-            <span>Download for Windows x64</span><span aria-hidden="true">↓</span>
+          <a class="button primary" href="https://github.com/tedd/Tedd.Defrag/releases/latest">
+            <span>Get Tedd.Defrag free</span><span aria-hidden="true">↓</span>
           </a>
-          <a class="button secondary" href="https://github.com/tedd/Tedd.Defrag/releases/latest">All releases</a>
+          <a class="button secondary" href="#product">See the app</a>
         </div>
-        <p class="hero-note">Engineering preview · Windows 10 1809+ · Administrator access required for disk operations</p>
+        <ul class="hero-checks" aria-label="Product essentials">
+          <li>No subscription or Pro tier</li>
+          <li>No .NET installation required</li>
+          <li>Windows 10 1809+ · x64 and ARM64</li>
+        </ul>
       </div>
-      <div class="hero-panel" aria-label="Product highlights">
-        <div class="panel-top">
-          <span>STORAGE / IN PERSPECTIVE</span>
-          <span class="live-dot">NATIVE</span>
-        </div>
-        <div class="metric-row">
-          <div><small>RUNTIME</small><strong>Self-contained</strong></div>
-          <div><small>BUILD</small><strong>ReadyToRun</strong></div>
-          <div><small>LICENSE</small><strong>GPL-3.0</strong></div>
-        </div>
-        <div class="block-map" aria-hidden="true">
-          <i class="allocated"></i><i></i><i class="free"></i><i class="fragmented"></i><i class="fragmented"></i><i></i><i></i><i class="metadata"></i>
-          <i></i><i class="allocated"></i><i class="allocated"></i><i></i><i class="free"></i><i class="free"></i><i class="fragmented"></i><i></i>
-          <i class="metadata"></i><i class="metadata"></i><i></i><i class="allocated"></i><i class="allocated"></i><i class="allocated"></i><i></i><i class="free"></i>
-          <i class="free"></i><i></i><i class="fragmented"></i><i></i><i></i><i class="allocated"></i><i class="allocated"></i><i></i>
-        </div>
-        <div class="map-legend"><span><b class="a"></b>Allocated</span><span><b class="f"></b>Fragmented</span><span><b class="m"></b>Metadata</span></div>
-      </div>
-      <div class="hero-index" aria-hidden="true">01 / 04</div>
-    </section>
 
-    <section class="proof-strip" aria-label="Release properties">
-      <p><strong>One ZIP.</strong> Desktop, CLI, and isolated worker.</p>
-      <p><strong>Three single files.</strong> No .NET installation.</p>
-      <p><strong>Verified updates.</strong> SHA-256 before replacement.</p>
-      <a href="https://github.com/tedd/Tedd.Defrag/releases/latest/download/Tedd.Defrag-win-arm64.zip">Windows ARM64 ↗</a>
-    </section>
-
-    <section class="product section-shell reveal">
-      <div class="section-number">02</div>
-      <div class="section-heading">
-        <p class="eyebrow">A map, not a mystery</p>
-        <h2>Storage intelligence<br>you can interrogate.</h2>
-        <p>The dashboard reveals allocation, fragmentation, metadata, exclusions, and active relocation. Zoom into a region, inspect candidate files, then preview a plan before authorizing writes.</p>
-      </div>
-      <figure class="app-shot">
-        <div class="window-bar"><span></span><span></span><span></span><b>Tedd Defrag · Advanced Defrag, Open Source, Free</b></div>
-        <img src="assets/dashboard.png" alt="Tedd.Defrag desktop dashboard showing an NTFS volume, capacity metrics, and optimization controls before analysis" width="2138" height="1381">
-        <figcaption>Native Windows desktop dashboard. The interface is detached from the privileged worker, so closing it does not interrupt an active job.</figcaption>
+      <figure class="hero-product" aria-label="Tedd.Defrag desktop application">
+        <div class="window-bar"><span></span><span></span><span></span><b>Tedd.Defrag</b></div>
+        <img src="assets/dashboard.png" alt="Tedd.Defrag dashboard with drive selection, storage metrics, an allocation map, and optimization controls" width="2138" height="1381">
+        <figcaption><strong>Your drive, made visible.</strong> Analysis changes nothing. Optimization requires an explicit command.</figcaption>
       </figure>
     </section>
 
-    <section class="method section-shell reveal" id="method">
-      <div class="section-number">03</div>
-      <div class="section-heading compact">
-        <p class="eyebrow">Evidence before motion</p>
-        <h2>A bounded pipeline with verification at both ends.</h2>
+    <section class="proof-strip" aria-label="Product advantages">
+      <p><strong>$0</strong><span>Free and GPL-3.0</span></p>
+      <p><strong>Preview first</strong><span>Inspect before writes</span></p>
+      <p><strong>Portable</strong><span>Extract and run</span></p>
+      <p><strong>Transparent</strong><span>Source and plans are visible</span></p>
+    </section>
+
+    <section class="product section-shell" id="product">
+      <div class="section-intro reveal">
+        <div>
+          <p class="eyebrow">A map, not a mystery</p>
+          <h2>See what is happening before you change anything.</h2>
+        </div>
+        <p>Tedd.Defrag puts the essential evidence on one screen: the selected volume, free space, fragmented streams, the allocation map, operation scope, and the next safe action.</p>
       </div>
-      <ol class="pipeline">
-        <li><span>01</span><h3>Observe</h3><p>Read the NTFS allocation bitmap and validated MFT records. Unsupported or incomplete streams stay ineligible.</p></li>
-        <li><span>02</span><h3>Plan</h3><p>Search free intervals in expected O(log n), respect exclusions and budgets, and never recycle a source hole inside the same batch.</p></li>
-        <li><span>03</span><h3>Relocate</h3><p>Recheck identity, path, attributes, and retrieval pointers immediately before each filesystem-controlled move.</p></li>
-        <li><span>04</span><h3>Verify</h3><p>Confirm the destination, journal the outcome, and rescan when native results are ambiguous. Saved cluster addresses are never replayed.</p></li>
-      </ol>
-      <div class="methods">
-        <article><span>↯</span><div><h3>Minimum write</h3><p>Keep the first extent where possible and move only the fragmented tail.</p></div></article>
-        <article><span>▰</span><div><h3>Files only</h3><p>Make eligible fragmented files contiguous without reorganizing the volume.</p></div></article>
-        <article><span>⇤</span><div><h3>Pack</h3><p>Consolidate free space, with optional file defragmentation.</p></div></article>
-        <article><span>⌁</span><div><h3>ReTRIM</h3><p>Resend deallocation hints without relocating file data.</p></div></article>
-        <article><span>◷</span><div><h3>Locality & ordering</h3><p>Directory, path, size, type, and timestamp-aware placement modes.</p></div></article>
-        <article><span>⇥</span><div><h3>Prepare for shrink</h3><p>Move eligible extents below an explicit partition boundary.</p></div></article>
+
+      <figure class="app-stage reveal">
+        <div class="window-bar"><span></span><span></span><span></span><b>Tedd.Defrag · Overview</b></div>
+        <img src="assets/dashboard.png" alt="Full Tedd.Defrag desktop overview" width="2138" height="1381">
+        <figcaption>Actual application interface. Select a volume, analyze it, then preview or run the chosen method.</figcaption>
+      </figure>
+
+      <div class="detail-gallery" aria-label="Application details">
+        <article class="detail-card reveal">
+          <div class="app-crop crop-overview">
+            <img src="assets/dashboard.png" alt="Tedd.Defrag volume selector and drive metrics" width="2138" height="1381" loading="lazy">
+          </div>
+          <div class="detail-copy"><span>01</span><h3>Choose a drive</h3><p>See every available volume and its capacity at a glance. Unsupported volumes stay unavailable for disk operations.</p></div>
+        </article>
+
+        <article class="detail-card reveal">
+          <div class="app-crop crop-map">
+            <img src="assets/dashboard.png" alt="Tedd.Defrag visual allocation map" width="2138" height="1381" loading="lazy">
+          </div>
+          <div class="detail-copy"><span>02</span><h3>Read the map</h3><p>Distinguish allocated, fragmented, metadata, excluded, free, and active regions. Zoom and inspect individual cells.</p></div>
+        </article>
+
+        <article class="detail-card reveal">
+          <div class="app-crop crop-controls">
+            <img src="assets/dashboard.png" alt="Tedd.Defrag analysis, preview, method, and optimization controls" width="2138" height="1381" loading="lazy">
+          </div>
+          <div class="detail-copy"><span>03</span><h3>Set the intent</h3><p>Choose a method, inspect the current scope, analyze, preview, and run from a deliberately ordered control panel.</p></div>
+        </article>
       </div>
     </section>
 
-    <section class="ssd section-shell reveal" id="ssd">
-      <div class="section-number">04</div>
-      <div class="ssd-statement">
-        <p class="eyebrow">SSD: precision over folklore</p>
-        <h2>An SSD does not need HDD-style seek optimization. It can still need volume optimization.</h2>
+    <section class="how section-shell" id="how">
+      <div class="how-heading reveal">
+        <p class="eyebrow">Simple by default</p>
+        <h2>Three deliberate steps.<br>No blind “speed up” button.</h2>
+        <p>The ordinary workflow is intentionally linear. Advanced controls remain available when you need them, without obstructing the basic task.</p>
       </div>
-      <div class="ssd-copy">
-        <p>For an SSD with TRIM support, Windows defaults to <strong>ReTRIM</strong>: it resends deallocation hints so unused regions can be purged. Windows’ scheduled optimizer can also perform occasional traditional consolidation on SSD volumes instead of treating “never defrag an SSD” as an absolute rule.</p>
-        <p>Tedd.Defrag preserves that distinction. <strong>Windows automatic</strong> delegates to the media-aware OS policy; <strong>ReTRIM</strong> moves no file data. Custom relocation on SSD or unknown media requires an explicit opt-in, and minimum-write mode exists to bound unnecessary movement.</p>
-        <div class="source-links">
-          <a href="https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/defrag">Microsoft: media-aware optimization ↗</a>
-          <a href="https://learn.microsoft.com/en-us/powershell/module/storage/optimize-volume">Microsoft: Optimize-Volume and ReTRIM ↗</a>
+      <ol class="steps">
+        <li class="reveal"><span>1</span><div><h3>Analyze</h3><p>Read the NTFS allocation bitmap and file records. This is a read-only operation; no file data is moved.</p></div></li>
+        <li class="reveal"><span>2</span><div><h3>Preview</h3><p>Build a plan using your selected method, exclusions, file filters, time limit, and write budget.</p></div></li>
+        <li class="reveal"><span>3</span><div><h3>Optimize</h3><p>Explicitly authorize the operation. Tedd.Defrag rechecks each candidate before a filesystem-controlled move.</p></div></li>
+      </ol>
+    </section>
+
+    <section class="features section-shell" id="features">
+      <div class="section-intro reveal">
+        <div>
+          <p class="eyebrow">More than one defrag mode</p>
+          <h2>Use the right operation for the job.</h2>
+        </div>
+        <p>Start conservatively, then move to specialized placement only when the workload requires it. Every method remains subject to exclusions and eligibility checks.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card featured reveal"><span class="feature-icon">↯</span><p class="card-kicker">Recommended start</p><h3>Minimum-write defrag</h3><p>Preserve the first extent where possible and relocate only a fragmented tail. Reduce unnecessary movement while making heavily fragmented files contiguous.</p></article>
+        <article class="feature-card reveal"><span class="feature-icon">▰</span><h3>Defragment files</h3><p>Target eligible fragmented files without reorganizing the entire volume.</p></article>
+        <article class="feature-card reveal"><span class="feature-icon">⇤</span><h3>Pack free space</h3><p>Consolidate occupied space to create a larger contiguous free region.</p></article>
+        <article class="feature-card reveal"><span class="feature-icon">◷</span><h3>Order and group</h3><p>Prefer placement by path, directory, size, extension, or timestamps.</p></article>
+        <article class="feature-card reveal"><span class="feature-icon">⇥</span><h3>Prepare to shrink</h3><p>Move eligible extents below an explicit partition boundary before resizing.</p></article>
+        <article class="feature-card reveal"><span class="feature-icon">⌁</span><h3>ReTRIM</h3><p>Resend deallocation hints on supported SSDs without relocating file data.</p></article>
+      </div>
+    </section>
+
+    <section class="control-band">
+      <div class="control-intro reveal">
+        <p class="eyebrow">Your machine. Your limits.</p>
+        <h2>Keep maintenance inside the boundaries you choose.</h2>
+      </div>
+      <div class="control-list reveal">
+        <div><strong>Scope</strong><span>One file, selected paths, or an entire volume</span></div>
+        <div><strong>Write budget</strong><span>Cap relocation bytes for a maintenance window</span></div>
+        <div><strong>Time limit</strong><span>Stop planning new moves when the window closes</span></div>
+        <div><strong>Resources</strong><span>Control CPU, memory, bandwidth, priority, idle, and AC-power policy</span></div>
+      </div>
+    </section>
+
+    <section class="ssd section-shell" id="ssd">
+      <div class="ssd-title reveal">
+        <p class="eyebrow">SSD guidance without folklore</p>
+        <h2>HDD defrag and SSD maintenance are not the same operation.</h2>
+      </div>
+      <div class="ssd-copy reveal">
+        <p>On an SSD with TRIM support, Tedd.Defrag defaults to <strong>ReTRIM</strong>, which resends deallocation hints without moving file data. <strong>Windows automatic</strong> delegates to the operating system’s media-aware policy.</p>
+        <p>Custom relocation on SSD or unknown media requires an explicit opt-in. That separation prevents a traditional HDD strategy from being presented as universal advice.</p>
+        <div class="reference-links">
+          <a href="https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/defrag">Microsoft defrag guidance ↗</a>
+          <a href="https://learn.microsoft.com/en-us/powershell/module/storage/optimize-volume">Microsoft Optimize-Volume ↗</a>
         </div>
       </div>
     </section>
 
-    <section class="open-source reveal">
-      <div>
-        <p class="eyebrow">Inspectable by design</p>
-        <h2>No opaque “optimize” button.</h2>
+    <section class="free section-shell">
+      <div class="free-card reveal">
+        <div class="price-block">
+          <p class="eyebrow">Everything included</p>
+          <div class="price"><span>$</span>0</div>
+          <p>No subscription. No license key. No paid feature tier.</p>
+        </div>
+        <div class="included">
+          <h2>One download. The complete toolset.</h2>
+          <ul>
+            <li>Native Windows desktop dashboard</li>
+            <li>Scriptable CLI with JSON and NDJSON</li>
+            <li>All optimization methods and limits</li>
+            <li>Scheduling and job history</li>
+            <li>Source code under GPL-3.0</li>
+          </ul>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/tedd/Tedd.Defrag/releases/latest">Get Tedd.Defrag free <span aria-hidden="true">↓</span></a>
+            <a class="button secondary" href="https://github.com/tedd/Tedd.Defrag">View source</a>
+          </div>
+          <p class="download-note">Self-contained Windows builds for x64 and ARM64. Extract the ZIP and run the desktop app or CLI.</p>
+        </div>
       </div>
-      <p>The scanner is read-only. Relocation uses documented Windows filesystem controls. Requests, plans, progress, and benchmarks are inspectable; the code and GPL-3.0 license are public.</p>
-      <a class="button secondary light" href="https://github.com/tedd/Tedd.Defrag">Read the source on GitHub ↗</a>
     </section>
 
-    <section class="download">
-      <div class="download-blocks" aria-hidden="true"></div>
-      <p class="eyebrow">Stand-alone Windows release</p>
-      <h2>See what is fragmented.<br><span>Move only what earns it.</span></h2>
-      <div class="hero-actions centered">
-        <a class="button primary" href="https://github.com/tedd/Tedd.Defrag/releases/latest/download/Tedd.Defrag-win-x64.zip">Download x64 <span aria-hidden="true">↓</span></a>
-        <a class="button secondary" href="https://github.com/tedd/Tedd.Defrag/releases/latest/download/Tedd.Defrag-win-arm64.zip">Download ARM64</a>
+    <section class="preview-status section-shell" id="preview-status">
+      <div class="status-heading reveal">
+        <p class="eyebrow">Read before use</p>
+        <h2>Powerful controls.<br>Preview-stage qualification.</h2>
       </div>
-      <p class="hero-note">Extract anywhere. Run Desktop or CLI. Updates are offered in place and never installed silently.</p>
+      <div class="status-copy reveal">
+        <p><strong>Tedd.Defrag is an engineering preview.</strong> Read-only native analysis has been exercised on a real system volume. Native NTFS relocation is implemented but has not yet completed the validation campaign required for production use.</p>
+        <p>Do not use custom relocation on irreplaceable data or a production system. Begin with analysis and preview, keep current backups, and use a disposable volume for experimental write operations.</p>
+        <a href="https://github.com/tedd/Tedd.Defrag#validation-and-performance">Review validation status and limitations ↗</a>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <div class="cta-grid" aria-hidden="true"></div>
+      <p class="eyebrow">Storage intelligence for Windows</p>
+      <h2>See the problem.<br><span>Choose the solution.</span></h2>
+      <p>Free, open source, portable, and explicit about every operation.</p>
+      <div class="hero-actions centered">
+        <a class="button primary" href="https://github.com/tedd/Tedd.Defrag/releases/latest">Get Tedd.Defrag free <span aria-hidden="true">↓</span></a>
+        <a class="button secondary" href="https://github.com/tedd/Tedd.Defrag#run">Read the quick start</a>
+      </div>
     </section>
   </main>
 
   <footer>
     <a class="brand" href="#top"><img src="assets/app-icon.svg" width="28" height="28" alt=""><span>TEDD/DEFRAG</span></a>
     <p>Free and open-source software. Engineering preview.</p>
-    <div><a href="https://github.com/tedd/Tedd.Defrag/releases">Releases</a><a href="https://github.com/tedd/Tedd.Defrag">Source</a><a href="https://github.com/tedd/Tedd.Defrag/blob/main/LICENSE">License</a></div>
+    <div><a href="https://github.com/tedd/Tedd.Defrag/releases">Releases</a><a href="https://github.com/tedd/Tedd.Defrag">Source</a><a href="https://github.com/tedd/Tedd.Defrag/blob/main/LICENSE">GPL-3.0</a></div>
   </footer>
 </body>
 </html>
