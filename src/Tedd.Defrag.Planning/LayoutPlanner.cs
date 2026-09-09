@@ -5,7 +5,7 @@ namespace Tedd.Defrag.Planning;
 
 public sealed class LayoutPlanner
 {
-    public MovePlan Plan(VolumeLayout layout, JobRequest request, CancellationToken cancellationToken = default)
+    public MovePlan Plan(VolumeLayout layout, JobRequest request, CancellationToken cancellationToken = default, PlanningSession? session = null)
     {
         request.Validate();
         var rules = new PathRules(request.SelectedPaths, request.Exclusions);
@@ -21,15 +21,23 @@ public sealed class LayoutPlanner
         }
         using var order = new PooledBuffer<int>(layout.Files.Length);
         for (int i = 0; i < layout.Files.Length; i++) order.Add(i);
-        order.Span.Sort((a, b) => Compare(layout.Files[a], layout.Files[b], request.Operation));
+        order.Span.Sort((a, b) =>
+        {
+            int comparison = Compare(layout.Files[a], layout.Files[b], request.Operation);
+            // Stable ties are required when an ordered pass resumes in a later batch.
+            return comparison != 0 ? comparison : a.CompareTo(b);
+        });
         using var moves = new PooledBuffer<PlannedMove>(1024);
         long remaining = request.MaxMoveBytes == 0 ? long.MaxValue : request.MaxMoveBytes / layout.Volume.BytesPerCluster;
-        long planned = 0, cursor = 0;
+        bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
+        long planned = 0, cursor = ordered ? session?.DestinationCursor ?? 0 : 0;
         long chunk = Math.Max(1, 16L * 1024 * 1024 / layout.Volume.BytesPerCluster);
-        int blocked = 0, considered = 0;
-        foreach (int index in order.Span)
+        int blocked = ordered ? session?.FilesBlocked ?? 0 : 0, considered = ordered ? session?.FilesConsidered ?? 0 : 0;
+        for (int position = ordered ? session?.OrderedPosition ?? 0 : 0; position < order.Count; position++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (ordered && session != null) session.OrderedPosition = position + 1;
+            int index = order.Span[position];
             var file = layout.Files[index];
             if (!rules.IsSelected(file.Path)) continue;
             bool metadata = (file.Flags & StreamFlags.Metadata) != 0, directory = (file.Flags & StreamFlags.Directory) != 0;
@@ -38,11 +46,10 @@ public sealed class LayoutPlanner
             if (file.Size < request.MinimumFileBytes || (request.MaximumFileBytes > 0 && file.Size > request.MaximumFileBytes)) continue;
             if (request.Operation is Operation.MinimumWrite or Operation.FilesOnly && file.Extents.Length < request.MinimumFragments) continue;
             considered++;
-            if (!file.Movable || rules.IsExcluded(file.Path)) { blocked++; continue; }
+            if (!file.Movable || rules.IsExcluded(file.Path) || session?.BlockedFiles.Contains(file.FileId) == true) { blocked++; continue; }
             var extents = file.Extents;
             if (extents.Length == 0) continue;
             bool pack = request.Operation is Operation.Pack or Operation.PrepareShrink;
-            bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
             long total = 0;
             foreach (var e in extents) total = checked(total + e.Length);
             if (pack)
@@ -78,7 +85,16 @@ public sealed class LayoutPlanner
                 {
                     long before = request.Operation == Operation.PackAndDefrag ? extents.Min(e => e.Lcn) : long.MaxValue;
                     long target = free.FindFirstFit(total, before, ordered ? cursor : 0);
-                    long requiredMoves = total / chunk + extents.Length;
+                    long requiredMoves = 0;
+                    foreach (var extent in extents) requiredMoves += (extent.Length - 1) / chunk + 1;
+                    if (ordered && session != null && target >= 0 && requiredMoves <= 1024 && requiredMoves > 1024 - moves.Count)
+                    {
+                        // This file fits a fresh batch. Resume here instead of dropping it
+                        // merely because preceding files consumed this batch's capacity.
+                        session.OrderedPosition = position;
+                        considered--;
+                        break;
+                    }
                     if (target < 0 || requiredMoves > 1024 - moves.Count) { blocked++; continue; }
                     foreach (var extent in extents) MoveExtent(extent, ref target);
                     if (ordered) cursor = target;
@@ -96,6 +112,12 @@ public sealed class LayoutPlanner
                 }
             }
             if (moves.Count >= 1024 || remaining <= 0) break;
+        }
+        if (ordered && session != null)
+        {
+            session.DestinationCursor = cursor;
+            session.FilesConsidered = considered;
+            session.FilesBlocked = blocked;
         }
         return new(moves.ToArray(), planned, considered, blocked,
             "Bounded free-destination plan. Existing anchors are preserved where possible; excluded objects are never moved. Constraints may prevent full packing or ordering.");

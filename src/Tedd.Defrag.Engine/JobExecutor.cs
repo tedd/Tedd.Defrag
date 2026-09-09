@@ -1,7 +1,5 @@
-using System.Buffers.Binary;
 using System.Diagnostics;
 using System.ComponentModel;
-using Microsoft.Win32.SafeHandles;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Maintenance;
 using Tedd.Defrag.Persistence;
@@ -11,8 +9,18 @@ using Tedd.Defrag.Windows;
 
 namespace Tedd.Defrag.Engine;
 
-public sealed class JobExecutor(JobStore store)
+public sealed class JobExecutor
 {
+    private readonly JobStore store;
+    private readonly Func<JobRequest, IJobVolume> openVolume;
+
+    public JobExecutor(JobStore store) : this(store, request => new NativeJobVolume(request)) { }
+    internal JobExecutor(JobStore store, Func<JobRequest, IJobVolume> openVolume)
+    {
+        this.store = store;
+        this.openVolume = openVolume;
+    }
+
     public void Run(JobRequest request, CancellationToken token)
     {
         request.Validate();
@@ -27,12 +35,12 @@ public sealed class JobExecutor(JobStore store)
         try
         {
             Checkpoint();
-            using var volume = new NtfsVolume(request.Volume, !request.Preview && request.Operation != Operation.Analyze);
+            using var volume = openVolume(request);
             if (!request.Preview && request.Operation != Operation.Analyze && volume.IsDirty()) throw new IOException("The NTFS volume is dirty. Resolve filesystem errors before optimization.");
             if (!request.Preview && request.Operation is not (Operation.Analyze or Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace)
                 && volume!.Info.SeekPenalty != true && !request.AllowSsdRelocation)
                 throw new InvalidOperationException("Custom relocation on SSD or unknown media requires explicit opt-in.");
-            layout = new RawMftScanner().Scan(volume, request, ScanProgress, Checkpoint, token);
+            layout = volume.Scan(request, ScanProgress, Checkpoint, token);
             warnings.AddRange(layout.Warnings);
             initialFragmentedFiles = layout.Files.Count(f => f.Fragmented);
             MapAggregator.Build(layout, map); Publish(true);
@@ -47,17 +55,18 @@ public sealed class JobExecutor(JobStore store)
                     moved = VirtualDiskPreparation.Zero(request, volume!.Info, b => { Pace(b - moved); moved = b; Publish(); }, Checkpoint, token);
                 else WindowsMaintenance.Run(request, volume!.Info, line => { message = line; Publish(); }, ExternalCheckpoint, token);
                 ReleaseLayoutForRescan();
-                layout = new RawMftScanner().Scan(volume!, request, ScanProgress, Checkpoint, token);
+                layout = volume.Scan(request, ScanProgress, Checkpoint, token);
                 AddWarnings(layout.Warnings);
                 MapAggregator.Build(layout, map); state = JobState.Completed; progress = 1; message = "Maintenance completed; allocation map refreshed"; return;
             }
             var rules = new PathRules(request.SelectedPaths, request.Exclusions);
             bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
-            var blocked = new HashSet<ulong>(); int batches = 0;
+            var session = new PlanningSession();
+            var planner = new LayoutPlanner();
             while (request.MaxMoveBytes == 0 || moved < request.MaxMoveBytes)
             {
                 Checkpoint(); state = JobState.Planning; message = "Calculating minimum-cost eligible placements"; Publish(true);
-                var plan = new LayoutPlanner().Plan(layout, request with { MaxMoveBytes = request.MaxMoveBytes == 0 ? 0 : request.MaxMoveBytes - moved }, token);
+                var plan = planner.Plan(layout, request with { MaxMoveBytes = request.MaxMoveBytes == 0 ? 0 : request.MaxMoveBytes - moved }, token, session);
                 long batchPlannedBytes = plan.ClustersToMove * layout.Volume.BytesPerCluster;
                 filesConsidered = Math.Max(filesConsidered, plan.FilesConsidered);
                 filesBlocked = Math.Max(filesBlocked, plan.FilesBlocked);
@@ -67,13 +76,13 @@ public sealed class JobExecutor(JobStore store)
                 {
                     foreach (var move in plan.Moves) MapAggregator.Activity(map, layout.TotalClusters, move.DestinationLcn, move.Clusters, false);
                     state = JobState.Completed; progress = 1;
-                    message = $"Preview: {plan.Moves.Length:N0} moves · {Format.Bytes(batchPlannedBytes)} · {plan.FilesBlocked:N0} constrained files. No writes performed."; return;
+                    message = $"Preview of first batch: {plan.Moves.Length:N0} moves · {Format.Bytes(batchPlannedBytes)} · {plan.FilesBlocked:N0} constrained files. Execution continues through further batches. No writes performed."; return;
                 }
-                state = JobState.Running; int completed = 0;
+                state = JobState.Running; int completed = 0, failuresBeforeBatch = failedMoves;
                 foreach (var move in plan.Moves)
                 {
                     Checkpoint(); var file = layout.Files[move.FileIndex];
-                    if (blocked.Contains(file.FileId)) continue;
+                    if (session.BlockedFiles.Contains(file.FileId)) continue;
                     message = file.Path; progress = (double)completed++ / plan.Moves.Length;
                     MapAggregator.Activity(map, layout.TotalClusters, move.SourceLcn, move.Clusters, false);
                     Publish();
@@ -81,7 +90,7 @@ public sealed class JobExecutor(JobStore store)
                     store.Journal(request.Id, new(DateTimeOffset.UtcNow, "intent", move));
                     try
                     {
-                        ExecuteMove(volume, file, move, rules);
+                        volume.ExecuteMove(file, move, rules);
                         // Native success has been verified by retrieval pointers before changing the display model.
                         LayoutMutation.Apply(layout, move);
                         long bytes = move.Clusters * layout.Volume.BytesPerCluster;
@@ -94,24 +103,30 @@ public sealed class JobExecutor(JobStore store)
                     }
                     catch (Exception e) when (e is Win32Exception or IOException or InvalidOperationException)
                     {
-                        failedMoves++; blocked.Add(file.FileId);
+                        failedMoves++; session.BlockFile(file.FileId);
                         layout.Files[move.FileIndex] = file with { Flags = file.Flags | StreamFlags.Excluded };
                         store.Journal(request.Id, new(DateTimeOffset.UtcNow, "reconcile-required", move, e.Message));
                         if (warnings.Count < 50) warnings.Add($"{file.Path}: {e.Message}");
                     }
                 }
-                batches++;
-                if (ordered || failedMoves > 0 || batches >= 64) break;
+                if (failedMoves > failuresBeforeBatch)
+                {
+                    // A failed request may have changed allocation before verification
+                    // failed. Refresh before recycling source space in another batch.
+                    state = JobState.Scanning; message = $"Refreshing allocation after {failedMoves - failuresBeforeBatch:N0} failed moves; continuing with other files"; Publish(true);
+                    layout = layout with { Bitmap = volume.ReadBitmap(request, Checkpoint, token) };
+                    MapAggregator.Build(layout, map);
+                }
             }
             state = JobState.Scanning; message = "Reconciling actual allocation after execution"; Publish(true);
             ReleaseLayoutForRescan();
-            layout = new RawMftScanner().Scan(volume, request, ScanProgress, Checkpoint, token);
+            layout = volume.Scan(request, ScanProgress, Checkpoint, token);
             AddWarnings(layout.Warnings);
             MapAggregator.Build(layout, map);
-            bool remainingFragmentation = layout.Files.Any(f => f.Fragmented && f.Movable && rules.IsSelected(f.Path) && !rules.IsExcluded(f.Path)
+            bool remainingFragmentation = request.Operation is not (Operation.Pack or Operation.PrepareShrink) && layout.Files.Any(f => f.Fragmented && f.Movable && rules.IsSelected(f.Path) && !rules.IsExcluded(f.Path)
                 && f.Size >= request.MinimumFileBytes && (request.MaximumFileBytes == 0 || f.Size <= request.MaximumFileBytes)
                 && (request.Operation is not (Operation.MinimumWrite or Operation.FilesOnly) || f.Extents.Length >= request.MinimumFragments));
-            bool budgetReached = request.MaxMoveBytes > 0 && moved >= request.MaxMoveBytes;
+            bool budgetReached = request.MaxMoveBytes > 0 && request.MaxMoveBytes - moved < layout.Volume.BytesPerCluster;
             state = failedMoves > 0 || filesBlocked > 0 || !layout.Complete || budgetReached || ordered || remainingFragmentation ? JobState.Partial : JobState.Completed;
             progress = 1;
             message = noMovesPlanned
@@ -120,7 +135,9 @@ public sealed class JobExecutor(JobStore store)
                     : filesBlocked > 0
                     ? $"No relocations were possible: {filesBlocked:N0} of {filesConsidered:N0} considered files were constrained or ineligible."
                     : $"No eligible extents required relocation among {filesConsidered:N0} considered files."
-                : $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. {(state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints may leave work remaining." : "Eligible optimization complete.")}";
+                : $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. "
+                    + (failedMoves > 0 ? $"{failedMoves:N0} moves failed across {session.BlockedFiles.Count:N0} files; other eligible files were processed. " : "")
+                    + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete.");
         }
         catch (OperationCanceledException e) { state = JobState.Cancelled; message = string.IsNullOrEmpty(e.Message) ? "Cancelled at a safe boundary" : e.Message; }
         catch (TimeoutException) { state = JobState.Partial; message = "Execution time budget reached"; }
@@ -188,18 +205,5 @@ public sealed class JobExecutor(JobStore store)
             foreach (string warning in additional)
                 if (!warnings.Contains(warning, StringComparer.Ordinal)) warnings.Add(warning);
         }
-    }
-    private static void ExecuteMove(NtfsVolume volume, FileLayout file, PlannedMove move, PathRules rules)
-    {
-        using var handle = file.StreamName.Length == 0 ? volume.OpenById(file.FileId) : NativeIo.Open(file.Path + file.StreamName);
-        var identity = NtfsVolume.Identity(handle);
-        string path = identity.Path;
-        if (file.StreamName.Length > 0 && path.EndsWith(file.StreamName, StringComparison.OrdinalIgnoreCase)) path = path[..^file.StreamName.Length];
-        if (identity.Id != file.FileId || identity.Links > 1 || !path.StartsWith(volume.Info.Root, StringComparison.OrdinalIgnoreCase) ||
-            !rules.IsSelected(path) || rules.IsExcluded(path) || (identity.Attributes & (0x400u | 0x800u | 0x200u | 0x4000u)) != 0)
-            throw new IOException("Current identity, attributes, selection or exclusions prohibit this move.");
-        if (!LayoutMutation.Matches(NtfsVolume.RetrievalPointers(handle), move.Vcn, move.SourceLcn, move.Clusters)) throw new IOException("Source extent changed since planning.");
-        volume.Move(handle, move);
-        if (!LayoutMutation.Matches(NtfsVolume.RetrievalPointers(handle), move.Vcn, move.DestinationLcn, move.Clusters)) throw new IOException("Move result could not be verified; fresh analysis required.");
     }
 }
