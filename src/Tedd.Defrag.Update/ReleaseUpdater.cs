@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -63,7 +64,9 @@ public static class ReleaseUpdater
 
         string expectedHash = await DownloadChecksumAsync(release.ChecksumUri, cancellationToken);
         await DownloadFileAsync(release.DownloadUri, partialPath, cancellationToken);
-        string actualHash = Convert.ToHexString(await SHA256.HashDataAsync(File.OpenRead(partialPath), cancellationToken));
+        string actualHash;
+        await using (Stream downloaded = File.OpenRead(partialPath))
+            actualHash = Convert.ToHexString(await SHA256.HashDataAsync(downloaded, cancellationToken));
         if (!CryptographicOperations.FixedTimeEquals(Convert.FromHexString(expectedHash), Convert.FromHexString(actualHash)))
         {
             File.Delete(partialPath);
@@ -82,26 +85,26 @@ public static class ReleaseUpdater
             release.DisplayVersion,
             launcherName,
             [.. launchArguments]);
-        string requestPath = Path.Combine(updateDirectory, "request.json");
-        string requestTemp = requestPath + ".tmp";
-        await File.WriteAllTextAsync(requestTemp, JsonSerializer.Serialize(request, Json), cancellationToken);
-        File.Move(requestTemp, requestPath, true);
+        string requestPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, Json)));
+        if (requestPayload.Length > 24_000) throw new InvalidOperationException("The command line is too long to preserve across the update.");
 
         var start = new ProcessStartInfo(updaterPath) { UseShellExecute = false, WorkingDirectory = updateDirectory };
         start.ArgumentList.Add("--apply-update");
-        start.ArgumentList.Add(requestPath);
-        Process.Start(start)?.Dispose();
+        start.ArgumentList.Add(requestPayload);
+        using Process updater = Process.Start(start) ?? throw new IOException("The detached updater could not be started.");
     }
 
-    public static async Task<int> ApplyUpdateAsync(string requestPath)
+    public static async Task<int> ApplyUpdateAsync(string requestPayload)
     {
+        UpdateRequest? request = null;
+        bool requestValidated = false;
         try
         {
-            string fullRequestPath = Path.GetFullPath(requestPath);
-            Environment.CurrentDirectory = Path.GetDirectoryName(fullRequestPath)!;
-            var request = JsonSerializer.Deserialize<UpdateRequest>(await File.ReadAllTextAsync(fullRequestPath), Json)
+            if (requestPayload.Length > 30_000) throw new InvalidDataException("The update request is too large.");
+            request = JsonSerializer.Deserialize<UpdateRequest>(Convert.FromBase64String(requestPayload), Json)
                 ?? throw new InvalidDataException("The update request is invalid.");
             ValidateUpdateRequest(request);
+            requestValidated = true;
             await WaitForProcessAsync(request.ParentProcessId, TimeSpan.FromMinutes(2));
             await WaitForInstallationProcessesAsync(request.TargetDirectory, TimeSpan.FromSeconds(30));
             await VerifyArchiveAsync(request.ArchivePath, request.ExpectedSha256);
@@ -111,6 +114,11 @@ public static class ReleaseUpdater
         catch (Exception exception)
         {
             WriteLog(exception.ToString());
+            if (requestValidated && request is not null)
+            {
+                try { StartApplication(request.TargetDirectory, request.LauncherName, request.LaunchArguments); }
+                catch (Exception restartException) { WriteLog("The previous application could not be restarted: " + restartException); }
+            }
             return 1;
         }
     }
@@ -190,10 +198,7 @@ public static class ReleaseUpdater
             try
             {
                 Directory.Move(staged, target);
-                string launcher = Path.Combine(target, request.LauncherName);
-                var start = new ProcessStartInfo(launcher) { UseShellExecute = false, WorkingDirectory = target };
-                foreach (string argument in request.LaunchArguments) start.ArgumentList.Add(argument);
-                Process.Start(start)?.Dispose();
+                StartApplication(target, request.LauncherName, request.LaunchArguments);
             }
             catch
             {
@@ -209,6 +214,15 @@ public static class ReleaseUpdater
             if (Directory.Exists(staged))
                 try { Directory.Delete(staged, true); } catch { }
         }
+    }
+
+    private static void StartApplication(string directory, string launcherName, IReadOnlyList<string> arguments)
+    {
+        string target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        string launcher = Path.Combine(target, launcherName);
+        var start = new ProcessStartInfo(launcher) { UseShellExecute = false, WorkingDirectory = target };
+        foreach (string argument in arguments) start.ArgumentList.Add(argument);
+        using Process launched = Process.Start(start) ?? throw new IOException("The application could not be restarted.");
     }
 
     private static void ExtractArchive(string archivePath, string stagedDirectory)

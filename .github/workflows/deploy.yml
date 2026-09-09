@@ -27,19 +27,19 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: '**/*.csproj'
       - name: Restore workloads
         shell: pwsh
         run: dotnet workload restore Tedd.Defrag.slnx
       - name: Resolve version
         id: version
         shell: pwsh
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
         run: |
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          } elseif ('${{ inputs.version }}') {
-            $version = '${{ inputs.version }}'
+          } elseif ($env:MANUAL_VERSION) {
+            $version = $env:MANUAL_VERSION
           } else {
             $version = "0.1.$env:GITHUB_RUN_NUMBER"
           }

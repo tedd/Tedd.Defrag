@@ -12,7 +12,7 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
-        if (args is ["--apply-update", var requestPath]) return await ReleaseUpdater.ApplyUpdateAsync(requestPath);
+        if (args is ["--apply-update", var requestPayload]) return await ReleaseUpdater.ApplyUpdateAsync(requestPayload);
         bool json = args.Contains("--json");
         try
         {
@@ -105,7 +105,7 @@ internal static class Program
             if (explicitRequest) Console.WriteLine($"Tedd.Defrag {ReleaseUpdater.DisplayVersion} is current.");
             return false;
         }
-        if (Console.IsInputRedirected)
+        if (Console.IsInputRedirected || Console.IsOutputRedirected)
         {
             if (explicitRequest) Console.WriteLine($"Tedd.Defrag {release.DisplayVersion} is available: {release.ReleasePageUri}");
             return false;
@@ -224,7 +224,7 @@ internal sealed class Arguments
     public List<string> Positionals { get; } = [];
     public Arguments(string[] args)
     {
-        string[] flags = ["json", "events", "wait", "execute", "idle-only", "allow-battery", "foreground", "allow-ssd", "confirm-virtual-zero", "shared", "no-shared", "help"];
+        string[] flags = ["json", "events", "wait", "execute", "idle-only", "allow-battery", "foreground", "allow-ssd", "confirm-virtual-zero", "shared", "no-shared", "help", "version", "no-update-check"];
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i].Equals("--demo", StringComparison.OrdinalIgnoreCase) || args[i].StartsWith("--demo=", StringComparison.OrdinalIgnoreCase))

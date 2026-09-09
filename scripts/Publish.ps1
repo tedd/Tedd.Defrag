@@ -38,6 +38,7 @@ function Invoke-Publish([string]$Project, [string]$Output, [string]$BuildArtifac
         "-p:AssemblyVersion=$numericVersion",
         "-p:FileVersion=$numericVersion",
         "-p:InformationalVersion=$informationalVersion",
+        '-p:IncludeSourceRevisionInInformationalVersion=false',
         '-p:PublishSingleFile=true',
         '-p:IncludeNativeLibrariesForSelfExtract=true',
         '-p:EnableCompressionInSingleFile=true',
@@ -83,7 +84,7 @@ try {
 
     Compress-Archive -Path (Join-Path $bundle '*') -DestinationPath $archive -CompressionLevel Optimal
     $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-    "$hash  $assetName" | Set-Content -LiteralPath $checksum -Encoding asciiNoBOM
+    "$hash  $assetName" | Set-Content -LiteralPath $checksum -Encoding ascii
     Write-Output $archive
     Write-Output $checksum
 }
