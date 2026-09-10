@@ -28,5 +28,6 @@
     <ProjectReference Include="../Tedd.Defrag.Update/Tedd.Defrag.Update.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Windows/Tedd.Defrag.Windows.csproj" />
+    <ProjectReference Include="..\Tedd.Defrag.Worker\Tedd.Defrag.Worker.csproj" />
   </ItemGroup>
 </Project>
