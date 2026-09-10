@@ -6,9 +6,11 @@ using System.Reflection;
 
 namespace Tedd.Defrag.Core;
 
-public sealed record BrokerCommand(string Action, JobRequest? Job = null, Guid Id = default, ConcurrencySettings? Settings = null, string? ClientBuild = null);
+public sealed record BrokerCommand(string Action, JobRequest? Job = null, Guid Id = default, ConcurrencySettings? Settings = null, string? ClientBuild = null,
+    long StartCluster = 0, long ClusterCount = 0, int MapCells = 0, bool IncludeFiles = false,
+    string? Path = null, ulong? FileId = null, string? Stream = null);
 public sealed record BrokerReply(bool Success, string? Error = null, Guid Id = default, JobSnapshot? Snapshot = null,
-    JobSnapshot[]? Jobs = null, ConcurrencySettings? Settings = null, WorkerIdentity? Worker = null);
+    JobSnapshot[]? Jobs = null, ConcurrencySettings? Settings = null, WorkerIdentity? Worker = null, MapRegion? Region = null);
 public sealed record WorkerIdentity(string Build, int ProcessId, string ExecutablePath, bool Stopping = false);
 public static class BrokerProtocol
 {

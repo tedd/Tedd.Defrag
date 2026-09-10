@@ -6,6 +6,10 @@ using Tedd.Defrag.Persistence;
 using Tedd.Defrag.Update;
 using Tedd.Defrag.Visualization;
 using Tedd.Defrag.Windows;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.Maui.Storage;
+using Windows.System;
+using WinUIElement = Microsoft.UI.Xaml.UIElement;
 
 namespace Tedd.Defrag.Desktop;
 
@@ -13,11 +17,20 @@ public partial class MainPage : ContentPage
 {
     private readonly DefragClient _client = new();
     private readonly DiskMapDrawable _map = new();
+    private readonly MapOverviewDrawable _overview = new();
     private readonly Dictionary<string, VolumeSession> _volumeSessions = new(StringComparer.OrdinalIgnoreCase);
     private VolumeInfo[] _volumes = [];
     private VolumeInfo? _volume;
     private bool _polling, _refreshing, _submitting;
     private bool _settingTheme;
+    private bool _selectingRegion, _mapDragged;
+    private int _mapGestureStart = -1, _mapGestureCurrent = -1, _regionRequest;
+    private long _mapGestureViewportStart, _pendingPanStart;
+    private WinUIElement? _mapPlatformView;
+    private ulong? _selectedMapFileId;
+    private string _selectedMapStream = "";
+    private MapFileSelection? _selectedMapFile;
+    private ClusterHitRow? _selectedClusterHit;
     private readonly IDispatcherTimer _timer;
     private TaskCompletionSource<Operation?>? _policyChoice;
     private static readonly PolicyOption[] Policies =
@@ -43,7 +56,8 @@ public partial class MainPage : ContentPage
     private PolicyOption _selectedPolicy = Policies[0];
     public MainPage()
     {
-        InitializeComponent(); DiskMap.Drawable = _map;
+        InitializeComponent(); DiskMap.Drawable = _map; MapOverview.Drawable = _overview;
+        DiskMap.HandlerChanged += OnDiskMapHandlerChanged;
         PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
         ThemePicker.ItemsSource = new[] { "Follow Windows", "Light", "Dark" };
         _settingTheme = true;
@@ -139,7 +153,9 @@ public partial class MainPage : ContentPage
     }
     private void SelectVolume(VolumeInfo? volume)
     {
-        _volume = volume; _map.Cells = []; _map.Reset();
+        _volume = volume; _map.SetRegion(0, 0, 0, []);
+        _overview.Cells = []; _overview.TotalClusters = _overview.StartCluster = _overview.ClusterCount = 0;
+        ClearFileHighlight(); ClusterOverlay.IsVisible = false;
         _map.EmptyMessage = volume == null ? "Connect a volume and refresh to begin." :
             volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS volume to analyze its allocation.";
         DiskMap.Invalidate();
@@ -153,7 +169,7 @@ public partial class MainPage : ContentPage
         FileList.ItemsSource = null; JobTitle.Text = "Ready when you are"; JobMessage.Text = "Analyze this volume before planning changes.";
         JobProgress.Progress = 0; ProgressText.Text = "READY"; WarningsText.Text = ""; PauseButton.IsEnabled = CancelButton.IsEnabled = false;
         ObservationText.Text = "Awaiting analysis"; BudgetDetail.Text = "No relocation limit";
-        CellDetail.Text = "Hover to inspect a cell. Click to center the next zoom."; UpdateRange();
+        CellDetail.Text = "Hover to inspect a cluster range. Click for files; drag to pan."; UpdateRange();
         FooterStatus.Text = volume == null ? "●  No available volumes · refresh to try again" : $"●  {volume.Root} selected · administrator access active";
         if (volume != null && !volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
             JobMessage.Text = "Analysis and optimization require an NTFS volume.";
@@ -215,7 +231,7 @@ public partial class MainPage : ContentPage
             var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS volume first.");
             session.JobId = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
             session.AwaitingReport = session.JobId;
-            _map.Reset(); FooterStatus.Text = "●  Job submitted · closing the application stops it"; await Poll();
+            ResetMapView(); FooterStatus.Text = "●  Job submitted · closing the application stops it"; await Poll();
         }
         catch (Exception e) { await DisplayAlertAsync("Job could not start", e.Message, "Close"); FooterStatus.Text = e.Message; }
         finally { _submitting = false; UpdateVolumeActions(); }
@@ -249,7 +265,13 @@ public partial class MainPage : ContentPage
     {
         var snapshot = session.Snapshot ?? throw new InvalidOperationException("The volume session has no snapshot.");
         var layout = session.LayoutSnapshot;
-        _map.Cells = session.Cells; DiskMap.Invalidate(); UpdateRange();
+        long totalClusters = session.Cells.Sum(cell => cell.Clusters);
+        _overview.Cells = session.Cells; _overview.TotalClusters = totalClusters;
+        if (totalClusters > 0 && (_map.TotalClusters != totalClusters || _map.ClusterCount == 0 || _map.ClusterCount == _map.TotalClusters))
+            ApplyBaseMap(session, totalClusters);
+        else if (totalClusters > 0)
+            _ = LoadRegion(_map.StartCluster, _map.ClusterCount);
+        DiskMap.Invalidate(); MapOverview.Invalidate(); UpdateRange();
         if (_volume != null && layout?.ObservedAt.HasValue == true)
             MapSubtitle.Text = $"{_volume.FileSystem} · {_volume.BytesPerCluster:N0}-byte clusters · observed {layout.ObservedAt.Value.ToLocalTime():HH:mm:ss}";
         if (layout?.TotalBytes > 0)
@@ -338,17 +360,150 @@ public partial class MainPage : ContentPage
             SettingsButton.SetDynamicResource(Button.TextColorProperty, "Ink");
         }
     }
-    private void OnZoomIn(object? sender, EventArgs e) { _map.Zoom(true); DiskMap.Invalidate(); UpdateRange(); }
-    private void OnZoomOut(object? sender, EventArgs e) { _map.Zoom(false); DiskMap.Invalidate(); UpdateRange(); }
-    private void OnResetZoom(object? sender, EventArgs e) { _map.Reset(); DiskMap.Invalidate(); UpdateRange(); }
-    private void UpdateRange() => MapRange.Text = $"MAP CELLS {_map.Start:N0} – {Math.Min(_map.Cells.Length, (long)_map.Start + _map.Count):N0} / {_map.Cells.Length:N0}";
-    private void OnMapClick(object? sender, TouchEventArgs e) { if (e.Touches.Length > 0) { _map.Anchor = Math.Max(0, _map.Hit(e.Touches[0].X, e.Touches[0].Y)); OnMapHover(sender, e); } }
+    private async void OnZoomIn(object? sender, EventArgs e) => await ZoomAt(_map.StartCluster + _map.ClusterCount / 2, true);
+    private async void OnZoomOut(object? sender, EventArgs e) => await ZoomAt(_map.StartCluster + _map.ClusterCount / 2, false);
+    private void OnResetZoom(object? sender, EventArgs e) => ResetMapView();
+    private void ResetMapView()
+    {
+        if (CurrentSession is not { } session) return;
+        long total = session.Cells.Sum(cell => cell.Clusters);
+        if (total > 0) ApplyBaseMap(session, total);
+    }
+    private void ApplyBaseMap(VolumeSession session, long total)
+    {
+        _map.Reset(session.Cells, total);
+        _overview.Cells = session.Cells; _overview.TotalClusters = total;
+        _overview.StartCluster = 0; _overview.ClusterCount = total;
+        if (_selectedMapFile != null) _map.SetHighlight(_selectedMapFile.Ranges);
+        DiskMap.Invalidate(); MapOverview.Invalidate(); UpdateRange();
+        if (_selectedMapFileId.HasValue) _ = LoadRegion(0, total);
+    }
+    private void UpdateRange(long? previewStart = null)
+    {
+        long start = previewStart ?? _map.StartCluster, count = _map.ClusterCount, total = _map.TotalClusters;
+        MapRange.Text = total == 0 ? "FULL VOLUME" :
+            $"LCN {start:N0} – {Math.Min(total, start + count) - 1:N0} · {count:N0} CLUSTERS · {total / (double)count:0.#}×";
+    }
+    private async Task ZoomAt(long anchor, bool inward)
+    {
+        if (_map.TotalClusters <= 0 || _map.ClusterCount <= 0) return;
+        long minimum = Math.Min(_map.TotalClusters, Math.Max(1, CurrentSession?.Cells.Length ?? 256));
+        long length = inward ? Math.Max(minimum, (_map.ClusterCount + 1) / 2) :
+            _map.ClusterCount > _map.TotalClusters / 2 ? _map.TotalClusters : _map.ClusterCount * 2;
+        if (length == _map.ClusterCount) return;
+        double fraction = Math.Clamp((anchor - _map.StartCluster) / (double)_map.ClusterCount, 0, 1);
+        long start = Math.Clamp(anchor - (long)(fraction * length), 0, _map.TotalClusters - length);
+        await LoadRegion(start, length);
+    }
+    private async Task LoadRegion(long start, long length)
+    {
+        var session = CurrentSession;
+        if (session == null || session.JobId == Guid.Empty || _map.TotalClusters <= 0) return;
+        int request = ++_regionRequest;
+        long total = _map.TotalClusters;
+        start = Math.Clamp(start, 0, total - 1); length = Math.Clamp(length, 1, total - start);
+        bool full = start == 0 && length == total;
+        if (full) ApplyBaseMapWithoutRefresh(session, total);
+        try
+        {
+            var reply = await _client.Send(new("explore", Id: session.JobId, StartCluster: start, ClusterCount: length,
+                MapCells: full ? 0 : Math.Max(256, session.Cells.Length), FileId: _selectedMapFileId, Stream: _selectedMapStream));
+            if (request != _regionRequest || !ReferenceEquals(session, CurrentSession) || reply.Region == null) return;
+            var region = reply.Region;
+            if (!full) _map.SetRegion(region.StartCluster, region.ClusterCount, region.TotalClusters, region.Cells);
+            _overview.StartCluster = region.StartCluster; _overview.ClusterCount = region.ClusterCount;
+            ApplyFileSelection(region.Selection);
+            DiskMap.Invalidate(); MapOverview.Invalidate(); UpdateRange();
+            if (region.Selection != null && !region.Selection.Ranges.Any(range => RangesOverlap(range.Start, range.End, region.StartCluster, region.StartCluster + region.ClusterCount)))
+            {
+                var firstRange = region.Selection.Ranges.FirstOrDefault(range => range.Length > 0);
+                if (firstRange.Length > 0 && region.ClusterCount < region.TotalClusters)
+                    await LoadRegion(Math.Clamp(firstRange.Start - region.ClusterCount / 2, 0, region.TotalClusters - region.ClusterCount), region.ClusterCount);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or TimeoutException)
+        { FooterStatus.Text = exception.Message; }
+    }
+    private void ApplyBaseMapWithoutRefresh(VolumeSession session, long total)
+    {
+        _map.Reset(session.Cells, total); _overview.Cells = session.Cells; _overview.TotalClusters = total;
+        _overview.StartCluster = 0; _overview.ClusterCount = total;
+        if (_selectedMapFile != null) _map.SetHighlight(_selectedMapFile.Ranges);
+        DiskMap.Invalidate(); MapOverview.Invalidate(); UpdateRange();
+    }
+    private void OnSelectRegion(object? sender, EventArgs e)
+    {
+        _selectingRegion = !_selectingRegion; _map.ClearSelection();
+        RegionSelectButton.Text = _selectingRegion ? "Drag a region…" : "Select region";
+        RegionSelectButton.SetDynamicResource(Button.BackgroundColorProperty, _selectingRegion ? "NavSelected" : "ButtonSurface");
+        DiskMap.Invalidate();
+    }
+    private void OnMapStart(object? sender, TouchEventArgs e)
+    {
+        if (e.Touches.Length == 0) return;
+        _mapGestureStart = _mapGestureCurrent = _map.Hit(e.Touches[0].X, e.Touches[0].Y);
+        _mapGestureViewportStart = _pendingPanStart = _map.StartCluster; _mapDragged = false;
+        if (_selectingRegion && _mapGestureStart >= 0) { _map.SetSelection(_mapGestureStart, _mapGestureStart); DiskMap.Invalidate(); }
+    }
+    private void OnMapDrag(object? sender, TouchEventArgs e)
+    {
+        if (e.Touches.Length == 0 || _mapGestureStart < 0) return;
+        int current = _map.Hit(e.Touches[0].X, e.Touches[0].Y); if (current < 0) return;
+        _mapGestureCurrent = current; _mapDragged |= current != _mapGestureStart;
+        if (_selectingRegion)
+        {
+            _map.SetSelection(_mapGestureStart, current); DiskMap.Invalidate(); return;
+        }
+        long step = Math.Max(1, _map.CellRange(0).Length);
+        _pendingPanStart = Math.Clamp(_mapGestureViewportStart + (long)(_mapGestureStart - current) * step,
+            0, Math.Max(0, _map.TotalClusters - _map.ClusterCount));
+        _overview.StartCluster = _pendingPanStart; MapOverview.Invalidate(); UpdateRange(_pendingPanStart);
+    }
+    private async void OnMapEnd(object? sender, TouchEventArgs e)
+    {
+        if (_mapGestureStart < 0) return;
+        int start = _mapGestureStart, end = _mapGestureCurrent;
+        _mapGestureStart = _mapGestureCurrent = -1;
+        if (_selectingRegion)
+        {
+            _map.ClearSelection(); _selectingRegion = false; RegionSelectButton.Text = "Select region";
+            RegionSelectButton.SetDynamicResource(Button.BackgroundColorProperty, "ButtonSurface"); DiskMap.Invalidate();
+            var first = _map.CellRange(Math.Min(start, end)); var last = _map.CellRange(Math.Max(start, end));
+            if (first.Length > 0 && last.Length > 0) await LoadRegion(first.Start, last.End - first.Start);
+            return;
+        }
+        if (_mapDragged) { await LoadRegion(_pendingPanStart, _map.ClusterCount); return; }
+        ClearFileHighlight();
+        var range = _map.CellRange(start); if (range.Length > 0) await ShowClusterFiles(range);
+    }
     private void OnMapHover(object? sender, TouchEventArgs e)
     {
         if (e.Touches.Length == 0) return;
         int index = _map.Hit(e.Touches[0].X, e.Touches[0].Y); if (index < 0) return;
-        var c = _map.Cells[index]; double n = Math.Max(1, c.Clusters);
-        CellDetail.Text = $"Cell {index:N0} · {c.Clusters:N0} clusters · {c.Allocated / n:P0} allocated · {c.Fragmented / n:P0} fragmented · {c.Metadata / n:P0} metadata";
+        var range = _map.CellRange(index); var c = _map.Cells[index]; double n = Math.Max(1, c.Clusters);
+        CellDetail.Text = $"LCN {range.Start:N0}–{range.End - 1:N0} · {c.Clusters:N0} clusters · {c.Allocated / n:P0} allocated · {c.Fragmented / n:P0} fragmented · {c.Metadata / n:P0} metadata";
+    }
+    private void OnOverviewStart(object? sender, TouchEventArgs e) { if (e.Touches.Length > 0) PreviewOverview(e.Touches[0].X); }
+    private void OnOverviewDrag(object? sender, TouchEventArgs e) { if (e.Touches.Length > 0) PreviewOverview(e.Touches[0].X); }
+    private async void OnOverviewEnd(object? sender, TouchEventArgs e) => await LoadRegion(_pendingPanStart, _map.ClusterCount);
+    private void PreviewOverview(float x)
+    {
+        long center = _overview.ClusterAt(x);
+        _pendingPanStart = Math.Clamp(center - _map.ClusterCount / 2, 0, Math.Max(0, _map.TotalClusters - _map.ClusterCount));
+        _overview.StartCluster = _pendingPanStart; MapOverview.Invalidate(); UpdateRange(_pendingPanStart);
+    }
+    private void OnDiskMapHandlerChanged(object? sender, EventArgs e)
+    {
+        if (_mapPlatformView != null) _mapPlatformView.PointerWheelChanged -= OnMapPointerWheel;
+        _mapPlatformView = DiskMap.Handler?.PlatformView as WinUIElement;
+        if (_mapPlatformView != null) _mapPlatformView.PointerWheelChanged += OnMapPointerWheel;
+    }
+    private void OnMapPointerWheel(object sender, PointerRoutedEventArgs e)
+    {
+        if ((e.KeyModifiers & VirtualKeyModifiers.Control) == 0 || _mapPlatformView == null) return;
+        var point = e.GetCurrentPoint(_mapPlatformView); long cluster = _map.ClusterAt((float)point.Position.X, (float)point.Position.Y);
+        if (cluster >= 0) _ = ZoomAt(cluster, point.Properties.MouseWheelDelta > 0);
+        e.Handled = true;
     }
     private void OnResourceChanged(object? sender, ValueChangedEventArgs e)
     { if (CpuValue == null || CpuSlider == null) return; CpuValue.Text = $"{(int)CpuSlider.Value}%"; }
@@ -370,6 +525,84 @@ public partial class MainPage : ContentPage
         ScopeSummary.Text = $"{selection} · {(exclusions == 0 ? "exclusions none" : $"{exclusions:N0} exclusions")} · {fragments}-fragment defrag threshold · {size}";
     }
     private void OnFileSelected(object? sender, SelectionChangedEventArgs e) { if (e.CurrentSelection.FirstOrDefault() is FileRow row) { SelectedPath.Text = row.Path; CellDetail.Text = row.Path; } }
+    private async Task ShowClusterFiles(ClusterRange range)
+    {
+        var session = CurrentSession; if (session == null || session.JobId == Guid.Empty) return;
+        try
+        {
+            var reply = await _client.Send(new("explore", Id: session.JobId, StartCluster: range.Start,
+                ClusterCount: range.Length, IncludeFiles: true));
+            if (reply.Region == null || !ReferenceEquals(session, CurrentSession)) return;
+            ClusterTitle.Text = range.Length == 1 ? $"Cluster {range.Start:N0}" : $"Clusters {range.Start:N0}–{range.End - 1:N0}";
+            ClusterSubtitle.Text = reply.Region.FileCount > reply.Region.Files.Length
+                ? $"{reply.Region.FileCount:N0} streams overlap this range; showing the first {reply.Region.Files.Length:N0}."
+                : $"{reply.Region.FileCount:N0} streams overlap this range.";
+            ClusterFilesList.ItemsSource = reply.Region.Files.OrderByDescending(file => file.ClustersInRegion)
+                .Select(file => new ClusterHitRow(file)).ToArray();
+            ClusterFilesList.SelectedItem = null; _selectedClusterHit = null; HighlightClusterFileButton.IsEnabled = false;
+            ClusterOverlay.IsVisible = true;
+        }
+        catch (Exception exception) { await DisplayAlertAsync("Cluster contents unavailable", exception.Message, "Close"); }
+    }
+    private void OnClusterFileSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        _selectedClusterHit = e.CurrentSelection.FirstOrDefault() as ClusterHitRow;
+        HighlightClusterFileButton.IsEnabled = _selectedClusterHit != null;
+    }
+    private async void OnHighlightClusterFile(object? sender, EventArgs e)
+    {
+        if (_selectedClusterHit == null) return;
+        _selectedMapFileId = _selectedClusterHit.File.FileId; _selectedMapStream = _selectedClusterHit.File.Stream;
+        ClusterOverlay.IsVisible = false; await LoadRegion(_map.StartCluster, _map.ClusterCount);
+    }
+    private void OnCloseClusterFiles(object? sender, EventArgs e) => ClusterOverlay.IsVisible = false;
+    private async void OnLocateFile(object? sender, EventArgs e)
+    {
+        var session = CurrentSession; if (session == null || session.JobId == Guid.Empty) return;
+        FileResult? result = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = "Locate a file in the allocation map" });
+        if (result == null) return;
+        _regionRequest++;
+        try
+        {
+            var reply = await _client.Send(new("explore", Id: session.JobId, StartCluster: _map.StartCluster,
+                ClusterCount: _map.ClusterCount, Path: result.FullPath));
+            if (!ReferenceEquals(session, CurrentSession)) return;
+            var selection = reply.Region?.Selection;
+            if (selection == null)
+            {
+                await DisplayAlertAsync("File not found in map", "The selected file is not present in this volume's analyzed layout. Analyze again if it was created after the current observation.", "Close");
+                return;
+            }
+            _selectedMapFileId = selection.FileId; _selectedMapStream = selection.Stream; ApplyFileSelection(selection);
+            if (!selection.Ranges.Any(range => RangesOverlap(range.Start, range.End, _map.StartCluster, _map.StartCluster + _map.ClusterCount)))
+            {
+                var first = selection.Ranges.FirstOrDefault(range => range.Length > 0);
+                if (first.Length > 0) await LoadRegion(Math.Clamp(first.Start - _map.ClusterCount / 2, 0,
+                    Math.Max(0, _map.TotalClusters - _map.ClusterCount)), _map.ClusterCount);
+            }
+            DiskMap.Invalidate();
+        }
+        catch (Exception exception) { await DisplayAlertAsync("File could not be located", exception.Message, "Close"); }
+    }
+    private void ApplyFileSelection(MapFileSelection? selection)
+    {
+        _selectedMapFile = selection;
+        if (selection == null)
+        {
+            _map.SetHighlight([]); HighlightedFile.IsVisible = _selectedMapFileId.HasValue;
+            HighlightedFile.Text = "Tracked file is not present in the current layout."; return;
+        }
+        _map.SetHighlight(selection.Ranges); HighlightedFile.IsVisible = true;
+        string stream = selection.Stream.Length == 0 ? "" : selection.Stream;
+        HighlightedFile.Text = $"HIGHLIGHTED · {selection.Path}{stream} · {selection.Clusters:N0} clusters · {Format.Bytes(selection.Bytes)}";
+    }
+    private void ClearFileHighlight()
+    {
+        _regionRequest++;
+        _selectedMapFileId = null; _selectedMapStream = ""; _selectedMapFile = null;
+        _map.SetHighlight([]); HighlightedFile.IsVisible = false; DiskMap.Invalidate();
+    }
+    private static bool RangesOverlap(long a, long b, long c, long d) => a < d && c < b;
     private async void OnExport(object? sender, EventArgs e)
     {
         if (CurrentSession?.Snapshot is not { } snapshot) return;
@@ -466,5 +699,13 @@ public partial class MainPage : ContentPage
         public FileRow[]? Files { get; set; }
     }
     private sealed record FileRow(string Path, int Extents, string BytesLabel, string Status);
+    private sealed record ClusterHitRow(ClusterFile File)
+    {
+        public string DisplayPath => File.Path + File.Stream;
+        public string BytesLabel => Format.Bytes(File.Bytes);
+        public string ClusterLabel => File.ClustersInRegion == File.Clusters
+            ? $"{File.Clusters:N0} clusters" : $"{File.ClustersInRegion:N0} / {File.Clusters:N0}";
+        public string Status => File.Status;
+    }
     private sealed record PolicyOption(string Icon, string Name, string Description, Operation Operation);
 }

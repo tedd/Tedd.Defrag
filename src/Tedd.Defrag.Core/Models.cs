@@ -113,6 +113,12 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
 }
 public readonly record struct MapCell(long Clusters, long Allocated, long Fragmented, long Metadata, long Excluded, long Moving, long Verified);
 public sealed record FileSummary(string Path, string Stream, int Extents, long Bytes, string Status);
+public sealed record ClusterFile(ulong FileId, string Path, string Stream, long Bytes, long Clusters,
+    long ClustersInRegion, int Extents, string Status);
+public sealed record MapFileSelection(ulong FileId, string Path, string Stream, long Bytes, long Clusters,
+    int Extents, string Status, ClusterRange[] Ranges);
+public sealed record MapRegion(long StartCluster, long ClusterCount, long TotalClusters, MapCell[] Cells,
+    ClusterFile[] Files, int FileCount, MapFileSelection? Selection = null);
 public sealed record MoveJournalEntry(DateTimeOffset At, string Phase, PlannedMove Move, string? Detail = null);
 public static class Format
 {

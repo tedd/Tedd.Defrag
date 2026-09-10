@@ -32,13 +32,15 @@ public sealed class DefragClient
             return await _connect(submitsWork ? command with { ClientBuild = BrokerProtocol.BuildVersion } : command, token);
         }
         try { return await _connect(command, token); }
-        catch (TimeoutException) when (!startBroker && command.Action is "list" or "get" || !startBroker && command.Action == "settings" && command.Settings == null)
+        catch (TimeoutException) when (!startBroker && command.Action is "list" or "get" or "explore" || !startBroker && command.Action == "settings" && command.Settings == null)
         {
             var store = new JobStore();
             return command.Action switch
             {
                 "list" => new(true, Jobs: store.List().Select(s => s with { Map = null, Files = null }).ToArray()),
                 "get" => new(true, Snapshot: store.ReadSnapshot(command.Id)),
+                "explore" => new(true, Region: new LayoutExplorerStore(store).Explore(command.Id, command.StartCluster,
+                    command.ClusterCount, command.MapCells, command.IncludeFiles, command.Path, command.FileId, command.Stream)),
                 _ => new(true, Settings: store.Settings)
             };
         }

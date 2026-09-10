@@ -32,6 +32,8 @@ public sealed class JobExecutor
         int plannedMoves = 0, attemptedMoves = 0, verifiedMoves = 0, failedMoves = 0;
         int filesConsidered = 0, filesBlocked = 0, initialFragmentedFiles = 0;
         bool noMovesPlanned = false;
+        bool layoutIndexDirty = false;
+        var explorer = new LayoutExplorerStore(store);
         try
         {
             Checkpoint();
@@ -41,9 +43,10 @@ public sealed class JobExecutor
                 && volume!.Info.SeekPenalty != true && !request.AllowSsdRelocation)
                 throw new InvalidOperationException("Custom relocation on SSD or unknown media requires explicit opt-in.");
             layout = volume.Scan(request, ScanProgress, Checkpoint, token);
+            layoutIndexDirty = true;
             warnings.AddRange(layout.Warnings);
             initialFragmentedFiles = layout.Files.Count(f => f.Fragmented);
-            MapAggregator.Build(layout, map); Publish(true);
+            MapAggregator.Build(layout, map); SaveLayoutIndex(); Publish(true);
             if (request.Operation == Operation.Analyze) { state = layout.Complete ? JobState.Completed : JobState.Partial; message = "Analysis complete"; progress = 1; return; }
             if (request.Operation is Operation.Automatic or Operation.ReTrim or Operation.SlabConsolidate or Operation.ZeroFreeSpace)
             {
@@ -56,6 +59,7 @@ public sealed class JobExecutor
                 else WindowsMaintenance.Run(request, volume!.Info, line => { message = line; Publish(); }, ExternalCheckpoint, token);
                 ReleaseLayoutForRescan();
                 layout = volume.Scan(request, ScanProgress, Checkpoint, token);
+                layoutIndexDirty = true;
                 AddWarnings(layout.Warnings);
                 MapAggregator.Build(layout, map); state = JobState.Completed; progress = 1; message = "Maintenance completed; allocation map refreshed"; return;
             }
@@ -93,6 +97,7 @@ public sealed class JobExecutor
                         volume.ExecuteMove(file, move, rules);
                         // Native success has been verified by retrieval pointers before changing the display model.
                         LayoutMutation.Apply(layout, move);
+                        layoutIndexDirty = true;
                         long bytes = move.Clusters * layout.Volume.BytesPerCluster;
                         moved += bytes;
                         verifiedMoves++;
@@ -115,12 +120,13 @@ public sealed class JobExecutor
                     // failed. Refresh before recycling source space in another batch.
                     state = JobState.Scanning; message = $"Refreshing allocation after {failedMoves - failuresBeforeBatch:N0} failed moves; continuing with other files"; Publish(true);
                     layout = layout with { Bitmap = volume.ReadBitmap(request, Checkpoint, token) };
-                    MapAggregator.Build(layout, map);
+                    layoutIndexDirty = true; MapAggregator.Build(layout, map); SaveLayoutIndex();
                 }
             }
             state = JobState.Scanning; message = "Reconciling actual allocation after execution"; Publish(true);
             ReleaseLayoutForRescan();
             layout = volume.Scan(request, ScanProgress, Checkpoint, token);
+            layoutIndexDirty = true;
             AddWarnings(layout.Warnings);
             MapAggregator.Build(layout, map);
             bool remainingFragmentation = request.Operation is not (Operation.Pack or Operation.PrepareShrink) && layout.Files.Any(f => f.Fragmented && f.Movable && rules.IsSelected(f.Path) && !rules.IsExcluded(f.Path)
@@ -146,7 +152,7 @@ public sealed class JobExecutor
             state = JobState.Failed; message = e.Message;
             try { File.WriteAllText(Path.Combine(store.JobDirectory(request.Id), "error.txt"), e.ToString()); } catch (IOException) { }
         }
-        finally { Publish(true); }
+        finally { SaveLayoutIndex(); Publish(true); }
 
         void ScanProgress(double p, long count, string text) { progress = p; message = $"{text} · {count:N0} records"; Publish(); }
         void Publish(bool force = false)
@@ -204,6 +210,16 @@ public sealed class JobExecutor
         {
             foreach (string warning in additional)
                 if (!warnings.Contains(warning, StringComparer.Ordinal)) warnings.Add(warning);
+        }
+        void SaveLayoutIndex()
+        {
+            if (!layoutIndexDirty || layout == null) return;
+            try { explorer.Save(request.Id, layout); layoutIndexDirty = false; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                string warning = $"Detailed map index unavailable: {e.Message}";
+                if (!warnings.Contains(warning, StringComparer.Ordinal)) warnings.Add(warning);
+            }
         }
     }
 }

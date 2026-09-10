@@ -103,7 +103,7 @@ internal sealed class Broker
     }
     private BrokerReply Handle(BrokerCommand command)
     {
-        if (_stopping && command.Action is not ("ping" or "list" or "get" or "stop" or "shutdown"))
+        if (_stopping && command.Action is not ("ping" or "list" or "get" or "explore" or "stop" or "shutdown"))
             throw new InvalidOperationException("The worker is stopping. Retry after it has restarted.");
         if (command.Action == "submit" && command.ClientBuild != null && command.ClientBuild != BrokerProtocol.BuildVersion)
             throw new InvalidOperationException($"Worker build {BrokerProtocol.BuildVersion} differs from client build {command.ClientBuild}. Reconnect to the matching worker before submitting work.");
@@ -117,6 +117,10 @@ internal sealed class Broker
                 Submit(job); return new(true, Id: job.Id);
             case "list": return new(true, Jobs: _store.List().Take(200).Select(j => j with { Map = null, Files = null }).ToArray());
             case "get": return new(true, Snapshot: _store.ReadSnapshot(command.Id));
+            case "explore":
+                var region = new LayoutExplorerStore(_store).Explore(command.Id, command.StartCluster, command.ClusterCount,
+                    command.MapCells, command.IncludeFiles, command.Path, command.FileId, command.Stream);
+                return new(true, Region: region);
             case "pause": case "resume": case "cancel": _store.Control(command.Id, command.Action); return new(true);
             case "settings":
                 if (command.Settings != null)
