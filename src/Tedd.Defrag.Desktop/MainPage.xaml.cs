@@ -34,6 +34,7 @@ public partial class MainPage : ContentPage
     private readonly IDispatcherTimer _timer;
     private TaskCompletionSource<Operation?>? _policyChoice;
     private Operation? _recommendedOperation;
+    private Operation[] _recommendedOperations = [];
     private static readonly PolicyOption[] Policies =
     [
         new("↯", "Minimum-write defrag", "Prioritizes heavily fragmented files and preserves their first extent when possible. Honors file scope and exclusions.", Operation.MinimumWrite),
@@ -191,7 +192,8 @@ public partial class MainPage : ContentPage
         var session = CurrentSession;
         bool jobActive = HasActiveJob(session);
         AnalyzeButton.IsEnabled = PreviewButton.IsEnabled = OptimizeButton.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
-        RecommendationButton.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true &&
+        RecommendationSteps.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
+        RecommendationButton.IsEnabled = RecommendationSteps.IsEnabled &&
             (CurrentSession?.LayoutSnapshot == null || _recommendedOperation.HasValue);
         foreach (var button in VolumesPanel.Children.OfType<Button>())
         {
@@ -389,6 +391,7 @@ public partial class MainPage : ContentPage
         RecommendationButton.Text = "Analyze now";
         if (volume == null)
         {
+            SetRecommendedOperations([]);
             RecommendationTitle.Text = "Select a volume";
             RecommendationSummary.Text = "Select an NTFS volume before requesting an analysis.";
             RecommendationFragmentation.Text = "Not measured";
@@ -396,6 +399,7 @@ public partial class MainPage : ContentPage
         }
         if (snapshot?.ObservedAt.HasValue != true || snapshot.TotalBytes <= 0)
         {
+            SetRecommendedOperations([]);
             RecommendationTitle.Text = "Analyze this volume";
             RecommendationSummary.Text = $"A scan is required before maintenance can be recommended for this {MediaName(volume).ToLowerInvariant()}.";
             RecommendationFragmentation.Text = "Not measured";
@@ -407,89 +411,58 @@ public partial class MainPage : ContentPage
         var thresholdCount = ThresholdCount(snapshot, threshold);
         RecommendationThreshold.Text = $"{threshold:N0}+ fragments · {(thresholdCount.LowerBound ? "at least " : "")}{thresholdCount.Total:N0} streams ({thresholdCount.Eligible:N0} eligible)";
         RecommendationPerformance.Text = ObservedRate(snapshot);
-        int indexesAtThreshold = snapshot.FragmentationThreshold == threshold && snapshot.DirectoryIndexesAtOrAboveThreshold > 0
-            ? snapshot.DirectoryIndexesAtOrAboveThreshold
-            : (snapshot.Files ?? []).Count(file => file.Extents >= threshold && file.Stream.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal));
-        string mft = snapshot.MftExtents == 0 ? "MFT not reported" : $"MFT {snapshot.MftExtents:N0} extent{(snapshot.MftExtents == 1 ? "" : "s")}";
-        RecommendationMetadata.Text = $"{mft} · indexes {indexesAtThreshold:N0} at threshold / {snapshot.FragmentedDirectoryIndexes:N0} fragmented";
+        int mftExtents = snapshot.MftExtents > 0 ? snapshot.MftExtents :
+            (snapshot.Files ?? []).FirstOrDefault(file => file.Path.EndsWith("\\$MFT", StringComparison.OrdinalIgnoreCase) && file.Stream.Length == 0)?.Extents ?? 0;
+        int fragmentedIndexes = Math.Max(snapshot.FragmentedDirectoryIndexes,
+            (snapshot.Files ?? []).Count(file => file.Extents > 1 && file.Stream.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal)));
+        string mft = mftExtents == 0 ? "MFT not reported" : $"MFT {mftExtents:N0} extent{(mftExtents == 1 ? "" : "s")}";
+        RecommendationMetadata.Text = $"{mft} · {fragmentedIndexes:N0} fragmented directory indexes";
         RecommendationCulprits.Text = Culprits(snapshot.Files);
 
-        bool mftNeedsWork = snapshot.MftExtents >= threshold;
-        bool indexesNeedWork = indexesAtThreshold > 0;
-        if (volume.SeekPenalty == false)
-        {
-            if (volume.TrimEnabled == true)
-            {
-                _recommendedOperation = Operation.ReTrim;
-                RecommendationTitle.Text = "Run ReTRIM; skip routine relocation";
-                RecommendationSummary.Text = "An SSD has no mechanical seek penalty. ReTRIM refreshes deallocation hints without rewriting live files; file, MFT, and folder relocation should not be added solely because extent counts are high.";
-                RecommendationSequence.Text = "ReTRIM";
-                RecommendationButton.Text = "Select ReTRIM";
-            }
-            else
-            {
-                RecommendationTitle.Text = "No SSD relocation recommended";
-                RecommendationSummary.Text = volume.TrimEnabled == false
-                    ? "TRIM is reported unavailable. Check the controller and storage configuration; routine file or metadata relocation adds writes without removing seek latency."
-                    : "TRIM support is unknown. Use Windows automatic maintenance rather than assuming file relocation will improve SSD performance.";
-                if (volume.TrimEnabled == null)
-                {
-                    _recommendedOperation = Operation.Automatic;
-                    RecommendationSequence.Text = "Windows automatic";
-                    RecommendationButton.Text = "Select Windows automatic";
-                }
-                else
-                {
-                    RecommendationSequence.Text = "Check TRIM configuration";
-                    RecommendationButton.Text = "No operation recommended";
-                }
-            }
-            return;
-        }
+        var steps = MaintenanceRecommendation.SelectSteps(volume.SeekPenalty, volume.TrimEnabled,
+            mftExtents, fragmentedIndexes, thresholdCount.Eligible);
+        SetRecommendedOperations(steps);
         if (volume.SeekPenalty == null)
         {
-            _recommendedOperation = Operation.Automatic;
             RecommendationTitle.Text = "Use Windows automatic maintenance";
-            RecommendationSummary.Text = "The device’s seek behavior is unknown. Windows can select media-appropriate maintenance without assuming that custom relocation is beneficial.";
-            RecommendationSequence.Text = "Windows automatic";
-            RecommendationButton.Text = "Select Windows automatic";
-            return;
+            RecommendationSummary.Text = "The storage device type is unknown. Windows selects maintenance for the detected media.";
         }
-
-        var sequence = new List<string>();
-        if (thresholdCount.Eligible > 0)
+        else if (steps.Any(operation => operation is Operation.OptimizeMft or Operation.DirectoryIndexes or Operation.MinimumWrite))
         {
-            _recommendedOperation = Operation.MinimumWrite;
-            RecommendationTitle.Text = "Defragment the worst HDD files";
-            RecommendationSummary.Text = $"This HDD has {snapshot.FragmentedFiles:N0} fragmented streams; {thresholdCount.Eligible:N0} eligible streams meet the {threshold:N0}-fragment threshold. Minimum-write targets those files while avoiding a whole-volume rewrite. Directory locality is workload-specific, not a general fragmentation remedy.";
-            sequence.Add("Minimum-write");
+            RecommendationTitle.Text = volume.SeekPenalty == false ? "Targeted SSD maintenance" : "Targeted HDD maintenance";
+            var reasons = new List<string>();
+            if (steps.Contains(Operation.OptimizeMft)) reasons.Add($"The MFT occupies {mftExtents:N0} extents.");
+            if (steps.Contains(Operation.DirectoryIndexes)) reasons.Add($"{fragmentedIndexes:N0} directory indexes are fragmented.");
+            if (steps.Contains(Operation.MinimumWrite)) reasons.Add($"{(thresholdCount.LowerBound ? "At least " : "")}{thresholdCount.Eligible:N0} movable file streams meet the {threshold:N0}-fragment threshold.");
+            reasons.Add("Preview each step to review eligible moves and estimated writes.");
+            if (steps.Contains(Operation.ReTrim)) reasons.Add("Run ReTRIM after relocation to include newly freed space.");
+            RecommendationSummary.Text = string.Join(" ", reasons);
         }
-        else if (mftNeedsWork)
+        else if (steps.Contains(Operation.ReTrim))
         {
-            _recommendedOperation = Operation.OptimizeMft;
-            RecommendationTitle.Text = "Optimize the fragmented MFT";
-            RecommendationSummary.Text = $"No ordinary eligible stream meets the {threshold:N0}-fragment threshold, but the MFT has {snapshot.MftExtents:N0} extents. Optimize only the movable MFT data.";
+            RecommendationTitle.Text = "ReTRIM available";
+            RecommendationSummary.Text = "ReTRIM sends free-space information to the storage device. No metadata fragmentation or eligible files at the selected threshold were reported.";
         }
-        else if (indexesNeedWork)
+        else if (steps.Contains(Operation.Automatic))
         {
-            _recommendedOperation = Operation.DirectoryIndexes;
-            RecommendationTitle.Text = "Optimize fragmented directory indexes";
-            RecommendationSummary.Text = $"No ordinary eligible stream meets the {threshold:N0}-fragment threshold. {indexesAtThreshold:N0} directory index streams meet it and are the remaining targeted maintenance candidate.";
-        }
-        else if (snapshot.FragmentedFiles == 0)
-        {
-            RecommendationTitle.Text = "No defragmentation needed";
-            RecommendationSummary.Text = "The scan found no fragmented streams. No relocation is recommended.";
+            RecommendationTitle.Text = "Use Windows automatic maintenance";
+            RecommendationSummary.Text = "TRIM support was not reported. Windows selects the available maintenance for this device.";
         }
         else
         {
-            RecommendationTitle.Text = "No files cross the current threshold";
-            RecommendationSummary.Text = $"Fragmentation is {fragmentedRatio:P1}, but no eligible stream has at least {threshold:N0} fragments. Lower the threshold only if an HDD workload is measurably affected.";
+            RecommendationTitle.Text = "No targeted maintenance identified";
+            RecommendationSummary.Text = $"The scan reports no metadata fragmentation or eligible files with at least {threshold:N0} fragments.";
         }
-        if (mftNeedsWork) sequence.Add("Optimize movable MFT");
-        if (indexesNeedWork) sequence.Add("Directory indexes");
-        RecommendationSequence.Text = sequence.Count == 0 ? "No relocation" : string.Join(" → ", sequence.Distinct());
-        RecommendationButton.Text = _recommendedOperation.HasValue ? $"Select {Policy(_recommendedOperation.Value).Name}" : "No operation recommended";
+        RecommendationSequence.Text = steps.Length == 0 ? "None" : string.Join(" → ", steps.Select(operation => Policy(operation).Name));
+        RecommendationButton.Text = steps.Length > 1 ? "Select first step" : _recommendedOperation.HasValue ? $"Select {Policy(_recommendedOperation.Value).Name}" : "No operation recommended";
+    }
+    private void SetRecommendedOperations(Operation[] operations)
+    {
+        _recommendedOperation = operations.Length == 0 ? null : operations[0];
+        RecommendationSteps.IsVisible = operations.Length > 1;
+        if (_recommendedOperations.SequenceEqual(operations)) return;
+        _recommendedOperations = operations;
+        BindableLayout.SetItemsSource(RecommendationSteps, operations.Select(Policy).ToArray());
     }
     private static (int Total, int Eligible, bool LowerBound) ThresholdCount(JobSnapshot snapshot, int threshold)
     {
@@ -541,6 +514,12 @@ public partial class MainPage : ContentPage
         if (_recommendedOperation is not { } operation) return;
         _selectedPolicy = Policy(operation); UpdateSelectedPolicy();
         FooterStatus.Text = $"●  {Policy(operation).Name} selected from the disk recommendation";
+    }
+    private void OnSelectRecommendedMethod(object? sender, EventArgs e)
+    {
+        if (sender is not Button { CommandParameter: Operation operation } || !_recommendedOperations.Contains(operation)) return;
+        _selectedPolicy = Policy(operation); UpdateSelectedPolicy();
+        FooterStatus.Text = $"●  {_selectedPolicy.Name} selected · preview or run this step";
     }
     private async void OnChooseMethod(object? sender, EventArgs e) => await ChoosePolicy();
     private Task<Operation?> ChoosePolicy()
