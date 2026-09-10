@@ -50,7 +50,7 @@ public sealed record ResourcePolicy
     public int MoveQueueDepth { get; init; } = 1;
     public static ResourcePolicy Quiet => new() { MemoryMiB = 512, CpuPercent = 10, IoMiBPerSecond = 8, IdleOnly = true, ScanWorkers = 1, PlanningWorkers = 1 };
     public static ResourcePolicy Balanced => new();
-    public static ResourcePolicy Performance => new() { CpuPercent = 80, Background = false, AcOnly = false, ScanWorkers = 4, MoveQueueDepth = 4 };
+    public static ResourcePolicy Performance => new() { CpuPercent = 100, Background = false, AcOnly = false, MoveQueueDepth = 16 };
     public void Validate()
     {
         if ((MemoryMiB != 0 && MemoryMiB < 256) || CpuPercent is < 1 or > 100 || IoMiBPerSecond < 0 ||
@@ -67,7 +67,7 @@ public sealed record JobRequest
     public bool Preview { get; init; } = true;
     public string[] SelectedPaths { get; init; } = [];
     public string[] Exclusions { get; init; } = [];
-    public ResourcePolicy Resources { get; init; } = new();
+    public ResourcePolicy Resources { get; init; } = ResourcePolicy.Performance;
     public long MaxMoveBytes { get; init; }
     public int MaxMinutes { get; init; }
     public int MinimumFragments { get; init; } = 20;
@@ -111,7 +111,9 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     int CpuPercent = 0, int MemoryMiB = 0, int IoMiBPerSecond = 0,
     int PlannedMoves = 0, int AttemptedMoves = 0, int VerifiedMoves = 0, int FailedMoves = 0,
     int FilesConsidered = 0, int FilesBlocked = 0, int InitialFragmentedFiles = 0, long ElapsedMilliseconds = 0,
-    string? WorkerBuild = null, JobDiagnostics? Diagnostics = null)
+    string? WorkerBuild = null, JobDiagnostics? Diagnostics = null, int FragmentationThreshold = 20,
+    int StreamsAtOrAboveThreshold = 0, int EligibleStreamsAtOrAboveThreshold = 0,
+    int MftExtents = 0, int FragmentedDirectoryIndexes = 0, int DirectoryIndexesAtOrAboveThreshold = 0)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
     public JobSnapshot Transition(JobState state, string message)

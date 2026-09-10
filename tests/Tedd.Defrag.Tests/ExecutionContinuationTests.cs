@@ -112,6 +112,29 @@ public sealed class ExecutionContinuationTests
     }
 
     [Fact]
+    public void AnalysisPublishesRecommendationInputsForFilesAndNtfsMetadata()
+    {
+        var mft = File(0, [new(0, 20, 1), new(1, 24, 1), new(2, 28, 1)]) with { Path = @"V:\$MFT", Flags = StreamFlags.Metadata };
+        var directoryIndex = File(12, [new(0, 40, 1), new(1, 44, 1)]) with
+        {
+            Path = @"V:\Projects", StreamName = ":$I30:$INDEX_ALLOCATION", Flags = StreamFlags.Directory
+        };
+        var ordinary = File(32, [new(0, 60, 1), new(1, 64, 1), new(2, 68, 1), new(3, 72, 1)]);
+        var volume = Volume(100, [mft, directoryIndex, ordinary]);
+        var request = Request(Operation.Analyze) with { Preview = true, MinimumFragments = 3 };
+
+        var result = Run(volume, request);
+
+        Assert.Equal(JobState.Completed, result.State);
+        Assert.Equal(3, result.FragmentationThreshold);
+        Assert.Equal(2, result.StreamsAtOrAboveThreshold);
+        Assert.Equal(1, result.EligibleStreamsAtOrAboveThreshold);
+        Assert.Equal(3, result.MftExtents);
+        Assert.Equal(1, result.FragmentedDirectoryIndexes);
+        Assert.Equal(0, result.DirectoryIndexesAtOrAboveThreshold);
+    }
+
+    [Fact]
     public void ConcurrentExecutionReconcilesFailureAndHonorsTheSharedByteBudget()
     {
         var volume = ManyFiles(60);

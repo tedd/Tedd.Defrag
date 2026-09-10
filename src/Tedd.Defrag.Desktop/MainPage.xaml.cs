@@ -33,6 +33,7 @@ public partial class MainPage : ContentPage
     private ClusterHitRow? _selectedClusterHit;
     private readonly IDispatcherTimer _timer;
     private TaskCompletionSource<Operation?>? _policyChoice;
+    private Operation? _recommendedOperation;
     private static readonly PolicyOption[] Policies =
     [
         new("↯", "Minimum-write defrag", "Prioritizes heavily fragmented files and preserves their first extent when possible. Honors file scope and exclusions.", Operation.MinimumWrite),
@@ -68,7 +69,7 @@ public partial class MainPage : ContentPage
             _ => "Follow Windows"
         };
         _settingTheme = false;
-        ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · unlimited I/O", "Performance · dedicated" }; ResourcePreset.SelectedIndex = 1;
+        ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · responsive", "Performance · full speed" }; ResourcePreset.SelectedIndex = 2;
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
         Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await CheckForUpdate(); };
         Unloaded += (_, _) => _timer.Stop();
@@ -173,6 +174,7 @@ public partial class MainPage : ContentPage
         JobProgress.Progress = 0; ProgressText.Text = "READY"; WarningsText.Text = ""; PauseButton.IsEnabled = CancelButton.IsEnabled = false;
         ObservationText.Text = "Awaiting analysis"; BudgetDetail.Text = "No relocation limit";
         CellDetail.Text = "Hover to inspect a cluster range. Click for files; drag to pan."; UpdateRange();
+        RenderRecommendation(null);
         FooterStatus.Text = volume == null ? "●  No available volumes · refresh to try again" : $"●  {volume.Root} selected · administrator access active";
         if (volume != null && !volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
             JobMessage.Text = "Analysis and optimization require an NTFS volume.";
@@ -189,6 +191,8 @@ public partial class MainPage : ContentPage
         var session = CurrentSession;
         bool jobActive = HasActiveJob(session);
         AnalyzeButton.IsEnabled = PreviewButton.IsEnabled = OptimizeButton.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
+        RecommendationButton.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true &&
+            (CurrentSession?.LayoutSnapshot == null || _recommendedOperation.HasValue);
         foreach (var button in VolumesPanel.Children.OfType<Button>())
         {
             button.IsEnabled = !_submitting;
@@ -204,7 +208,7 @@ public partial class MainPage : ContentPage
             Exclusions = (ExclusionEntry.Text ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
             Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = ParseInt(MemoryEntry.Text, "Memory cap"), IoMiBPerSecond = ParseInt(IoEntry.Text, "Relocation bandwidth"),
                 ScanWorkers = ParseInt(ScanWorkersEntry.Text, "MFT workers"), PlanningWorkers = ParseInt(PlanningWorkersEntry.Text, "Planner workers"),
-                MoveQueueDepth = ParseInt(MoveQueueEntry.Text, "Move queue depth", 1),
+                MoveQueueDepth = ParseInt(MoveQueueEntry.Text, "Move queue depth", ResourcePolicy.Performance.MoveQueueDepth),
                 AffinityMask = string.IsNullOrWhiteSpace(AffinityEntry.Text) ? 0 : Convert.ToUInt64(AffinityEntry.Text.Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
                 IdleOnly = IdleSwitch.IsToggled, AcOnly = AcSwitch.IsToggled, Background = BackgroundSwitch.IsToggled },
             MaxMoveBytes = ParseMiB(BudgetEntry.Text, "Write budget"), MaxMinutes = ParseInt(MinutesEntry.Text, "Time limit"),
@@ -237,8 +241,12 @@ public partial class MainPage : ContentPage
             session.JobId = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
             session.AwaitingReport = session.JobId;
             DiagnosticsTitle.Text = "Waiting for worker"; DiagnosticsCount.Text = "Queued";
-            DiagnosticsProcess.Text = DiagnosticsAcceleration.Text = ""; DiagnosticsProgress.Progress = 0;
-            ScanDiagnosticsText.Text = PlanningDiagnosticsText.Text = ExecutionDiagnosticsText.Text = "Pending";
+            DiagnosticsElapsed.Text = "00:00:00"; DiagnosticsProgress.Progress = 0;
+            DiagnosticsProcessors.Text = DiagnosticsThreads.Text = DiagnosticsCpu.Text = DiagnosticsMemory.Text = "—";
+            DiagnosticsPlanned.Text = DiagnosticsVerified.Text = DiagnosticsFailed.Text = "0"; DiagnosticsRelocated.Text = "0 B";
+            RenderPhase(null, ScanStatus, ScanProgress, ScanRate, ScanWorkers, ScanRequests);
+            RenderPhase(null, PlanningStatus, PlanningProgress, PlanningRate, PlanningWorkers, PlanningRequests);
+            RenderPhase(null, ExecutionStatus, ExecutionProgress, ExecutionRate, ExecutionWorkers, ExecutionRequests, ExecutionBytes);
             DiagnosticsBusy.IsRunning = true; DiagnosticsOverlay.IsVisible = true;
             ResetMapView(); FooterStatus.Text = "●  Job submitted · closing the application stops it"; await Poll();
         }
@@ -305,6 +313,7 @@ public partial class MainPage : ContentPage
         WarningsText.Text = string.Join("\n", snapshot.Warnings ?? []);
         FooterStatus.Text = $"●  {snapshot.Volume} · {snapshot.State} · application worker";
         RenderDiagnostics(snapshot);
+        RenderRecommendation(layout);
         UpdateVolumeActions();
     }
     private void OnPerformanceDetails(object? sender, EventArgs e)
@@ -329,24 +338,191 @@ public partial class MainPage : ContentPage
         DiagnosticsCount.Text = current?.Total > 0 ? $"{current.Completed:N0} / {current.Total:N0} {current.Unit} · phase progress" : snapshot.Message;
         DiagnosticsPause.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
         DiagnosticsPause.IsEnabled = DiagnosticsCancel.IsEnabled = !snapshot.IsTerminal;
-        DiagnosticsProcess.Text = d == null ? "This worker has not published performance telemetry." :
-            $"Elapsed {TimeSpan.FromMilliseconds(snapshot.ElapsedMilliseconds):g} · {d.LogicalProcessors:N0} logical processors · {d.ProcessThreads:N0} process threads\n" +
-            $"CPU time {d.CpuMilliseconds / 1000:N1} s · CPU ceiling {snapshot.CpuPercent}% · committed memory {Format.Bytes(d.PrivateBytes)}\n" +
-            $"{snapshot.PlannedMoves:N0} planned · {snapshot.VerifiedMoves:N0} verified · {snapshot.FailedMoves:N0} failed moves · {Format.Bytes(snapshot.BytesMoved)} relocated";
-        ScanDiagnosticsText.Text = Describe(d?.Scan);
-        PlanningDiagnosticsText.Text = Describe(d?.Planning);
-        ExecutionDiagnosticsText.Text = Describe(d?.Execution);
-        DiagnosticsAcceleration.Text = d == null ? "" : $"Map: {d.MapAcceleration}";
-        static string Describe(WorkProgress? p)
-        {
-            if (p == null) return "Pending / not applicable";
-            string rate = p.ElapsedMilliseconds > 0 ? $" · {p.Completed * 1000d / p.ElapsedMilliseconds:N0} {p.Unit}/s" : "";
-            string bytes = p.BytesProcessed > 0 ? $"\n{Format.Bytes(p.BytesProcessed)} processed · {Format.Bytes((long)(p.BytesProcessed * 1000d / Math.Max(1, p.ElapsedMilliseconds)))}/s" : "";
-            return $"{p.Phase}: {p.Completed:N0} / {p.Total:N0} {p.Unit}{rate}\n" +
-                $"Workers {p.ActiveWorkers:N0} active / {p.WorkerLimit:N0} limit · peak {p.PeakWorkers:N0} · requests in flight {p.InFlightIo:N0} / peak {p.PeakIo:N0}" +
-                bytes + $"\n{p.Acceleration}\n{p.Detail}";
-        }
+        DiagnosticsElapsed.Text = FormatElapsed(snapshot.ElapsedMilliseconds);
+        DiagnosticsProcessors.Text = d?.LogicalProcessors.ToString("N0") ?? "Not reported";
+        DiagnosticsThreads.Text = d?.ProcessThreads.ToString("N0") ?? "Not reported";
+        DiagnosticsCpu.Text = d == null ? "Not reported" : $"{d.CpuMilliseconds / 1000:N1} s / {snapshot.CpuPercent}%";
+        DiagnosticsMemory.Text = d == null ? "Not reported" : Format.Bytes(d.PrivateBytes);
+        DiagnosticsPlanned.Text = snapshot.PlannedMoves.ToString("N0");
+        DiagnosticsVerified.Text = snapshot.VerifiedMoves.ToString("N0");
+        DiagnosticsFailed.Text = snapshot.FailedMoves.ToString("N0");
+        DiagnosticsRelocated.Text = Format.Bytes(snapshot.BytesMoved);
+        RenderPhase(d?.Scan, ScanStatus, ScanProgress, ScanRate, ScanWorkers, ScanRequests);
+        RenderPhase(d?.Planning, PlanningStatus, PlanningProgress, PlanningRate, PlanningWorkers, PlanningRequests);
+        RenderPhase(d?.Execution, ExecutionStatus, ExecutionProgress, ExecutionRate, ExecutionWorkers, ExecutionRequests, ExecutionBytes);
     }
+    private static void RenderPhase(WorkProgress? progress, Label status, Label completed, Label rate, Label workers, Label requests, Label? bytes = null)
+    {
+        status.Text = progress?.Phase ?? "Not started";
+        completed.Text = progress == null ? "—" : progress.Total > 0 ? $"{progress.Completed:N0} / {progress.Total:N0} {progress.Unit}" : $"{progress.Completed:N0} {progress.Unit}";
+        rate.Text = progress == null || progress.ElapsedMilliseconds <= 0 ? "—" : progress.BytesProcessed > 0
+            ? $"{Format.Bytes((long)(progress.BytesProcessed * 1000d / progress.ElapsedMilliseconds))}/s"
+            : $"{progress.Completed * 1000d / progress.ElapsedMilliseconds:N0} {progress.Unit}/s";
+        workers.Text = progress == null ? "—" : $"{progress.ActiveWorkers:N0} / {progress.WorkerLimit:N0} · peak {progress.PeakWorkers:N0}";
+        requests.Text = progress == null ? "—" : $"{progress.InFlightIo:N0} active · peak {progress.PeakIo:N0}";
+        if (bytes != null) bytes.Text = progress == null || progress.BytesProcessed <= 0 ? "—" : Format.Bytes(progress.BytesProcessed);
+    }
+    private static string FormatElapsed(long milliseconds)
+    {
+        var elapsed = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
+        return elapsed.TotalDays >= 1 ? $"{(int)elapsed.TotalDays}.{elapsed:hh\\:mm\\:ss}" : elapsed.ToString(@"hh\:mm\:ss");
+    }
+    private void RenderRecommendation(JobSnapshot? snapshot)
+    {
+        var volume = _volume;
+        _recommendedOperation = null;
+        RecommendationMedia.Text = volume?.SeekPenalty switch
+        {
+            true when volume.TrimEnabled == true => "HDD · TRIM",
+            true => "HDD",
+            false when volume.TrimEnabled == true => "SSD · TRIM",
+            false => "SSD",
+            _ => "UNKNOWN MEDIA"
+        };
+        int threshold = int.TryParse(MinFragmentsEntry?.Text, NumberStyles.None, CultureInfo.InvariantCulture, out int selectedThreshold) && selectedThreshold >= 2
+            ? selectedThreshold : 20;
+        RecommendationThreshold.Text = $"{threshold:N0}+ fragments · not measured";
+        RecommendationPerformance.Text = "Not measured";
+        RecommendationMetadata.Text = "Not measured";
+        RecommendationSequence.Text = "Analyze";
+        RecommendationCulprits.Text = "Analyze to identify them.";
+        RecommendationButton.Text = "Analyze now";
+        if (volume == null)
+        {
+            RecommendationTitle.Text = "Select a volume";
+            RecommendationSummary.Text = "Select an NTFS volume before requesting an analysis.";
+            RecommendationFragmentation.Text = "Not measured";
+            return;
+        }
+        if (snapshot?.ObservedAt.HasValue != true || snapshot.TotalBytes <= 0)
+        {
+            RecommendationTitle.Text = "Analyze this volume";
+            RecommendationSummary.Text = $"A scan is required before maintenance can be recommended for this {MediaName(volume).ToLowerInvariant()}.";
+            RecommendationFragmentation.Text = "Not measured";
+            return;
+        }
+
+        double fragmentedRatio = snapshot.TotalFiles > 0 ? (double)snapshot.FragmentedFiles / snapshot.TotalFiles : 0;
+        RecommendationFragmentation.Text = $"{fragmentedRatio:P1} · {snapshot.FragmentedFiles:N0} / {snapshot.TotalFiles:N0} streams";
+        var thresholdCount = ThresholdCount(snapshot, threshold);
+        RecommendationThreshold.Text = $"{threshold:N0}+ fragments · {(thresholdCount.LowerBound ? "at least " : "")}{thresholdCount.Total:N0} streams ({thresholdCount.Eligible:N0} eligible)";
+        RecommendationPerformance.Text = ObservedRate(snapshot);
+        int indexesAtThreshold = snapshot.FragmentationThreshold == threshold && snapshot.DirectoryIndexesAtOrAboveThreshold > 0
+            ? snapshot.DirectoryIndexesAtOrAboveThreshold
+            : (snapshot.Files ?? []).Count(file => file.Extents >= threshold && file.Stream.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal));
+        string mft = snapshot.MftExtents == 0 ? "MFT not reported" : $"MFT {snapshot.MftExtents:N0} extent{(snapshot.MftExtents == 1 ? "" : "s")}";
+        RecommendationMetadata.Text = $"{mft} · indexes {indexesAtThreshold:N0} at threshold / {snapshot.FragmentedDirectoryIndexes:N0} fragmented";
+        RecommendationCulprits.Text = Culprits(snapshot.Files);
+
+        bool mftNeedsWork = snapshot.MftExtents >= threshold;
+        bool indexesNeedWork = indexesAtThreshold > 0;
+        if (volume.SeekPenalty == false)
+        {
+            if (volume.TrimEnabled == true)
+            {
+                _recommendedOperation = Operation.ReTrim;
+                RecommendationTitle.Text = "Run ReTRIM; skip routine relocation";
+                RecommendationSummary.Text = "An SSD has no mechanical seek penalty. ReTRIM refreshes deallocation hints without rewriting live files; file, MFT, and folder relocation should not be added solely because extent counts are high.";
+                RecommendationSequence.Text = "ReTRIM";
+                RecommendationButton.Text = "Select ReTRIM";
+            }
+            else
+            {
+                RecommendationTitle.Text = "No SSD relocation recommended";
+                RecommendationSummary.Text = volume.TrimEnabled == false
+                    ? "TRIM is reported unavailable. Check the controller and storage configuration; routine file or metadata relocation adds writes without removing seek latency."
+                    : "TRIM support is unknown. Use Windows automatic maintenance rather than assuming file relocation will improve SSD performance.";
+                if (volume.TrimEnabled == null)
+                {
+                    _recommendedOperation = Operation.Automatic;
+                    RecommendationSequence.Text = "Windows automatic";
+                    RecommendationButton.Text = "Select Windows automatic";
+                }
+                else
+                {
+                    RecommendationSequence.Text = "Check TRIM configuration";
+                    RecommendationButton.Text = "No operation recommended";
+                }
+            }
+            return;
+        }
+        if (volume.SeekPenalty == null)
+        {
+            _recommendedOperation = Operation.Automatic;
+            RecommendationTitle.Text = "Use Windows automatic maintenance";
+            RecommendationSummary.Text = "The device’s seek behavior is unknown. Windows can select media-appropriate maintenance without assuming that custom relocation is beneficial.";
+            RecommendationSequence.Text = "Windows automatic";
+            RecommendationButton.Text = "Select Windows automatic";
+            return;
+        }
+
+        var sequence = new List<string>();
+        if (thresholdCount.Eligible > 0)
+        {
+            _recommendedOperation = Operation.MinimumWrite;
+            RecommendationTitle.Text = "Defragment the worst HDD files";
+            RecommendationSummary.Text = $"This HDD has {snapshot.FragmentedFiles:N0} fragmented streams; {thresholdCount.Eligible:N0} eligible streams meet the {threshold:N0}-fragment threshold. Minimum-write targets those files while avoiding a whole-volume rewrite. Directory locality is workload-specific, not a general fragmentation remedy.";
+            sequence.Add("Minimum-write");
+        }
+        else if (mftNeedsWork)
+        {
+            _recommendedOperation = Operation.OptimizeMft;
+            RecommendationTitle.Text = "Optimize the fragmented MFT";
+            RecommendationSummary.Text = $"No ordinary eligible stream meets the {threshold:N0}-fragment threshold, but the MFT has {snapshot.MftExtents:N0} extents. Optimize only the movable MFT data.";
+        }
+        else if (indexesNeedWork)
+        {
+            _recommendedOperation = Operation.DirectoryIndexes;
+            RecommendationTitle.Text = "Optimize fragmented directory indexes";
+            RecommendationSummary.Text = $"No ordinary eligible stream meets the {threshold:N0}-fragment threshold. {indexesAtThreshold:N0} directory index streams meet it and are the remaining targeted maintenance candidate.";
+        }
+        else if (snapshot.FragmentedFiles == 0)
+        {
+            RecommendationTitle.Text = "No defragmentation needed";
+            RecommendationSummary.Text = "The scan found no fragmented streams. No relocation is recommended.";
+        }
+        else
+        {
+            RecommendationTitle.Text = "No files cross the current threshold";
+            RecommendationSummary.Text = $"Fragmentation is {fragmentedRatio:P1}, but no eligible stream has at least {threshold:N0} fragments. Lower the threshold only if an HDD workload is measurably affected.";
+        }
+        if (mftNeedsWork) sequence.Add("Optimize movable MFT");
+        if (indexesNeedWork) sequence.Add("Directory indexes");
+        RecommendationSequence.Text = sequence.Count == 0 ? "No relocation" : string.Join(" → ", sequence.Distinct());
+        RecommendationButton.Text = _recommendedOperation.HasValue ? $"Select {Policy(_recommendedOperation.Value).Name}" : "No operation recommended";
+    }
+    private static (int Total, int Eligible, bool LowerBound) ThresholdCount(JobSnapshot snapshot, int threshold)
+    {
+        var files = snapshot.Files ?? [];
+        if (snapshot.FragmentationThreshold == threshold && (snapshot.StreamsAtOrAboveThreshold > 0 || files.All(file => file.Extents < threshold)))
+            return (snapshot.StreamsAtOrAboveThreshold, snapshot.EligibleStreamsAtOrAboveThreshold, false);
+        int total = files.Count(file => file.Extents >= threshold);
+        int eligible = files.Count(file => file.Extents >= threshold && file.Status == "Eligible" &&
+            !file.Path.EndsWith("\\$MFT", StringComparison.OrdinalIgnoreCase) &&
+            !file.Stream.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal));
+        bool lowerBound = files.Length > 0 && snapshot.FragmentedFiles > files.Length && total == files.Length;
+        return (total, eligible, lowerBound);
+    }
+    private static string ObservedRate(JobSnapshot snapshot)
+    {
+        WorkProgress? progress = snapshot.Diagnostics?.Execution is { BytesProcessed: > 0 } execution ? execution :
+            snapshot.Diagnostics?.Scan is { BytesProcessed: > 0 } scan ? scan : null;
+        if (progress == null || progress.ElapsedMilliseconds <= 0) return "Not measured";
+        string phase = ReferenceEquals(progress, snapshot.Diagnostics?.Execution) ? "Relocation" : "MFT scan";
+        return $"{phase} · {Format.Bytes((long)(progress.BytesProcessed * 1000d / progress.ElapsedMilliseconds))}/s";
+    }
+    private static string Culprits(FileSummary[]? files)
+    {
+        if (files == null || files.Length == 0) return "No fragmented streams reported.";
+        return string.Join("\n", files.Take(3).Select(file =>
+        {
+            string path = file.Path + file.Stream;
+            if (path.Length > 48) path = "…" + path[^47..];
+            return $"{path} · {file.Extents:N0} extents · {Format.Bytes(file.Bytes)}";
+        }));
+    }
+    private static string MediaName(VolumeInfo volume) => volume.SeekPenalty switch { true => "Hard disk", false => "Solid-state drive", _ => "Storage device" };
+    private static PolicyOption Policy(Operation operation) => Policies.First(option => option.Operation == operation);
     private void PresentCompletionIfNeeded(VolumeSession session)
     {
         if (session.Snapshot is { IsTerminal: true } snapshot && snapshot.Id == session.AwaitingReport)
@@ -359,6 +535,13 @@ public partial class MainPage : ContentPage
     private async void OnAnalyze(object? sender, EventArgs e) => await Submit(Operation.Analyze, true);
     private async void OnPreview(object? sender, EventArgs e) => await Submit(_selectedPolicy.Operation, true);
     private async void OnOptimize(object? sender, EventArgs e) => await Submit(_selectedPolicy.Operation, false);
+    private async void OnUseRecommendation(object? sender, EventArgs e)
+    {
+        if (CurrentSession?.LayoutSnapshot == null) { await Submit(Operation.Analyze, true); return; }
+        if (_recommendedOperation is not { } operation) return;
+        _selectedPolicy = Policy(operation); UpdateSelectedPolicy();
+        FooterStatus.Text = $"●  {Policy(operation).Name} selected from the disk recommendation";
+    }
     private async void OnChooseMethod(object? sender, EventArgs e) => await ChoosePolicy();
     private Task<Operation?> ChoosePolicy()
     {
@@ -578,6 +761,8 @@ public partial class MainPage : ContentPage
         string fragments = string.IsNullOrWhiteSpace(MinFragmentsEntry?.Text) ? "20" : MinFragmentsEntry.Text;
         string size = string.IsNullOrWhiteSpace(MinFileSizeEntry?.Text) && string.IsNullOrWhiteSpace(MaxFileSizeEntry?.Text) ? "all sizes" : "size-filtered";
         ScopeSummary.Text = $"{selection} · {(exclusions == 0 ? "exclusions none" : $"{exclusions:N0} exclusions")} · {fragments}-fragment defrag threshold · {size}";
+        RenderRecommendation(CurrentSession?.LayoutSnapshot);
+        UpdateVolumeActions();
     }
     private void OnFileSelected(object? sender, SelectionChangedEventArgs e) { if (e.CurrentSelection.FirstOrDefault() is FileRow row) { SelectedPath.Text = row.Path; CellDetail.Text = row.Path; } }
     private async Task ShowClusterFiles(ClusterRange range)

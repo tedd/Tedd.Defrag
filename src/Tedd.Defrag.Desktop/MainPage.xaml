@@ -48,6 +48,21 @@
           <Button Text="Choose method" Clicked="OnChooseMethod" BackgroundColor="{DynamicResource ActionButton}" />
           <Grid ColumnDefinitions="*,*" ColumnSpacing="8"><Button x:Name="AnalyzeButton" Text="Analyze" Clicked="OnAnalyze" IsEnabled="False" BackgroundColor="{DynamicResource ActionButton}" /><Button x:Name="PreviewButton" Grid.Column="1" Text="Preview selected method" Clicked="OnPreview" IsEnabled="False" BackgroundColor="{DynamicResource ActionButton}" /></Grid><Button x:Name="OptimizeButton" Text="Run selected method  →" Clicked="OnOptimize" IsEnabled="False" BackgroundColor="{DynamicResource Accent}" TextColor="{DynamicResource PrimaryText}" />
         </VerticalStackLayout></Border>
+        <Border Style="{StaticResource Card}"><VerticalStackLayout Spacing="10">
+          <Grid ColumnDefinitions="*,Auto"><Label Text="RECOMMENDATION" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="RecommendationMedia" Grid.Column="1" Text="UNKNOWN MEDIA" Style="{StaticResource Caption}" /></Grid>
+          <Label x:Name="RecommendationTitle" Text="Analyze this volume" FontSize="17" FontFamily="OpenSansSemibold" />
+          <Label x:Name="RecommendationSummary" Text="A scan is required before Tedd Defrag can recommend maintenance." FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" />
+          <Grid ColumnDefinitions="112,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="7" ColumnSpacing="8">
+            <Label Text="Fragmentation" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationFragmentation" Grid.Column="1" Text="Not measured" FontSize="10" HorizontalTextAlignment="End" />
+            <Label Grid.Row="1" Text="File threshold" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationThreshold" Grid.Row="1" Grid.Column="1" Text="20 fragments" FontSize="10" HorizontalTextAlignment="End" />
+            <Label Grid.Row="2" Text="Observed rate" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationPerformance" Grid.Row="2" Grid.Column="1" Text="Not measured" FontSize="10" HorizontalTextAlignment="End" />
+            <Label Grid.Row="3" Text="Metadata" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationMetadata" Grid.Row="3" Grid.Column="1" Text="Not measured" FontSize="10" HorizontalTextAlignment="End" />
+            <Label Grid.Row="4" Text="Sequence" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationSequence" Grid.Row="4" Grid.Column="1" Text="Analyze" FontSize="10" HorizontalTextAlignment="End" />
+          </Grid>
+          <Label Text="Worst fragmented streams" FontSize="10" TextColor="{DynamicResource Muted}" />
+          <Label x:Name="RecommendationCulprits" Text="Analyze to identify them." FontSize="10" LineHeight="1.3" LineBreakMode="TailTruncation" MaxLines="4" />
+          <Button x:Name="RecommendationButton" Text="Analyze now" Clicked="OnUseRecommendation" BackgroundColor="{DynamicResource ActionButton}" />
+        </VerticalStackLayout></Border>
         <Border Style="{StaticResource Card}"><VerticalStackLayout Spacing="8"><Label Text="Current scope" FontSize="15" FontFamily="OpenSansSemibold" /><Label x:Name="ScopeSummary" Text="All files · exclusions none · 20-fragment defrag threshold · all sizes" FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" /><Button Text="Edit in Settings" Clicked="OnSettings" BackgroundColor="Transparent" TextColor="{DynamicResource Accent}" HorizontalOptions="Start" Padding="0,6" /></VerticalStackLayout></Border>
       </VerticalStackLayout></ScrollView>
 
@@ -88,16 +103,16 @@
                 <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
                   <VerticalStackLayout><Label Text="MFT WORKERS · 0–32" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="ScanWorkersEntry" Text="0" Keyboard="Numeric" /></VerticalStackLayout>
                   <VerticalStackLayout Grid.Column="1"><Label Text="PLANNER WORKERS · 0–32" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="PlanningWorkersEntry" Text="0" Keyboard="Numeric" /></VerticalStackLayout>
-                  <VerticalStackLayout Grid.Column="2"><Label Text="MOVE QUEUE DEPTH · 1–16" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="MoveQueueEntry" Text="1" Keyboard="Numeric" /></VerticalStackLayout>
+                  <VerticalStackLayout Grid.Column="2"><Label Text="MOVE QUEUE DEPTH · 1–16" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="MoveQueueEntry" Text="16" Keyboard="Numeric" /></VerticalStackLayout>
                 </Grid>
-                <Label Text="Zero workers selects automatically. Performance uses 4 MFT workers and up to 4 concurrent file moves. Each file sequence stays serial; metadata uses depth 1. Deeper queues can increase disk seeks. CPU, memory and bandwidth limits still apply." FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" />
-                <Grid ColumnDefinitions="*,Auto"><Label Text="CPU ceiling" TextColor="{DynamicResource Muted}" /><Label x:Name="CpuValue" Grid.Column="1" Text="25%" TextColor="{DynamicResource Accent}" /></Grid><Slider x:Name="CpuSlider" Minimum="1" Maximum="100" Value="25" ValueChanged="OnResourceChanged" />
+                <Label Text="Performance is the default: automatic scan and planning concurrency, up to 16 independent file moves, and no CPU, memory, or bandwidth throttle. Metadata operations remain serial. On HDDs, a deep move queue may increase seeking; select Balanced if responsiveness matters." FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" />
+                <Grid ColumnDefinitions="*,Auto"><Label Text="CPU ceiling" TextColor="{DynamicResource Muted}" /><Label x:Name="CpuValue" Grid.Column="1" Text="100%" TextColor="{DynamicResource Accent}" /></Grid><Slider x:Name="CpuSlider" Minimum="1" Maximum="100" Value="100" ValueChanged="OnResourceChanged" />
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                   <VerticalStackLayout><Label Text="MEMORY CAP · MiB" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="MemoryEntry" Text="0" Keyboard="Numeric" Placeholder="0 · unlimited" /></VerticalStackLayout>
                   <VerticalStackLayout Grid.Column="1"><Label Text="RELOCATION BANDWIDTH · MiB/s" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="IoEntry" Text="0" Keyboard="Numeric" Placeholder="0 · unlimited" /></VerticalStackLayout>
                 </Grid>
                 <Label Text="Bandwidth has no application maximum. For reference, 7.5 GiB/s is 7,680 MiB/s. A nonzero memory cap must be at least 256 MiB." FontSize="10" TextColor="{DynamicResource SubtleText}" />
-                <Grid ColumnDefinitions="*,Auto"><Label Text="Only while idle" VerticalOptions="Center" /><Switch x:Name="IdleSwitch" Grid.Column="1" /></Grid><Grid ColumnDefinitions="*,Auto"><Label Text="AC power only" VerticalOptions="Center" /><Switch x:Name="AcSwitch" Grid.Column="1" IsToggled="True" /></Grid><Grid ColumnDefinitions="*,Auto"><Label Text="Background priority" VerticalOptions="Center" /><Switch x:Name="BackgroundSwitch" Grid.Column="1" IsToggled="True" /></Grid>
+                <Grid ColumnDefinitions="*,Auto"><Label Text="Only while idle" VerticalOptions="Center" /><Switch x:Name="IdleSwitch" Grid.Column="1" /></Grid><Grid ColumnDefinitions="*,Auto"><Label Text="AC power only" VerticalOptions="Center" /><Switch x:Name="AcSwitch" Grid.Column="1" /></Grid><Grid ColumnDefinitions="*,Auto"><Label Text="Background priority" VerticalOptions="Center" /><Switch x:Name="BackgroundSwitch" Grid.Column="1" /></Grid>
                 <Entry x:Name="AffinityEntry" Placeholder="CPU affinity · hex mask, or automatic" /><Label Text="Affinity limits eligible cores. It does not guarantee cache isolation." FontSize="10" TextColor="{DynamicResource SubtleText}" />
                 <BoxView HeightRequest="1" Color="{DynamicResource Line}" Margin="0,5" />
                 <Label Text="Storage concurrency" FontSize="15" FontFamily="OpenSansSemibold" /><Label Text="Volumes sharing a disk queue automatically." FontSize="11" TextColor="{DynamicResource Muted}" /><Grid ColumnDefinitions="*,Auto"><Label Text="Allow shared-disk parallelism" FontSize="11" VerticalOptions="Center" /><Switch x:Name="SharedSwitch" Grid.Column="1" /></Grid><Entry x:Name="ParallelEntry" Text="2" Keyboard="Numeric" Placeholder="Concurrent volumes" /><Button Text="Save concurrency settings" Clicked="OnSaveConcurrency" /><Label x:Name="TopologyText" FontSize="10" TextColor="{DynamicResource SubtleText}" />
@@ -120,23 +135,69 @@
       </Border>
     </Grid>
 
-    <Grid x:Name="DiagnosticsOverlay" IsVisible="False" BackgroundColor="{DynamicResource Overlay}" Padding="36" ZIndex="90">
-      <Border Style="{StaticResource Card}" WidthRequest="760" MaximumHeightRequest="780" HorizontalOptions="Center" VerticalOptions="Center" Stroke="{DynamicResource ModalLine}" Background="{DynamicResource ModalSurface}" Padding="24">
+    <Grid x:Name="DiagnosticsOverlay" IsVisible="False" BackgroundColor="{DynamicResource Overlay}" Padding="28" ZIndex="90">
+      <Border Style="{StaticResource Card}" WidthRequest="900" MaximumHeightRequest="820" HorizontalOptions="Center" VerticalOptions="Center" Stroke="{DynamicResource ModalLine}" Background="{DynamicResource ModalSurface}" Padding="24">
         <Grid RowDefinitions="Auto,*,Auto" RowSpacing="16">
           <VerticalStackLayout Spacing="9">
-            <Label Text="PERFORMANCE DETAILS" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
-            <Grid ColumnDefinitions="*,Auto"><Label x:Name="DiagnosticsTitle" Text="Waiting for job telemetry" FontSize="23" FontAttributes="Bold" /><ActivityIndicator x:Name="DiagnosticsBusy" Grid.Column="1" Color="{DynamicResource Accent}" /></Grid>
+            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="16">
+              <Label Text="PERFORMANCE DETAILS" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
+              <VerticalStackLayout Grid.Column="1" Spacing="1" HorizontalOptions="End"><Label Text="ELAPSED" Style="{StaticResource Caption}" HorizontalTextAlignment="End" /><Label x:Name="DiagnosticsElapsed" Text="00:00:00" FontSize="16" FontFamily="OpenSansSemibold" HorizontalTextAlignment="End" /></VerticalStackLayout>
+              <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="10"><Label x:Name="DiagnosticsTitle" Text="Waiting for job telemetry" FontSize="23" FontAttributes="Bold" /><ActivityIndicator x:Name="DiagnosticsBusy" Grid.Column="1" Color="{DynamicResource Accent}" VerticalOptions="Center" /></Grid>
+            </Grid>
             <ProgressBar x:Name="DiagnosticsProgress" ProgressColor="{DynamicResource Accent}" BackgroundColor="{DynamicResource Track}" />
             <Label x:Name="DiagnosticsCount" FontSize="12" TextColor="{DynamicResource Muted}" />
           </VerticalStackLayout>
-          <ScrollView Grid.Row="1"><VerticalStackLayout Spacing="14">
-            <Label x:Name="DiagnosticsProcess" FontSize="12" LineHeight="1.3" />
-            <Border Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="6"><Label Text="MFT SCAN" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="ScanDiagnosticsText" Text="Pending" FontSize="12" LineHeight="1.35" /></VerticalStackLayout></Border>
-            <Border Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="6"><Label Text="EXECUTION PLAN" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="PlanningDiagnosticsText" Text="Pending" FontSize="12" LineHeight="1.35" /></VerticalStackLayout></Border>
-            <Border Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="6"><Label Text="RELOCATION" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="ExecutionDiagnosticsText" Text="Pending" FontSize="12" LineHeight="1.35" /></VerticalStackLayout></Border>
-            <Label x:Name="DiagnosticsAcceleration" FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.35" />
-            <Label Text="Workers are application operations. In-flight requests include validation and filesystem calls. Rates are phase averages." FontSize="11" TextColor="{DynamicResource SubtleText}" LineHeight="1.3" />
-          </VerticalStackLayout></ScrollView>
+          <ScrollView Grid.Row="1"><Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="14">
+            <Border Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+              <Label Text="PROCESS" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
+              <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
+                <Label Text="Logical processors" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsProcessors" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="1" Text="Process threads" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsThreads" Grid.Row="1" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="2" Text="CPU time / limit" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsCpu" Grid.Row="2" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="3" Text="Memory in use" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsMemory" Grid.Row="3" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+              </Grid>
+            </VerticalStackLayout></Border>
+            <Border Grid.Column="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+              <Label Text="JOB TOTALS" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
+              <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
+                <Label Text="Moves planned" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsPlanned" Grid.Column="1" Text="0" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="1" Text="Moves verified" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsVerified" Grid.Row="1" Grid.Column="1" Text="0" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="2" Text="Moves failed" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsFailed" Grid.Row="2" Grid.Column="1" Text="0" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="3" Text="Data relocated" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsRelocated" Grid.Row="3" Grid.Column="1" Text="0 B" FontSize="11" HorizontalTextAlignment="End" />
+              </Grid>
+            </VerticalStackLayout></Border>
+            <Border Grid.Row="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+              <Label Text="MFT SCAN" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
+              <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
+                <Label Text="Status" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ScanStatus" Grid.Column="1" Text="Not started" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="1" Text="Progress" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ScanProgress" Grid.Row="1" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="2" Text="Throughput" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ScanRate" Grid.Row="2" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="3" Text="Workers" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ScanWorkers" Grid.Row="3" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="4" Text="Requests" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ScanRequests" Grid.Row="4" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+              </Grid>
+            </VerticalStackLayout></Border>
+            <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+              <Label Text="EXECUTION PLAN" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
+              <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
+                <Label Text="Status" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="PlanningStatus" Grid.Column="1" Text="Not started" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="1" Text="Progress" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="PlanningProgress" Grid.Row="1" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="2" Text="Throughput" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="PlanningRate" Grid.Row="2" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="3" Text="Workers" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="PlanningWorkers" Grid.Row="3" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="4" Text="Requests" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="PlanningRequests" Grid.Row="4" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+              </Grid>
+            </VerticalStackLayout></Border>
+            <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+              <Label Text="RELOCATION" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
+              <Grid ColumnDefinitions="130,*,130,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
+                <Label Text="Status" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ExecutionStatus" Grid.Column="1" Text="Not started" FontSize="11" />
+                <Label Grid.Column="2" Text="Progress" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ExecutionProgress" Grid.Column="3" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="1" Text="Data rate" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ExecutionRate" Grid.Row="1" Grid.Column="1" Text="—" FontSize="11" />
+                <Label Grid.Row="1" Grid.Column="2" Text="Workers" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ExecutionWorkers" Grid.Row="1" Grid.Column="3" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="2" Text="Data processed" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ExecutionBytes" Grid.Row="2" Grid.Column="1" Text="—" FontSize="11" />
+                <Label Grid.Row="2" Grid.Column="2" Text="Requests" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ExecutionRequests" Grid.Row="2" Grid.Column="3" Text="—" FontSize="11" HorizontalTextAlignment="End" />
+              </Grid>
+            </VerticalStackLayout></Border>
+          </Grid></ScrollView>
           <HorizontalStackLayout Grid.Row="2" HorizontalOptions="End" Spacing="8"><Button x:Name="DiagnosticsPause" Text="Pause" Clicked="OnPause" /><Button x:Name="DiagnosticsCancel" Text="Cancel job" Clicked="OnCancel" /><Button Text="Close details" Clicked="OnClosePerformanceDetails" /></HorizontalStackLayout>
         </Grid>
       </Border>

@@ -184,9 +184,12 @@ public sealed class ParallelismTests
     }
 
     [Fact]
-    public void ResourceDefaultsRemainSerialForMovesAndCapsBoundScanBuffers()
+    public void ApplicationDefaultsUseFullSpeedAndCapsBoundScanBuffers()
     {
-        Assert.Equal(1, ResourcePolicy.Balanced.MoveQueueDepth); Assert.Equal(4, ResourcePolicy.Performance.MoveQueueDepth);
+        var defaults = new JobRequest().Resources;
+        Assert.Equal(100, defaults.CpuPercent); Assert.Equal(16, defaults.MoveQueueDepth);
+        Assert.False(defaults.Background); Assert.False(defaults.AcOnly);
+        Assert.Equal(1, ResourcePolicy.Balanced.MoveQueueDepth); Assert.Equal(16, ResourcePolicy.Performance.MoveQueueDepth);
         Assert.Equal(2, WorkerPolicy.ScanWorkers(ResourcePolicy.Performance with { MemoryMiB = 256, ScanWorkers = 32 }));
         Assert.Equal(1, WorkerPolicy.CpuWorkers(new() { CpuPercent = 100, AffinityMask = 1 }));
         Assert.Throws<ArgumentException>(() => new ResourcePolicy { MoveQueueDepth = 17 }.Validate());

@@ -130,7 +130,7 @@ internal static class Program
         string policy = args.Get("policy", "MinimumWrite");
         if (!Enum.TryParse<Operation>(policy.Replace("-", ""), true, out var operation)) throw new ArgumentException("Unknown layout policy.");
         operation = command switch { "analyze" => Operation.Analyze, "trim" => Operation.ReTrim, "zero" => Operation.ZeroFreeSpace, _ => operation };
-        ResourcePolicy resources = args.Get("preset", "balanced").ToLowerInvariant() switch { "quiet" => ResourcePolicy.Quiet, "performance" => ResourcePolicy.Performance, "balanced" => ResourcePolicy.Balanced, _ => throw new ArgumentException("Unknown resource preset.") };
+        ResourcePolicy resources = args.Get("preset", "performance").ToLowerInvariant() switch { "quiet" => ResourcePolicy.Quiet, "performance" => ResourcePolicy.Performance, "balanced" => ResourcePolicy.Balanced, _ => throw new ArgumentException("Unknown resource preset.") };
         resources = resources with { CpuPercent = args.Int("cpu", resources.CpuPercent), MemoryMiB = args.Int("memory", resources.MemoryMiB),
             ScanWorkers = args.Int("scan-workers", resources.ScanWorkers), PlanningWorkers = args.Int("planning-workers", resources.PlanningWorkers),
             MoveQueueDepth = args.Int("move-queue", resources.MoveQueueDepth),
@@ -192,11 +192,11 @@ internal static class Program
         --execute              Perform changes (default: preview)
         --wait --json          Wait and emit structured result; --events emits NDJSON
         --exclude <path/glob>  Repeat for recursive paths or patterns; exclusions always win
-        --preset quiet|balanced|performance
-        --cpu 25 --memory 0 --io 0        CPU %, process commit MiB, relocation MiB/s; 0 means unlimited
+        --preset quiet|balanced|performance       Default: performance
+        --cpu 100 --memory 0 --io 0       CPU %, process commit MiB, relocation MiB/s; 0 means unlimited
         --affinity 0xF0        Advanced logical CPU mask (single processor group)
         --scan-workers 0 --planning-workers 0   0 = automatic, 1–32 = explicit worker limit
-        --move-queue 1        1–16 independent file moves in flight; Performance preset uses 4
+        --move-queue 16       1–16 independent file moves in flight; Performance preset uses 16
         --idle-only --allow-battery --foreground
         --budget-mib 0 --minutes 0 --allow-ssd   0 means unlimited
         --min-fragments 20 --min-file-mib 0 --max-file-mib 0

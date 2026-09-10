@@ -31,6 +31,7 @@ public sealed class JobExecutor
         JobState state = JobState.Scanning; double progress = 0; string message = "Preparing analysis";
         int plannedMoves = 0, attemptedMoves = 0, verifiedMoves = 0, failedMoves = 0;
         int filesConsidered = 0, filesBlocked = 0, initialFragmentedFiles = 0;
+        int streamsAtThreshold = 0, eligibleStreamsAtThreshold = 0, mftExtents = 0, fragmentedDirectoryIndexes = 0, directoryIndexesAtThreshold = 0;
         bool noMovesPlanned = false;
         bool layoutIndexDirty = false;
         long scannedRecords = 0;
@@ -46,6 +47,7 @@ public sealed class JobExecutor
                 && volume!.Info.SeekPenalty != true && !request.AllowSsdRelocation)
                 throw new InvalidOperationException("Custom relocation on SSD or unknown media requires explicit opt-in.");
             layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
+            UpdateConditionMetrics();
             layoutIndexDirty = true;
             warnings.AddRange(layout.Warnings);
             initialFragmentedFiles = layout.Files.Count(f => f.Fragmented);
@@ -63,6 +65,7 @@ public sealed class JobExecutor
                 state = JobState.Scanning; progress = 0; scanWork = null;
                 ReleaseLayoutForRescan();
                 layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
+                UpdateConditionMetrics();
                 layoutIndexDirty = true;
                 AddWarnings(layout.Warnings);
                 MapAggregator.Build(layout, map); state = JobState.Completed; progress = 1; message = "Maintenance completed; allocation map refreshed"; return;
@@ -159,6 +162,7 @@ public sealed class JobExecutor
             message = "Reconciling actual allocation after execution"; Publish(true);
             ReleaseLayoutForRescan();
             layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
+            UpdateConditionMetrics();
             layoutIndexDirty = true;
             AddWarnings(layout.Warnings);
             MapAggregator.Build(layout, map);
@@ -210,8 +214,20 @@ public sealed class JobExecutor
                 warnings.ToArray(), plannedBytes, layout?.Volume.SizeBytes ?? 0, layout?.Volume.FreeBytes ?? 0,
                 request.Resources.CpuPercent, request.Resources.MemoryMiB, request.Resources.IoMiBPerSecond,
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,
-                initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics));
+                initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics,
+                request.MinimumFragments, streamsAtThreshold, eligibleStreamsAtThreshold, mftExtents, fragmentedDirectoryIndexes,
+                directoryIndexesAtThreshold));
             lastPublish = clock.ElapsedMilliseconds;
+        }
+        void UpdateConditionMetrics()
+        {
+            var files = layout?.Files;
+            streamsAtThreshold = files?.Count(f => f.Fragmented && f.Extents.Length >= request.MinimumFragments) ?? 0;
+            eligibleStreamsAtThreshold = files?.Count(f => f.Fragmented && f.Movable && f.Extents.Length >= request.MinimumFragments &&
+                (f.Flags & (StreamFlags.Metadata | StreamFlags.Directory)) == 0) ?? 0;
+            mftExtents = files?.FirstOrDefault(f => (f.FileId & 0xFFFFFFFFFFFF) == 0 && f.StreamName.Length == 0)?.Extents.Length ?? 0;
+            fragmentedDirectoryIndexes = files?.Count(f => f.Fragmented && f.StreamName.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal)) ?? 0;
+            directoryIndexesAtThreshold = files?.Count(f => f.Extents.Length >= request.MinimumFragments && f.StreamName.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal)) ?? 0;
         }
         void Checkpoint()
         {

@@ -69,13 +69,13 @@ The raw scanner does not recursively traverse directories. It deduplicates file 
 | Idle/power | Sustained inactivity in the worker's interactive session; other active sessions with unknown activity pause execution. AC power can be required. No new custom moves while paused; an in-flight filesystem request can finish. |
 | Concurrency | Separate limits for volumes/shared resources, MFT workers (0–32), planner sort workers (0–32), and outstanding file moves (1–16). A per-volume cross-process mutex remains mandatory. |
 
-Quiet, Balanced and Performance presets are editable. Resource settings are captured when a job is submitted, not applied retroactively to running work. Leaving all cores eligible is the default. Affinity can reduce competition but SMT siblings and kernel work may still share caches.
+Quiet, Balanced and Performance presets are editable. Performance is the application default: a 100% CPU ceiling, automatic scan/planner worker selection, up to 16 independent file moves, foreground priority, and no power, memory, or relocation-bandwidth restriction. Resource settings are captured when a job is submitted, not applied retroactively to running work. Leaving all cores eligible is the default. Affinity can reduce competition but SMT siblings and kernel work may still share caches.
 
-Performance selects four MFT workers and a move queue depth of four. Balanced and Quiet retain one outstanding move. Zero scan/planner workers means automatic selection based on CPU policy; scan concurrency is additionally bounded by memory headroom. Planner inventories below 8,192 streams use one sorting worker. Free-space enumeration skips uniform bitmap blocks with 256-bit or 128-bit SIMD where available. Sorting can run across partitions, followed by a deterministic merge; destination reservations and ancestry resolution remain serial. MFT record validation is scalar. GPU compute is not used.
+Performance automatically selects MFT and planner workers and uses a move queue depth of sixteen. Balanced and Quiet retain one outstanding move. Zero scan/planner workers means automatic selection based on CPU policy; scan concurrency is additionally bounded by memory headroom. Planner inventories below 8,192 streams use one sorting worker. Free-space enumeration skips uniform bitmap blocks with 256-bit or 128-bit SIMD where available. Sorting can run across partitions, followed by a deterministic merge; destination reservations and ancestry resolution remain serial. MFT record validation is scalar. GPU compute is not used.
 
 Relocation overlaps independent file identities, retaining the original move sequence within each file, including named streams. Each worker borrows an independent volume handle. Metadata operations use queue depth one. Journaling and layout mutation stay on the coordinator; cancellation drains submitted requests, and failed moves trigger a bitmap refresh before another batch can recycle freed space. Deeper queues permit more outstanding work but can increase seeks on HDDs; they do not establish device saturation or higher throughput.
 
-The desktop opens **Performance details** when a job starts; the same button reopens it. The popup shows phase progress, counts, worker limits/activity/peaks, requests in flight, average rates, process threads, CPU time, memory and acceleration paths. These are application observations, not physical device queue measurements. The same telemetry is stored in JSON snapshots and reports. Historical reports without telemetry remain readable.
+The desktop opens **Performance details** when a job starts; the same button reopens it. The popup presents elapsed time, process use, job totals, phase progress, throughput, workers, and requests in aligned tables. These are application observations, not physical device queue measurements. The Overview recommendation identifies HDD, SSD, or unknown media; quantifies fragmented streams and the active fragment threshold; names the worst reported streams; and proposes media-appropriate maintenance. SSD recommendations prefer ReTRIM or Windows automatic maintenance over routine relocation. The same telemetry is stored in JSON snapshots and reports. Historical reports without telemetry remain readable.
 
 ## CLI examples
 
@@ -86,7 +86,7 @@ Tedd.Defrag.Cli.exe optimize D: --policy MinimumWrite --budget-mib 1024 --wait
 Tedd.Defrag.Cli.exe defrag --path 'D:\Data\archive.bin' --execute --wait
 Tedd.Defrag.Cli.exe optimize D: --exclude 'D:\VMs' --exclude '*\cache\*' --execute --wait
 Tedd.Defrag.Cli.exe optimize D: --cpu 20 --memory 512 --io 16 --affinity 0xF0 --wait
-Tedd.Defrag.Cli.exe optimize D: --preset performance --scan-workers 4 --planning-workers 4 --move-queue 4 --wait
+Tedd.Defrag.Cli.exe optimize D: --preset performance --scan-workers 0 --planning-workers 0 --move-queue 16 --wait
 Tedd.Defrag.Cli.exe trim D: --execute --wait
 Tedd.Defrag.Cli.exe jobs list --json
 Tedd.Defrag.Cli.exe jobs pause <id>

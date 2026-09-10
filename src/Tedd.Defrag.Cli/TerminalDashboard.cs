@@ -44,7 +44,7 @@ internal sealed class TerminalDashboard : UIElement
                 if (e.Key is ConsoleKey.A or ConsoleKey.D)
                 {
                     var request = new JobRequest { Volume = _volume, Operation = e.Key == ConsoleKey.A ? Operation.Analyze : Operation.MinimumWrite,
-                        Preview = true, Resources = ResourcePolicy.Balanced with { AcOnly = false } };
+                        Preview = true, Resources = ResourcePolicy.Performance };
                     _job = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
                 }
                 else if (_job != Guid.Empty && e.Key == ConsoleKey.P) await _client.Send(new(_snapshot?.State == JobState.Paused ? "resume" : "pause", Id: _job));
