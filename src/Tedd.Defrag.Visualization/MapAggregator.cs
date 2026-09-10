@@ -56,14 +56,14 @@ public static class MapAggregator
     }
     public static uint Color(in MapCell c)
     {
-        if (c.Clusters == 0) return 0xFF101924;
+        if (c.Clusters == 0) return 0xFF172531;
         if (c.Moving > 0) return 0xFFFFFFFF;
-        if (c.Verified > 0) return 0xFF79E7AE;
-        if (c.Metadata > c.Clusters / 8) return 0xFFA995F5;
-        if (c.Fragmented > c.Clusters / 8) return 0xFFF5AF71;
-        if (c.Excluded > c.Clusters / 3) return 0xFF617084;
-        if (c.Allocated == 0) return 0xFF172330;
+        if (c.Verified > 0) return 0xFF70C94A;
+        if (c.Metadata > c.Clusters / 8) return 0xFF37C3DB;
+        if (c.Fragmented > c.Clusters / 8) return 0xFFF3BF3E;
+        if (c.Excluded > c.Clusters / 3) return 0xFF8295A3;
+        if (c.Allocated == 0) return 0xFF223646;
         float fill = (float)c.Allocated / c.Clusters;
-        return 0xFF000000 | (uint)(32 + 30 * fill) << 16 | (uint)(100 + 103 * fill) << 8 | (uint)(120 + 81 * fill);
+        return 0xFF000000 | (uint)(27 + 2 * fill) << 16 | (uint)(72 + 67 * fill) << 8 | (uint)(105 + 130 * fill);
     }
 }

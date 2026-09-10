@@ -20,7 +20,7 @@
     <PublishReadyToRun Condition="'$(RuntimeIdentifier)' != ''">true</PublishReadyToRun>
   </PropertyGroup>
   <ItemGroup>
-    <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#0B121C" />
+    <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#172431" />
     <MauiFont Include="Resources/Fonts/*" />
     <PackageReference Include="Microsoft.Maui.Controls" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />

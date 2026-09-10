@@ -8,30 +8,34 @@ public partial class App : Application
 
     private static readonly IReadOnlyDictionary<string, string> LightPalette = new Dictionary<string, string>
     {
-        ["Canvas"] = "#F6F9FA", ["Surface"] = "#FFFFFF", ["Line"] = "#D6E1E5", ["Accent"] = "#087F7B",
-        ["Ink"] = "#13232C", ["Muted"] = "#5E727D", ["ButtonSurface"] = "#E7EEF1", ["Field"] = "#EDF3F5",
-        ["Placeholder"] = "#728691", ["SwitchThumb"] = "#FFFFFF", ["Track"] = "#D8E2E6", ["Sidebar"] = "#F1F6F7",
-        ["SidebarLine"] = "#D8E2E5", ["SidebarText"] = "#48616D", ["NavSelected"] = "#D5EEEC", ["NoticeSurface"] = "#E3F4F3",
-        ["NoticeLine"] = "#BEDDDA", ["NoticeText"] = "#3D6669", ["BadgeSurface"] = "#E9F0F5", ["BadgeLine"] = "#D1DCE4",
-        ["BadgeText"] = "#465E73", ["MapCanvas"] = "#0C141F", ["SubtleText"] = "#6C8290", ["DangerSurface"] = "#F5E8EC",
-        ["DangerText"] = "#9B485B", ["ActionSurface"] = "#E8F5F4", ["ActionLine"] = "#B7D7D5", ["ActionInner"] = "#F6FAFA",
-        ["ActionButton"] = "#D5E8E8", ["PrimaryText"] = "#062C2F", ["HeaderSurface"] = "#EEF3F5", ["Overlay"] = "#9913232C",
-        ["ModalSurface"] = "#FFFFFF", ["ModalLine"] = "#96C3C0", ["OptionSurface"] = "#F6F9FA", ["OptionStroke"] = "#D0DEE2",
-        ["OptionIconSurface"] = "#DDF5F2", ["OptionIconStroke"] = "#ABD0CD", ["Chevron"] = "#647B88"
+        ["Canvas"] = "#EEF2F3", ["Surface"] = "#FAFBFB", ["Line"] = "#CAD5DA", ["Accent"] = "#0B8045",
+        ["Ink"] = "#172630", ["Muted"] = "#60727D", ["ButtonSurface"] = "#DFE7EA", ["Field"] = "#E5EBED",
+        ["Placeholder"] = "#71838E", ["SwitchThumb"] = "#FFFFFF", ["Track"] = "#CDD8DC", ["Sidebar"] = "#E1E8EA",
+        ["SidebarLine"] = "#C6D2D7", ["SidebarText"] = "#485D69", ["NavSelected"] = "#CDE5D7", ["NoticeSurface"] = "#DFEDE5",
+        ["NoticeLine"] = "#BAD5C6", ["NoticeText"] = "#426456", ["BadgeSurface"] = "#DDE7EA", ["BadgeLine"] = "#C4D1D7",
+        ["BadgeText"] = "#435D69", ["MapCanvas"] = "#172531", ["SubtleText"] = "#71848F", ["DangerSurface"] = "#F2E5E8",
+        ["DangerText"] = "#98495B", ["ActionSurface"] = "#DFEDE5", ["ActionLine"] = "#B1CEBE", ["ActionInner"] = "#F1F6F3",
+        ["ActionButton"] = "#C7DED1", ["PrimaryText"] = "#FFFFFF", ["HeaderSurface"] = "#E2E9EC", ["Overlay"] = "#9917232D",
+        ["ModalSurface"] = "#FAFBFB", ["ModalLine"] = "#7EAD94", ["OptionSurface"] = "#F1F4F5", ["OptionStroke"] = "#CCD7DC",
+        ["OptionIconSurface"] = "#D7EADF", ["OptionIconStroke"] = "#A5CBB5", ["Chevron"] = "#657A86",
+        ["Allocated"] = "#1D8BEB", ["Fragmented"] = "#F3BF3E", ["Metadata"] = "#37C3DB", ["Excluded"] = "#526772",
+        ["FreeSpace"] = "#455B6B", ["Activity"] = "#EDF2F4", ["Highlight"] = "#FFD45A"
     };
 
     private static readonly IReadOnlyDictionary<string, string> DarkPalette = new Dictionary<string, string>
     {
-        ["Canvas"] = "#0A1018", ["Surface"] = "#101A26", ["Line"] = "#233140", ["Accent"] = "#54D5CB",
-        ["Ink"] = "#E5EEF4", ["Muted"] = "#91A2B4", ["ButtonSurface"] = "#1B2B3A", ["Field"] = "#152231",
-        ["Placeholder"] = "#667D92", ["SwitchThumb"] = "#E5EEF4", ["Track"] = "#29394C", ["Sidebar"] = "#0D1621",
-        ["SidebarLine"] = "#1D2937", ["SidebarText"] = "#A0B2C5", ["NavSelected"] = "#193A40", ["NoticeSurface"] = "#11262C",
-        ["NoticeLine"] = "#27424A", ["NoticeText"] = "#94AEB9", ["BadgeSurface"] = "#182536", ["BadgeLine"] = "#2B3C50",
-        ["BadgeText"] = "#B7C9DF", ["MapCanvas"] = "#0C141F", ["SubtleText"] = "#7B93A9", ["DangerSurface"] = "#352735",
-        ["DangerText"] = "#E6AFB8", ["ActionSurface"] = "#12242C", ["ActionLine"] = "#34565B", ["ActionInner"] = "#10202A",
-        ["ActionButton"] = "#23424B", ["PrimaryText"] = "#082329", ["HeaderSurface"] = "#152130", ["Overlay"] = "#E6080D14",
-        ["ModalSurface"] = "#0F1925", ["ModalLine"] = "#3B666B", ["OptionSurface"] = "#121F2C", ["OptionStroke"] = "#263A4B",
-        ["OptionIconSurface"] = "#173239", ["OptionIconStroke"] = "#2C5559", ["Chevron"] = "#668095"
+        ["Canvas"] = "#172431", ["Surface"] = "#1C2B38", ["Line"] = "#2B3D4B", ["Accent"] = "#18B563",
+        ["Ink"] = "#EEF3F5", ["Muted"] = "#9AA8B2", ["ButtonSurface"] = "#253847", ["Field"] = "#223340",
+        ["Placeholder"] = "#7F929E", ["SwitchThumb"] = "#F5F8F6", ["Track"] = "#344755", ["Sidebar"] = "#243645",
+        ["SidebarLine"] = "#314553", ["SidebarText"] = "#A8B5BE", ["NavSelected"] = "#2B4651", ["NoticeSurface"] = "#1D3C35",
+        ["NoticeLine"] = "#2D5A49", ["NoticeText"] = "#A1B6AD", ["BadgeSurface"] = "#273947", ["BadgeLine"] = "#354958",
+        ["BadgeText"] = "#B9C6CE", ["MapCanvas"] = "#172531", ["SubtleText"] = "#7F919D", ["DangerSurface"] = "#453039",
+        ["DangerText"] = "#F0BAC2", ["ActionSurface"] = "#1B303B", ["ActionLine"] = "#31505A", ["ActionInner"] = "#192934",
+        ["ActionButton"] = "#29404D", ["PrimaryText"] = "#07150D", ["HeaderSurface"] = "#243643", ["Overlay"] = "#D917232D",
+        ["ModalSurface"] = "#1B2A37", ["ModalLine"] = "#367353", ["OptionSurface"] = "#20313E", ["OptionStroke"] = "#304552",
+        ["OptionIconSurface"] = "#1E4437", ["OptionIconStroke"] = "#2C684D", ["Chevron"] = "#7F929D",
+        ["Allocated"] = "#1D8BEB", ["Fragmented"] = "#F3BF3E", ["Metadata"] = "#37C3DB", ["Excluded"] = "#8295A3",
+        ["FreeSpace"] = "#455B6B", ["Activity"] = "#EDF2F4", ["Highlight"] = "#FFD45A"
     };
 
     public string ThemePreference { get; private set; } = "System";

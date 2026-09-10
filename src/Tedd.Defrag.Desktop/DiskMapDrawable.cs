@@ -23,7 +23,7 @@ public sealed class DiskMapDrawable : IDrawable
         {
             var c = new MapCell(256, i, 0, 0, 0, 0, 0); Add(MapAggregator.Color(c));
         }
-        foreach (uint c in new uint[] { 0xFF101924, 0xFF172330, 0xFFFFFFFF, 0xFF79E7AE, 0xFFA995F5, 0xFFF5AF71, 0xFF617084 }) Add(c);
+        foreach (uint c in new uint[] { 0xFF172531, 0xFF223646, 0xFFFFFFFF, 0xFF70C94A, 0xFF37C3DB, 0xFFF3BF3E, 0xFF8295A3 }) Add(c);
         void Add(uint c) => _colors.TryAdd(c, Color.FromUint(c));
     }
     public void SetRegion(long start, long count, long total, MapCell[] cells)
@@ -96,7 +96,7 @@ public sealed class DiskMapDrawable : IDrawable
             canvas.FillRoundedRectangle(x * cw + 1, y * ch + 1, Math.Max(1, cw - 2), Math.Max(1, ch - 2), Math.Min(1.6f, cw / 4));
             if (_highlightedCells.Contains(index))
             {
-                canvas.StrokeColor = Color.FromArgb("#FFF173"); canvas.StrokeSize = Math.Min(3, Math.Max(1, cw / 4));
+                canvas.StrokeColor = Color.FromArgb("#FFD45A"); canvas.StrokeSize = Math.Min(3, Math.Max(1, cw / 4));
                 canvas.DrawRoundedRectangle(x * cw + .5f, y * ch + .5f, Math.Max(1, cw - 1), Math.Max(1, ch - 1), Math.Min(1.6f, cw / 4));
             }
             if (_selectionStart >= 0 && index >= Math.Min(_selectionStart, _selectionEnd) && index <= Math.Max(_selectionStart, _selectionEnd))
@@ -127,7 +127,7 @@ public sealed class MapOverviewDrawable : IDrawable
     public void Draw(ICanvas canvas, RectF dirtyRect)
     {
         _width = dirtyRect.Width;
-        canvas.FillColor = Color.FromArgb("#172330"); canvas.FillRectangle(dirtyRect);
+        canvas.FillColor = Color.FromArgb("#172531"); canvas.FillRectangle(dirtyRect);
         if (Cells.Length == 0 || TotalClusters <= 0) return;
         int columns = Math.Max(1, (int)Math.Ceiling(dirtyRect.Width));
         float width = dirtyRect.Width / columns;
@@ -140,13 +140,13 @@ public sealed class MapOverviewDrawable : IDrawable
         }
         float left = (float)StartCluster / TotalClusters * dirtyRect.Width;
         float right = (float)(StartCluster + ClusterCount) / TotalClusters * dirtyRect.Width;
-        canvas.FillColor = Color.FromArgb("#99060B11");
+        canvas.FillColor = Color.FromArgb("#99111B24");
         if (left > 0) canvas.FillRectangle(0, 0, left, dirtyRect.Height);
         if (right < dirtyRect.Width) canvas.FillRectangle(right, 0, dirtyRect.Width - right, dirtyRect.Height);
-        canvas.StrokeColor = Color.FromArgb("#FFF173"); canvas.StrokeSize = 2;
+        canvas.StrokeColor = Color.FromArgb("#FFD45A"); canvas.StrokeSize = 2;
         canvas.DrawRectangle(left, 1, Math.Max(2, right - left), Math.Max(1, dirtyRect.Height - 2));
         float center = (left + right) / 2;
         var marker = new PathF(); marker.MoveTo(center - 6, 0); marker.LineTo(center + 6, 0); marker.LineTo(center, 8); marker.Close();
-        canvas.FillColor = Color.FromArgb("#FFF173"); canvas.FillPath(marker);
+        canvas.FillColor = Color.FromArgb("#FFD45A"); canvas.FillPath(marker);
     }
 }

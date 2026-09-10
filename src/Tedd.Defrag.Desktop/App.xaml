@@ -3,26 +3,30 @@
   <Application.Resources>
     <ResourceDictionary>
       <!-- Light is the initial palette. App.xaml.cs applies the saved Windows/light/dark preference at startup. -->
-      <Color x:Key="Canvas">#F6F9FA</Color><Color x:Key="Surface">#FFFFFF</Color>
-      <Color x:Key="Line">#D6E1E5</Color><Color x:Key="Accent">#087F7B</Color>
-      <Color x:Key="Ink">#13232C</Color><Color x:Key="Muted">#5E727D</Color>
-      <Color x:Key="ButtonSurface">#E7EEF1</Color><Color x:Key="Field">#EDF3F5</Color>
-      <Color x:Key="Placeholder">#728691</Color><Color x:Key="SwitchThumb">#FFFFFF</Color>
-      <Color x:Key="Track">#D8E2E6</Color><Color x:Key="Sidebar">#F1F6F7</Color>
-      <Color x:Key="SidebarLine">#D8E2E5</Color><Color x:Key="SidebarText">#48616D</Color>
-      <Color x:Key="NavSelected">#D5EEEC</Color><Color x:Key="NoticeSurface">#E3F4F3</Color>
-      <Color x:Key="NoticeLine">#BEDDDA</Color><Color x:Key="NoticeText">#3D6669</Color>
-      <Color x:Key="BadgeSurface">#E9F0F5</Color><Color x:Key="BadgeLine">#D1DCE4</Color>
-      <Color x:Key="BadgeText">#465E73</Color><Color x:Key="MapCanvas">#0C141F</Color>
-      <Color x:Key="SubtleText">#6C8290</Color><Color x:Key="DangerSurface">#F5E8EC</Color>
-      <Color x:Key="DangerText">#9B485B</Color><Color x:Key="ActionSurface">#E8F5F4</Color>
-      <Color x:Key="ActionLine">#B7D7D5</Color><Color x:Key="ActionInner">#F6FAFA</Color>
-      <Color x:Key="ActionButton">#D5E8E8</Color><Color x:Key="PrimaryText">#062C2F</Color>
-      <Color x:Key="HeaderSurface">#EEF3F5</Color><Color x:Key="Overlay">#9913232C</Color>
-      <Color x:Key="ModalSurface">#FFFFFF</Color><Color x:Key="ModalLine">#96C3C0</Color>
-      <Color x:Key="OptionSurface">#F6F9FA</Color><Color x:Key="OptionStroke">#D0DEE2</Color>
-      <Color x:Key="OptionIconSurface">#DDF5F2</Color><Color x:Key="OptionIconStroke">#ABD0CD</Color>
-      <Color x:Key="Chevron">#647B88</Color>
+      <Color x:Key="Canvas">#EEF2F3</Color><Color x:Key="Surface">#FAFBFB</Color>
+      <Color x:Key="Line">#CAD5DA</Color><Color x:Key="Accent">#0B8045</Color>
+      <Color x:Key="Ink">#172630</Color><Color x:Key="Muted">#60727D</Color>
+      <Color x:Key="ButtonSurface">#DFE7EA</Color><Color x:Key="Field">#E5EBED</Color>
+      <Color x:Key="Placeholder">#71838E</Color><Color x:Key="SwitchThumb">#FFFFFF</Color>
+      <Color x:Key="Track">#CDD8DC</Color><Color x:Key="Sidebar">#E1E8EA</Color>
+      <Color x:Key="SidebarLine">#C6D2D7</Color><Color x:Key="SidebarText">#485D69</Color>
+      <Color x:Key="NavSelected">#CDE5D7</Color><Color x:Key="NoticeSurface">#DFEDE5</Color>
+      <Color x:Key="NoticeLine">#BAD5C6</Color><Color x:Key="NoticeText">#426456</Color>
+      <Color x:Key="BadgeSurface">#DDE7EA</Color><Color x:Key="BadgeLine">#C4D1D7</Color>
+      <Color x:Key="BadgeText">#435D69</Color><Color x:Key="MapCanvas">#172531</Color>
+      <Color x:Key="SubtleText">#71848F</Color><Color x:Key="DangerSurface">#F2E5E8</Color>
+      <Color x:Key="DangerText">#98495B</Color><Color x:Key="ActionSurface">#DFEDE5</Color>
+      <Color x:Key="ActionLine">#B1CEBE</Color><Color x:Key="ActionInner">#F1F6F3</Color>
+      <Color x:Key="ActionButton">#C7DED1</Color><Color x:Key="PrimaryText">#FFFFFF</Color>
+      <Color x:Key="HeaderSurface">#E2E9EC</Color><Color x:Key="Overlay">#9917232D</Color>
+      <Color x:Key="ModalSurface">#FAFBFB</Color><Color x:Key="ModalLine">#7EAD94</Color>
+      <Color x:Key="OptionSurface">#F1F4F5</Color><Color x:Key="OptionStroke">#CCD7DC</Color>
+      <Color x:Key="OptionIconSurface">#D7EADF</Color><Color x:Key="OptionIconStroke">#A5CBB5</Color>
+      <Color x:Key="Chevron">#657A86</Color>
+      <Color x:Key="Allocated">#1D8BEB</Color><Color x:Key="Fragmented">#F3BF3E</Color>
+      <Color x:Key="Metadata">#37C3DB</Color><Color x:Key="Excluded">#526772</Color>
+      <Color x:Key="FreeSpace">#455B6B</Color><Color x:Key="Activity">#EDF2F4</Color>
+      <Color x:Key="Highlight">#FFD45A</Color>
 
       <Style TargetType="Label"><Setter Property="TextColor" Value="{DynamicResource Ink}" /><Setter Property="FontFamily" Value="OpenSansRegular" /><Setter Property="FontSize" Value="13" /></Style>
       <Style TargetType="Button"><Setter Property="BackgroundColor" Value="{DynamicResource ButtonSurface}" /><Setter Property="TextColor" Value="{DynamicResource Ink}" /><Setter Property="CornerRadius" Value="9" /><Setter Property="FontFamily" Value="OpenSansSemibold" /><Setter Property="FontSize" Value="12" /><Setter Property="Padding" Value="16,11" /><Setter Property="MinimumHeightRequest" Value="38" /></Style>
