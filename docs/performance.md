@@ -9,10 +9,9 @@ BenchmarkDotNet 0.15.8's SDK validator does not recognize .NET 11. The harness t
 | Count allocated bits, 1 MiB | Bit loop: 3.91 ms | POPCNT: 68.44 µs; AVX2: 31.06 µs | AVX2 about 2.2× faster than POPCNT on this machine; all report 0 B allocated |
 | First-fit lookup, 100,000 intervals; only last interval fits | Linear: 43.82 µs | Augmented treap: 47.13 ns | Large improvement for this deliberately adverse linear-search fixture; not representative of every lookup |
 | 640-stream planner, same-run comparison | Archive v1: 614.6 µs / 244,194 B | Pooled v2: 526.4 µs / 28,292 B | About 88.4% less managed allocation; timing difference is preliminary |
-| Aggregate 8,192 display cells | Initial 85.1 µs | First SIMD-dispatch integration: 119.5 µs | Both allocation-free; small per-cell inputs do not benefit from vector dispatch |
-| Aggregate 8,192 cells after small-input dispatch correction | First integration: 119.5 µs | Final: 73.88 µs | 0 B allocated; later-run comparison, not a controlled same-run speedup |
+| Aggregate 8,192 display cells | Current dispatch: 73.88 µs | 0 B allocated | This is a later-run measurement, not a controlled same-run speedup |
 
-The final aggregator dispatches to AVX2 only for at least 64 bytes per aligned cell range; smaller inputs use the original scalar range path. This follows the observed small-cell regression. The included regression tests compare bit counts across unaligned starts and tails. AVX2 has a portable POPCNT/scalar fallback.
+The aggregator dispatches to AVX2 only for at least 64 bytes per aligned cell range; smaller inputs use the scalar range path. Tests compare bit counts across unaligned starts and tails. AVX2 has a portable POPCNT/scalar fallback.
 
 Frozen versions are in `src/Tedd.Defrag.Archive`, including the original planner and interval tree under `Tedd.Defrag.Archive.V1`. Do not optimize archive implementations in place. New candidates should add a comparison, preserve correctness tests, and retain a dated report before replacing an existing algorithm.
 

@@ -20,9 +20,9 @@ dotnet run --project src/Tedd.Defrag.Cli -- tui C:
 
 The dashboard requests administrator access when starting its worker, lists real volumes, and initially selects the system NTFS volume or the first available NTFS volume. Its map remains empty until you choose **Analyze** or **Preview**. Opening the application does not submit a job. If no supported volume is available, disk-operation controls remain disabled. Preview is the CLI default; actual changes require `--execute`. Closing the desktop application cancels its queued and running jobs and stops the worker. Closing the terminal interface detaches from a submitted job.
 
-Simulation mode and the `--demo` option have been removed. Legacy simulation requests are rejected, so they cannot become real disk operations. Synthetic volume fixtures are compiled only into tests and benchmarks.
+Synthetic volume fixtures are compiled only into tests and benchmarks.
 
-Before submitting work, the client checks the worker's build. An idle worker from an older build is replaced automatically; active or queued jobs must finish or be cancelled first. Development worker discovery matches the client build and prefers its Debug/Release configuration, using the worker's complete output directory to preserve runtime dependencies. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them. `scripts/Test-WorkerStartup.ps1 -WorkerPath <exe>` verifies volume discovery and dependency loading without relocation; publishing runs this check for the host architecture.
+Before submitting work, the client confirms the worker build. Active or queued jobs must finish or be cancelled before a different worker build is started. Development worker discovery matches the client build and prefers its Debug/Release configuration. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them. `scripts/Test-WorkerStartup.ps1 -WorkerPath <exe>` verifies volume discovery and dependency loading without relocation; publishing runs this check for the host architecture.
 
 Publish a versioned, self-contained Windows distribution. The Desktop, CLI, and isolated worker are each single-file ReadyToRun executables and are placed together in one ZIP:
 
@@ -99,11 +99,9 @@ Job data lives in `%LOCALAPPDATA%\Tedd.Defrag`. The named-pipe endpoint is restr
 
 The automated suite covers bitmap/SIMD parity, randomized interval reservations, relocation invariants, selection/exclusions, raw versus filesystem-restored MFT records, volume geometry, torn records, malformed runlists, map coverage, resource-arbitration fairness, and concurrent snapshot publication.
 
-The MFT bootstrap correction was verified against both raw and `FSCTL_GET_NTFS_FILE_RECORD` representations of C:'s record 0. A subsequent read-only analysis processed 543,352 records and produced 348,029 stream layouts before returning `Partial` under the 1,024 MiB cap. Its allocation bitmap covers the entire volume; file coverage is explicitly limited. This validates analysis and cap handling on that volume, not relocation safety.
-
 Run `scripts/Test-NativeVhd.ps1` from an elevated shell with the Hyper-V PowerShell module. It creates its own disposable VHDX, generates interleaved test data, verifies SHA-256 contents after actual relocation, and runs a filesystem check. Supply `-ClientPath <cli-exe>` with `-WorkerPath <worker-exe>` to exercise broker submission, dispatch, execution, and polling; `-Operation Pack` selects the packing fixture. On September 10, 2026, full broker tests moved 88 MiB with MinimumWrite and 68.3 MiB with Pack, with zero failed moves, unchanged file hashes, and clean filesystem checks. Both returned partial results because fixture exclusions and placement constraints remained. These fixtures are insufficient to qualify system-volume use; concurrent file changes, worker termination, compressed/sparse files and snapshot-heavy workloads require a larger validation campaign.
 
-BenchmarkDotNet reports and frozen prior implementations are checked in. The first measured pooling change cut planner allocations approximately **88%**, from 244 KB to 28 KB on a 640-stream fixture. This is a synthetic planning measurement, not a disk-throughput claim. See [performance notes and results](docs/performance.md).
+BenchmarkDotNet reports and comparison implementations are checked in. The planner measurement covers allocation and execution time on a 640-stream fixture; it is not a disk-throughput claim. See [performance notes and results](docs/performance.md).
 
 ```powershell
 ./scripts/Benchmark.ps1
