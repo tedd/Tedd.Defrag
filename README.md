@@ -4,7 +4,7 @@ A Windows-first .NET 11 NTFS optimizer with a native **.NET MAUI** dashboard, **
 
 [Project site](https://tedd.github.io/Tedd.Defrag/) · [Download the latest release](https://github.com/tedd/Tedd.Defrag/releases/latest) · [Source code](https://github.com/tedd/Tedd.Defrag)
 
-**Status: engineering preview.** Read-only native analysis has been exercised on C:, including a partial scan under a 1 GiB memory cap. Native NTFS relocation is implemented but has not been validated on a disposable volume. Do not treat this as a production-qualified disk utility. Early-boot execution and registry hive replacement are deliberately unavailable.
+**Status: engineering preview.** Read-only native analysis has been exercised on C:, including a partial scan under a 1 GiB memory cap. Native NTFS relocation has passed two disposable-volume fixtures through the broker, with content hashes and filesystem checks verified. These fixtures do not establish production qualification. Early-boot execution and registry hive replacement are deliberately unavailable.
 
 ## Run
 
@@ -22,7 +22,7 @@ The dashboard requests administrator access when starting its worker, lists real
 
 Simulation mode and the `--demo` option have been removed. Legacy simulation requests are rejected, so they cannot become real disk operations. Synthetic volume fixtures are compiled only into tests and benchmarks.
 
-Before submitting work, the client checks the worker's build. An idle worker from an older build is replaced automatically; active or queued jobs must finish or be cancelled first. Development worker discovery matches the client build and prefers its Debug/Release configuration. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them.
+Before submitting work, the client checks the worker's build. An idle worker from an older build is replaced automatically; active or queued jobs must finish or be cancelled first. Development worker discovery matches the client build and prefers its Debug/Release configuration, using the worker's complete output directory to preserve runtime dependencies. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them. `scripts/Test-WorkerStartup.ps1 -WorkerPath <exe>` verifies volume discovery and dependency loading without relocation; publishing runs this check for the host architecture.
 
 Publish a versioned, self-contained Windows distribution. The Desktop, CLI, and isolated worker are each single-file ReadyToRun executables and are placed together in one ZIP:
 
@@ -101,7 +101,7 @@ The automated suite covers bitmap/SIMD parity, randomized interval reservations,
 
 The MFT bootstrap correction was verified against both raw and `FSCTL_GET_NTFS_FILE_RECORD` representations of C:'s record 0. A subsequent read-only analysis processed 543,352 records and produced 348,029 stream layouts before returning `Partial` under the 1,024 MiB cap. Its allocation bitmap covers the entire volume; file coverage is explicitly limited. This validates analysis and cap handling on that volume, not relocation safety.
 
-Run `scripts/Test-NativeVhd.ps1` from an elevated shell with the Hyper-V PowerShell module. It creates its own disposable VHDX, generates interleaved test data, verifies SHA-256 contents after actual relocation, and runs a filesystem check. **This native test was prepared but not executed here.** A single successful fixture is still insufficient to qualify system-volume use; concurrent file changes, worker termination, compressed/sparse files and snapshot-heavy workloads require a larger validation campaign.
+Run `scripts/Test-NativeVhd.ps1` from an elevated shell with the Hyper-V PowerShell module. It creates its own disposable VHDX, generates interleaved test data, verifies SHA-256 contents after actual relocation, and runs a filesystem check. Supply `-ClientPath <cli-exe>` with `-WorkerPath <worker-exe>` to exercise broker submission, dispatch, execution, and polling; `-Operation Pack` selects the packing fixture. On September 10, 2026, full broker tests moved 88 MiB with MinimumWrite and 68.3 MiB with Pack, with zero failed moves, unchanged file hashes, and clean filesystem checks. Both returned partial results because fixture exclusions and placement constraints remained. These fixtures are insufficient to qualify system-volume use; concurrent file changes, worker termination, compressed/sparse files and snapshot-heavy workloads require a larger validation campaign.
 
 BenchmarkDotNet reports and frozen prior implementations are checked in. The first measured pooling change cut planner allocations approximately **88%**, from 244 KB to 28 KB on a 640-stream fixture. This is a synthetic planning measurement, not a disk-throughput claim. See [performance notes and results](docs/performance.md).
 

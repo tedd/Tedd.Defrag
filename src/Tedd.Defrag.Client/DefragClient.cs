@@ -138,18 +138,8 @@ public sealed class DefragClient
     public static ProcessStartInfo WorkerStart(params string[] args)
     {
         string? configured = Environment.GetEnvironmentVariable("TEDD_DEFRAG_WORKER");
-        string? worker = !string.IsNullOrWhiteSpace(configured) ? configured : null;
-        worker ??= new[] { Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Worker.exe"), Path.Combine(AppContext.BaseDirectory, "worker", "Tedd.Defrag.Worker.exe"), Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "worker", "Tedd.Defrag.Worker.exe")) }.FirstOrDefault(File.Exists);
-        // Development checkout: locate an actually built worker, never build or execute downloaded code implicitly.
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); worker == null && directory != null; directory = directory.Parent)
-        {
-            string project = Path.Combine(directory.FullName, "src", "Tedd.Defrag.Worker", "bin");
-            if (!Directory.Exists(project)) continue;
-            string? configuration = AppContext.BaseDirectory.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .LastOrDefault(p => p.Equals("Debug", StringComparison.OrdinalIgnoreCase) || p.Equals("Release", StringComparison.OrdinalIgnoreCase));
-            worker = SelectDevelopmentWorker(Directory.EnumerateFiles(project, "Tedd.Defrag.Worker.exe", SearchOption.AllDirectories),
-                configuration, path => FileVersionInfo.GetVersionInfo(path).ProductVersion, File.GetLastWriteTimeUtc);
-        }
+        string? worker = LocateWorker(AppContext.BaseDirectory, configured,
+            path => FileVersionInfo.GetVersionInfo(path).ProductVersion, File.GetLastWriteTimeUtc);
         if (worker == null || !File.Exists(worker)) throw new FileNotFoundException($"Build Tedd.Defrag.Worker for client build {BrokerProtocol.BuildVersion}, or place the matching published worker beside the application.", worker);
         string? workerBuild = FileVersionInfo.GetVersionInfo(worker).ProductVersion;
         if (workerBuild != BrokerProtocol.BuildVersion)
@@ -157,6 +147,29 @@ public sealed class DefragClient
         var info = new ProcessStartInfo(worker) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(worker)! };
         foreach (string arg in args) info.ArgumentList.Add(arg);
         return info;
+    }
+
+    internal static string? LocateWorker(string baseDirectory, string? configured,
+        Func<string, string?> readBuild, Func<string, DateTime> lastWrite)
+    {
+        if (!string.IsNullOrWhiteSpace(configured)) return configured;
+        // In a checkout the worker must use its own complete build output. A
+        // project reference can leave an executable and portable deps.json beside
+        // MAUI's flattened runtime assets; that copy is not a runnable worker.
+        if (!File.Exists(Path.Combine(baseDirectory, "release-manifest.json")))
+        {
+            string? configuration = baseDirectory.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .LastOrDefault(p => p.Equals("Debug", StringComparison.OrdinalIgnoreCase) || p.Equals("Release", StringComparison.OrdinalIgnoreCase));
+            for (var directory = new DirectoryInfo(baseDirectory); directory != null; directory = directory.Parent)
+            {
+                string project = Path.Combine(directory.FullName, "src", "Tedd.Defrag.Worker", "bin");
+                if (!Directory.Exists(project)) continue;
+                return SelectDevelopmentWorker(Directory.EnumerateFiles(project, "Tedd.Defrag.Worker.exe", SearchOption.AllDirectories),
+                    configuration, readBuild, lastWrite);
+            }
+        }
+        return new[] { Path.Combine(baseDirectory, "Tedd.Defrag.Worker.exe"), Path.Combine(baseDirectory, "worker", "Tedd.Defrag.Worker.exe"),
+            Path.GetFullPath(Path.Combine(baseDirectory, "..", "worker", "Tedd.Defrag.Worker.exe")) }.FirstOrDefault(File.Exists);
     }
 
     internal static string? SelectDevelopmentWorker(IEnumerable<string> candidates, string? configuration,

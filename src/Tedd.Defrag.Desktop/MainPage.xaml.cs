@@ -245,7 +245,8 @@ public partial class MainPage : ContentPage
         {
             Guid id = session.JobId; var reply = await _client.Send(new("get", Id: id));
             if (id == session.JobId && reply.Snapshot != null &&
-                (reply.Snapshot.Id != session.Snapshot?.Id || reply.Snapshot.UpdatedAt != session.Snapshot.UpdatedAt))
+                (reply.Snapshot.Id != session.Snapshot?.Id || reply.Snapshot.UpdatedAt != session.Snapshot.UpdatedAt ||
+                    reply.Snapshot.State != session.Snapshot.State || reply.Snapshot.Message != session.Snapshot.Message))
                 Apply(reply.Snapshot, session);
         }
         catch (Exception e) { FooterStatus.Text = e.Message; }

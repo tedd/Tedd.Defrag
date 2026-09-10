@@ -73,6 +73,13 @@ try {
     Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination $bundle
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $bundle
 
+    # Probe the actual deployment directory, not a test assembly's dependency
+    # context. Cross-compiled ARM64 packages cannot execute on an x64 runner.
+    $hostRuntime = 'win-' + [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+    if ($Runtime -eq $hostRuntime) {
+        & (Join-Path $PSScriptRoot 'Test-WorkerStartup.ps1') -WorkerPath (Join-Path $bundle 'Tedd.Defrag.Worker.exe')
+    }
+
     $manifest = [ordered]@{ version = $Version; runtime = $Runtime; assetName = $assetName }
     $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle 'release-manifest.json') -Encoding utf8NoBOM
 

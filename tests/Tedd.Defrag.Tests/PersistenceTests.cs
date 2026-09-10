@@ -6,6 +6,30 @@ namespace Tedd.Defrag.Tests;
 
 public class PersistenceTests
 {
+    [Theory]
+    [InlineData(JobState.Failed)]
+    [InlineData(JobState.Cancelled)]
+    public void DispatchFailureOrCancellationAdvancesTheSnapshotObservedByPollingClients(JobState state)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new JobStore(root);
+            // Also covers wall-clock adjustments: a state transition must advance
+            // the publication stamp even if the previous stamp is in the future.
+            var queued = new JobSnapshot(Guid.NewGuid(), "V:", Operation.Pack, JobState.Queued,
+                "Queued", 0, 0, 0, 0, 0, DateTimeOffset.UtcNow.AddMinutes(1));
+            store.Save(queued);
+            store.Save(queued.Transition(state, "Failed before execution"));
+
+            var observed = Assert.IsType<JobSnapshot>(store.ReadSnapshot(queued.Id));
+            Assert.Equal(state, observed.State);
+            Assert.True(observed.UpdatedAt > queued.UpdatedAt);
+            Assert.Equal(observed.UpdatedAt, store.ReadReport(queued.Id)!.UpdatedAt);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
     [Fact]
     public async Task ConcurrentSnapshotReadersNeverObservePartialJson()
     {

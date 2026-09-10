@@ -157,6 +157,31 @@ public sealed class WorkerVersionTests
         Assert.Null(reply.Worker);
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void CheckoutUsesCompleteWorkerOutputWhilePackagesUseBundledWorker(bool packaged, bool matchingBuild)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            string desktop = Path.Combine(root, "src", "Tedd.Defrag.Desktop", "bin", "Release", "win-x64");
+            string worker = Path.Combine(root, "src", "Tedd.Defrag.Worker", "bin", "Release", "Tedd.Defrag.Worker.exe");
+            Directory.CreateDirectory(desktop); Directory.CreateDirectory(Path.GetDirectoryName(worker)!);
+            string adjacent = Path.Combine(desktop, "Tedd.Defrag.Worker.exe");
+            File.WriteAllText(adjacent, "incomplete project-reference copy");
+            File.WriteAllText(worker, "complete worker output");
+            if (packaged) File.WriteAllText(Path.Combine(desktop, "release-manifest.json"), "{}");
+
+            string? selected = DefragClient.LocateWorker(desktop, null,
+                path => path == adjacent || matchingBuild ? BrokerProtocol.BuildVersion : "old", _ => DateTime.UtcNow);
+
+            Assert.Equal(packaged ? adjacent : matchingBuild ? worker : null, selected);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
     private sealed class BrokerFixture
     {
         private string? _build;

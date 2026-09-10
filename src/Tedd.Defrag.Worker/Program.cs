@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO.Pipes;
+using System.Text.Json;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Engine;
 using Tedd.Defrag.Persistence;
@@ -13,6 +14,18 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["--probe", var root])
+        {
+            try
+            {
+                // Exercise the same dependency loading and discovery as job
+                // dispatch without opening a volume for writes or creating a job.
+                var volume = VolumeDiscovery.Get(root);
+                Console.WriteLine(JsonSerializer.Serialize(new { WorkerBuild = BrokerProtocol.BuildVersion, Volume = volume }, JobStore.Json));
+                return 0;
+            }
+            catch (Exception e) { Console.Error.WriteLine(e); return 1; }
+        }
         var store = new JobStore();
         if (args.Length == 2 && args[0] == "--execute" && Guid.TryParse(args[1], out var id))
         {
@@ -38,7 +51,7 @@ internal static class Program
             }
             return store.ReadSnapshot(id)?.State == JobState.Failed ? 1 : 0;
         }
-        if (args is not ["--broker"]) { Console.WriteLine("Tedd.Defrag.Worker --broker | --execute <job-id>"); return 2; }
+        if (args is not ["--broker"]) { Console.WriteLine("Tedd.Defrag.Worker --broker | --execute <job-id> | --probe <volume>"); return 2; }
         using var mutex = new Mutex(true, "Local\\" + BrokerProtocol.PipeName, out bool owns);
         if (!owns) return 0;
         using var cancellation = new CancellationTokenSource();
@@ -166,7 +179,7 @@ internal sealed class Broker
                 {
                     var job = _queue.Dequeue();
                     if (_store.ReadControl(job.Id) == "cancel")
-                    { _store.Save(_store.ReadSnapshot(job.Id)! with { State = JobState.Cancelled, Message = "Cancelled before execution" }); _arbiter.Release(job.Id); continue; }
+                    { _store.Save(_store.ReadSnapshot(job.Id)!.Transition(JobState.Cancelled, "Cancelled before execution")); _arbiter.Release(job.Id); continue; }
                     if (!_resources.TryGetValue(job.Id, out var resources))
                     {
                         try
@@ -175,7 +188,7 @@ internal sealed class Broker
                             if (settings.ManualResourceGroups.TryGetValue(job.Volume, out var manual)) resources = [.. resources, .. manual.Select(s => "manual:" + s)];
                             _resources[job.Id] = resources;
                         }
-                        catch (Exception e) { _store.Save(_store.ReadSnapshot(job.Id)! with { State = JobState.Failed, Message = e.Message }); continue; }
+                        catch (Exception e) { FailBeforeExecution(job, e); continue; }
                     }
                     if (!_arbiter.TryAcquire(job.Id, job.Volume, resources, settings)) { _queue.Enqueue(job); continue; }
                     try
@@ -191,11 +204,19 @@ internal sealed class Broker
                         }
                         _active.Add(job.Id, Process.Start(info) ?? throw new IOException("Unable to launch isolated worker."));
                     }
-                    catch (Exception e) { _arbiter.Release(job.Id); _store.Save(_store.ReadSnapshot(job.Id)! with { State = JobState.Failed, Message = e.Message }); }
+                    catch (Exception e) { _arbiter.Release(job.Id); FailBeforeExecution(job, e); }
                 }
             }
             try { await Task.Delay(500, token); } catch (OperationCanceledException) { break; }
         }
+    }
+
+    private void FailBeforeExecution(JobRequest job, Exception error)
+    {
+        var snapshot = _store.ReadSnapshot(job.Id)!;
+        _store.Save(snapshot.Transition(JobState.Failed, error.Message) with { WorkerBuild = BrokerProtocol.BuildVersion });
+        File.WriteAllText(Path.Combine(_store.JobDirectory(job.Id), "worker-error.txt"), error.ToString());
+        _resources.Remove(job.Id);
     }
 
     private void BeginShutdown()

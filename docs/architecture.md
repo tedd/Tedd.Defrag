@@ -23,6 +23,8 @@ The GUI and terminal submit the same `JobRequest`. The broker records intent and
 
 The client performs a build handshake before submitting jobs. A legacy or mismatched broker is retired only after a matching replacement executable has been located and the broker confirms it has no queued or active work. The client waits for the old pipe to disappear and verifies the replacement's build before submitting the command once. A stopping broker rejects new work. Submission commands also carry the client build, so a broker replacement between handshake and submission cannot silently run a different build. Read-only status and job controls remain available without replacing a busy older broker. Ping replies identify the running build, PID, and executable; terminal reports record the executing worker build.
 
+Development clients locate the matching worker in its own build output. The desktop builds the worker without copying its portable dependency manifest into the desktop's RID-specific output, which would invalidate runtime asset paths. Packaged distributions use their adjacent published worker. The read-only worker startup probe exercises volume discovery from the actual executable, including runtime dependency loading. Dispatch failures publish a terminal state with an advancing timestamp and retain the exception in the job directory; desktop polling also detects state and message changes independently of timestamps.
+
 Application startup discovers real volumes without starting analysis or optimization. The simulation execution path is removed; synthetic layouts are linked only into tests and benchmarks from `tests/Fixtures`. The legacy JSON `Demo` flag remains recognizable solely to reject old simulation requests before storage access. Queued legacy jobs fail validation.
 
 The current broker is an elevated desktop-user agent. It is not hardened for arbitrary users submitting work to a SYSTEM identity. Current-user pipe restrictions, bounded frames, request validation and worker-side volume/path checks reduce exposure, but a formal threat model and adversarial local IPC/storage testing are still release requirements. Persistent files inherit the profile directory's access controls. Never change the service account to SYSTEM or share the job directory.
@@ -63,7 +65,7 @@ Virtual-disk pre-zeroing creates a uniquely named, uncompressed, non-sparse, del
 
 ## Boundaries requiring further work
 
-* Native relocation has not been exercised. Elevated read-only C: analysis and its memory-limited partial result have been verified.
+* Native MinimumWrite and Pack relocation have passed disposable NTFS VHD fixtures through broker dispatch, with SHA-256 and filesystem verification. Concurrent mutation, interruption, and broader storage configurations still require validation. Elevated read-only C: analysis and its memory-limited partial result have also been verified.
 * BootExecute is an NT-native execution environment, not ordinary .NET. No early-boot helper is included.
 * A startup task is online operation. There is no bundled WinPE environment or offline registry replacement.
 * Hard-linked, sparse/compressed/encrypted, reparse-point and ordinary extension-attribute streams are conservative non-movement cases.

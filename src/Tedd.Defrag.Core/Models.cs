@@ -110,6 +110,11 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     string? WorkerBuild = null)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
+    public JobSnapshot Transition(JobState state, string message)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return this with { State = state, Message = message, UpdatedAt = now > UpdatedAt ? now : UpdatedAt.AddTicks(1) };
+    }
 }
 public readonly record struct MapCell(long Clusters, long Allocated, long Fragmented, long Metadata, long Excluded, long Moving, long Verified);
 public sealed record FileSummary(string Path, string Stream, int Extents, long Bytes, string Status);

@@ -28,6 +28,9 @@
     <ProjectReference Include="../Tedd.Defrag.Update/Tedd.Defrag.Update.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Windows/Tedd.Defrag.Windows.csproj" />
-    <ProjectReference Include="..\Tedd.Defrag.Worker\Tedd.Defrag.Worker.csproj" />
+    <!-- Build the worker with the desktop, but keep its own dependency layout.
+         Copying its portable deps.json into the RID-specific MAUI output breaks
+         runtime asset resolution (for example System.Management). -->
+    <ProjectReference Include="../Tedd.Defrag.Worker/Tedd.Defrag.Worker.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 </Project>
