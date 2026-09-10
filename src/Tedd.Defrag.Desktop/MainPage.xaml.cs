@@ -7,9 +7,9 @@ using Tedd.Defrag.Update;
 using Tedd.Defrag.Visualization;
 using Tedd.Defrag.Windows;
 using Microsoft.UI.Xaml.Input;
-using Microsoft.Maui.Storage;
 using Windows.System;
 using WinUIElement = Microsoft.UI.Xaml.UIElement;
+using WinUIWindow = Microsoft.UI.Xaml.Window;
 
 namespace Tedd.Defrag.Desktop;
 
@@ -83,7 +83,7 @@ public partial class MainPage : ContentPage
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             Task.Run(() => _client.ShutdownWorker(timeout.Token)).GetAwaiter().GetResult();
         }
-        catch (Exception exception) when (exception is OperationCanceledException or TimeoutException or IOException)
+        catch (Exception exception)
         {
             System.Diagnostics.Debug.WriteLine(exception);
         }
@@ -778,13 +778,16 @@ public partial class MainPage : ContentPage
     private async void OnLocateFile(object? sender, EventArgs e)
     {
         var session = CurrentSession; if (session == null || session.JobId == Guid.Empty) return;
-        FileResult? result = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = "Locate a file in the allocation map" });
-        if (result == null) return;
-        _regionRequest++;
+        if (!LocateFileButton.IsEnabled) return;
+        LocateFileButton.IsEnabled = false;
         try
         {
+            string? path = WindowsFilePicker.Pick(Window?.Handler?.PlatformView as WinUIWindow,
+                "Locate a file in the allocation map");
+            if (path == null) return;
+            _regionRequest++;
             var reply = await _client.Send(new("explore", Id: session.JobId, StartCluster: _map.StartCluster,
-                ClusterCount: _map.ClusterCount, Path: result.FullPath));
+                ClusterCount: _map.ClusterCount, Path: path));
             if (!ReferenceEquals(session, CurrentSession)) return;
             var selection = reply.Region?.Selection;
             if (selection == null)
@@ -802,6 +805,7 @@ public partial class MainPage : ContentPage
             DiskMap.Invalidate();
         }
         catch (Exception exception) { await DisplayAlertAsync("File could not be located", exception.Message, "Close"); }
+        finally { LocateFileButton.IsEnabled = true; }
     }
     private void ApplyFileSelection(MapFileSelection? selection)
     {
