@@ -24,21 +24,27 @@ Synthetic volume fixtures are compiled only into tests and benchmarks.
 
 Before submitting work, the client confirms the worker build. Active or queued jobs must finish or be cancelled before a different worker build is started. Development worker discovery matches the client build and prefers its Debug/Release configuration. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them. `scripts/Test-WorkerStartup.ps1 -WorkerPath <exe>` verifies volume discovery and dependency loading without relocation; publishing runs this check for the host architecture.
 
-Publish a versioned, self-contained Windows distribution. The Desktop, CLI, and isolated worker are each single-file ReadyToRun executables and are placed together in one ZIP:
+Publish versioned, self-contained Windows distributions. The Desktop, CLI, and isolated worker are each single-file ReadyToRun executables. WiX packages the same payload as an MSI, an EXE bootstrapper, and a stand-alone ZIP:
 
 ```powershell
 ./scripts/Publish.ps1 -Runtime win-x64 -Version 0.1.0
 # artifacts/dist/Tedd.Defrag-win-x64.zip
 # artifacts/dist/Tedd.Defrag-win-x64.zip.sha256
+# artifacts/dist/Tedd.Defrag-win-x64.msi
+# artifacts/dist/Tedd.Defrag-Setup-win-x64.exe
 ```
 
-Extract the ZIP and run either `Tedd.Defrag.Desktop.exe` or `Tedd.Defrag.Cli.exe`; no .NET installation is required. Keep all three executables together because the separately elevated worker isolates privileged disk operations. Release builds check GitHub for a newer version at startup. With consent, they download the matching architecture, verify its published SHA-256 checksum, stop an idle worker, atomically replace the extracted application directory, and restart. Active jobs must finish or be cancelled first. `TEDD_DEFRAG_WORKER` can point to another built worker executable.
+For a conventional installation, download the architecture-matched `Tedd.Defrag-Setup-win-*.exe` or MSI. Both install under Program Files, add a Start menu shortcut, and register an uninstaller in Windows **Installed apps**. The EXE is appropriate for interactive installation; the MSI supports standard Windows Installer deployment and removal. Packages are not currently code-signed, so Windows may identify the publisher as unknown. No .NET installation is required.
+
+For stand-alone use, extract `Tedd.Defrag-win-*.zip` and run either `Tedd.Defrag.Desktop.exe` or `Tedd.Defrag.Cli.exe`. Keep all three executables together because the separately elevated worker isolates privileged disk operations. The ZIP does not register an uninstaller; remove its extracted directory to uninstall it.
+
+Release builds check GitHub Releases for a newer stable version at startup. With consent, installed copies download and run the architecture-matched verified EXE installer; portable copies download the matching ZIP and atomically replace their extracted application directory. Every automatic update verifies the release asset against its published SHA-256 checksum before execution or extraction. Active jobs must finish or be cancelled first. `TEDD_DEFRAG_WORKER` can point to another built worker executable.
 
 ## Capabilities
 
 | Area | Implementation |
 |---|---|
-| NTFS scan | Batched raw MFT reads; validated update-sequence fixups, signed runlists, names and streams; MFT extension mapping; allocation bitmap from Windows |
+| NTFS scan | Bounded parallel raw MFT reads and record parsing; independent handles and 1 MiB buffers; ordered inventory assembly; validated update-sequence fixups, signed runlists, names and streams; allocation bitmap from Windows |
 | Placement | Minimum-write, files-only, pack, pack + defrag, alphabetical, size, creation/modification time, extension, directory locality, shrink boundary |
 | Constraints | Recursive path/glob exclusions, selected objects only, file size and fragment-count filters, optional relocation-byte/time budgets, no supporting moves of unrelated files |
 | Maintenance | Windows ReTRIM, slab consolidation, automatic optimization; capability reporting; bounded virtual-disk pre-zeroing with delete-on-close files |
@@ -61,9 +67,15 @@ The raw scanner does not recursively traverse directories. It deduplicates file 
 | Bandwidth | Optional cooperative average pacing of **custom relocation and zeroing payload**; `0` disables pacing and nonzero values have no application maximum. It does not cap raw scan reads, total physical traffic, Windows optimizer traffic, or SSD write amplification. |
 | Priority | Windows background processing mode in the isolated worker; the broker and interfaces retain normal responsiveness. |
 | Idle/power | Sustained inactivity in the worker's interactive session; other active sessions with unknown activity pause execution. AC power can be required. No new custom moves while paused; an in-flight filesystem request can finish. |
-| Concurrency | Limits simultaneous volumes and jobs sharing discovered resources. A per-volume cross-process mutex remains mandatory, including with the shared-storage override. |
+| Concurrency | Separate limits for volumes/shared resources, MFT workers (0–32), planner sort workers (0–32), and outstanding file moves (1–16). A per-volume cross-process mutex remains mandatory. |
 
 Quiet, Balanced and Performance presets are editable. Resource settings are captured when a job is submitted, not applied retroactively to running work. Leaving all cores eligible is the default. Affinity can reduce competition but SMT siblings and kernel work may still share caches.
+
+Performance selects four MFT workers and a move queue depth of four. Balanced and Quiet retain one outstanding move. Zero scan/planner workers means automatic selection based on CPU policy; scan concurrency is additionally bounded by memory headroom. Planner inventories below 8,192 streams use one sorting worker. Free-space enumeration skips uniform bitmap blocks with 256-bit or 128-bit SIMD where available. Sorting can run across partitions, followed by a deterministic merge; destination reservations and ancestry resolution remain serial. MFT record validation is scalar. GPU compute is not used.
+
+Relocation overlaps independent file identities, retaining the original move sequence within each file, including named streams. Each worker borrows an independent volume handle. Metadata operations use queue depth one. Journaling and layout mutation stay on the coordinator; cancellation drains submitted requests, and failed moves trigger a bitmap refresh before another batch can recycle freed space. Deeper queues permit more outstanding work but can increase seeks on HDDs; they do not establish device saturation or higher throughput.
+
+The desktop opens **Performance details** when a job starts; the same button reopens it. The popup shows phase progress, counts, worker limits/activity/peaks, requests in flight, average rates, process threads, CPU time, memory and acceleration paths. These are application observations, not physical device queue measurements. The same telemetry is stored in JSON snapshots and reports. Historical reports without telemetry remain readable.
 
 ## CLI examples
 
@@ -74,6 +86,7 @@ Tedd.Defrag.Cli.exe optimize D: --policy MinimumWrite --budget-mib 1024 --wait
 Tedd.Defrag.Cli.exe defrag --path 'D:\Data\archive.bin' --execute --wait
 Tedd.Defrag.Cli.exe optimize D: --exclude 'D:\VMs' --exclude '*\cache\*' --execute --wait
 Tedd.Defrag.Cli.exe optimize D: --cpu 20 --memory 512 --io 16 --affinity 0xF0 --wait
+Tedd.Defrag.Cli.exe optimize D: --preset performance --scan-workers 4 --planning-workers 4 --move-queue 4 --wait
 Tedd.Defrag.Cli.exe trim D: --execute --wait
 Tedd.Defrag.Cli.exe jobs list --json
 Tedd.Defrag.Cli.exe jobs pause <id>

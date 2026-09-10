@@ -1,6 +1,7 @@
 # Administrator + Hyper-V PowerShell module required. This test operates only on its newly created VHDX.
 param([Parameter(Mandatory)][string]$WorkerPath, [string]$ClientPath,
     [ValidateSet('MinimumWrite','Pack')][string]$Operation = 'MinimumWrite',
+    [ValidateRange(1,16)][int]$MoveQueueDepth = 1, [ValidateRange(1,32)][int]$ScanWorkers = 1,
     [ValidatePattern('^[D-Z]$')][string]$DriveLetter = 'R', [switch]$KeepDisk)
 $ErrorActionPreference = 'Stop'
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -41,7 +42,7 @@ try {
         try {
             $env:TEDD_DEFRAG_WORKER = $worker
             # Exercise submission, dispatch, child launch, and status polling too.
-            $output = & $client optimize "${DriveLetter}:" --policy $Operation --path $fixture --exclude (Join-Path $fixture '0.bin') --min-fragments 2 --allow-ssd --budget-mib 256 --minutes 10 --memory 1024 --cpu 50 --io 64 --allow-battery --execute --wait --json --no-update-check
+            $output = & $client optimize "${DriveLetter}:" --policy $Operation --path $fixture --exclude (Join-Path $fixture '0.bin') --min-fragments 2 --allow-ssd --budget-mib 256 --minutes 10 --memory 1024 --cpu 50 --io 0 --move-queue $MoveQueueDepth --scan-workers $ScanWorkers --allow-battery --execute --wait --json --no-update-check
             if ($LASTEXITCODE -notin 0,3) { throw "Native broker job failed: $output" }
             $result = ($output -join "`n") | ConvertFrom-Json
         } finally { $env:TEDD_DEFRAG_WORKER = $previousWorker }
@@ -49,7 +50,7 @@ try {
         $id = [Guid]::NewGuid()
         $jobDir = Join-Path $env:LOCALAPPDATA ('Tedd.Defrag\jobs\' + $id.ToString('N'))
         New-Item -ItemType Directory -Path $jobDir | Out-Null
-        $request = @{ Id=$id.ToString(); Volume="${DriveLetter}:\"; Operation=$Operation; Preview=$false; SelectedPaths=@($fixture); Exclusions=@((Join-Path $fixture '0.bin')); MinimumFragments=2; AllowSsdRelocation=$true; MaxMoveBytes=256MB; MaxMinutes=10; Resources=@{MemoryMiB=1024;CpuPercent=50;IoMiBPerSecond=64;AcOnly=$false;Background=$true} }
+        $request = @{ Id=$id.ToString(); Volume="${DriveLetter}:\"; Operation=$Operation; Preview=$false; SelectedPaths=@($fixture); Exclusions=@((Join-Path $fixture '0.bin')); MinimumFragments=2; AllowSsdRelocation=$true; MaxMoveBytes=256MB; MaxMinutes=10; Resources=@{MemoryMiB=1024;CpuPercent=50;IoMiBPerSecond=0;AcOnly=$false;Background=$true;MoveQueueDepth=$MoveQueueDepth;ScanWorkers=$ScanWorkers} }
         $request | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $jobDir 'request.json') -Encoding utf8NoBOM
         & $worker --execute $id.ToString()
         $result = Get-Content -LiteralPath (Join-Path $jobDir 'snapshot.json') -Raw | ConvertFrom-Json

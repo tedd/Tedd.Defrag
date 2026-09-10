@@ -93,8 +93,11 @@ public partial class MainPage : ContentPage
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             AvailableRelease? release = await ReleaseUpdater.CheckForUpdateAsync(timeout.Token);
             if (release is null) return;
+            string action = release.PackageKind == ReleasePackageKind.Installer
+                ? "run the verified installer, and restart"
+                : "replace this portable copy and restart";
             bool install = await DisplayAlertAsync("Update available",
-                $"Tedd.Defrag {release.DisplayVersion} is available. Download the verified release, replace this installation, and restart?",
+                $"Tedd.Defrag {release.DisplayVersion} is available. Download the release, verify its SHA-256 checksum, {action}?",
                 "Download and restart", "Later");
             if (!install) return;
             try { await _client.Send(new("stop")); }
@@ -155,7 +158,7 @@ public partial class MainPage : ContentPage
     {
         _volume = volume; _map.SetRegion(0, 0, 0, []);
         _overview.Cells = []; _overview.TotalClusters = _overview.StartCluster = _overview.ClusterCount = 0;
-        ClearFileHighlight(); ClusterOverlay.IsVisible = false;
+        ClearFileHighlight(); ClusterOverlay.IsVisible = false; DiagnosticsOverlay.IsVisible = false;
         _map.EmptyMessage = volume == null ? "Connect a volume and refresh to begin." :
             volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS volume to analyze its allocation.";
         DiskMap.Invalidate();
@@ -200,6 +203,8 @@ public partial class MainPage : ContentPage
             SelectedPaths = string.IsNullOrWhiteSpace(SelectedPath.Text) ? [] : [SelectedPath.Text.Trim()],
             Exclusions = (ExclusionEntry.Text ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
             Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = ParseInt(MemoryEntry.Text, "Memory cap"), IoMiBPerSecond = ParseInt(IoEntry.Text, "Relocation bandwidth"),
+                ScanWorkers = ParseInt(ScanWorkersEntry.Text, "MFT workers"), PlanningWorkers = ParseInt(PlanningWorkersEntry.Text, "Planner workers"),
+                MoveQueueDepth = ParseInt(MoveQueueEntry.Text, "Move queue depth", 1),
                 AffinityMask = string.IsNullOrWhiteSpace(AffinityEntry.Text) ? 0 : Convert.ToUInt64(AffinityEntry.Text.Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
                 IdleOnly = IdleSwitch.IsToggled, AcOnly = AcSwitch.IsToggled, Background = BackgroundSwitch.IsToggled },
             MaxMoveBytes = ParseMiB(BudgetEntry.Text, "Write budget"), MaxMinutes = ParseInt(MinutesEntry.Text, "Time limit"),
@@ -231,6 +236,10 @@ public partial class MainPage : ContentPage
             var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS volume first.");
             session.JobId = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
             session.AwaitingReport = session.JobId;
+            DiagnosticsTitle.Text = "Waiting for worker"; DiagnosticsCount.Text = "Queued";
+            DiagnosticsProcess.Text = DiagnosticsAcceleration.Text = ""; DiagnosticsProgress.Progress = 0;
+            ScanDiagnosticsText.Text = PlanningDiagnosticsText.Text = ExecutionDiagnosticsText.Text = "Pending";
+            DiagnosticsBusy.IsRunning = true; DiagnosticsOverlay.IsVisible = true;
             ResetMapView(); FooterStatus.Text = "●  Job submitted · closing the application stops it"; await Poll();
         }
         catch (Exception e) { await DisplayAlertAsync("Job could not start", e.Message, "Close"); FooterStatus.Text = e.Message; }
@@ -295,13 +304,55 @@ public partial class MainPage : ContentPage
         FileList.ItemsSource = session.Files;
         WarningsText.Text = string.Join("\n", snapshot.Warnings ?? []);
         FooterStatus.Text = $"●  {snapshot.Volume} · {snapshot.State} · application worker";
+        RenderDiagnostics(snapshot);
         UpdateVolumeActions();
+    }
+    private void OnPerformanceDetails(object? sender, EventArgs e)
+    {
+        if (CurrentSession?.Snapshot is not { } snapshot) return;
+        RenderDiagnostics(snapshot); DiagnosticsOverlay.IsVisible = true;
+    }
+    private void OnClosePerformanceDetails(object? sender, EventArgs e) => DiagnosticsOverlay.IsVisible = false;
+    private void RenderDiagnostics(JobSnapshot snapshot)
+    {
+        var d = snapshot.Diagnostics;
+        var current = snapshot.State switch
+        {
+            JobState.Scanning => d?.Scan,
+            JobState.Planning => d?.Planning,
+            JobState.Running => d?.Execution,
+            _ => null
+        };
+        DiagnosticsTitle.Text = snapshot.IsTerminal || current == null ? $"{snapshot.Operation} · {snapshot.State}" : current.Phase;
+        DiagnosticsBusy.IsRunning = !snapshot.IsTerminal && snapshot.State is not (JobState.Paused or JobState.WaitingForIdle);
+        DiagnosticsProgress.Progress = current?.Total > 0 ? Math.Clamp((double)current.Completed / current.Total, 0, 1) : Math.Clamp(snapshot.Progress, 0, 1);
+        DiagnosticsCount.Text = current?.Total > 0 ? $"{current.Completed:N0} / {current.Total:N0} {current.Unit} · phase progress" : snapshot.Message;
+        DiagnosticsPause.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
+        DiagnosticsPause.IsEnabled = DiagnosticsCancel.IsEnabled = !snapshot.IsTerminal;
+        DiagnosticsProcess.Text = d == null ? "This worker has not published performance telemetry." :
+            $"Elapsed {TimeSpan.FromMilliseconds(snapshot.ElapsedMilliseconds):g} · {d.LogicalProcessors:N0} logical processors · {d.ProcessThreads:N0} process threads\n" +
+            $"CPU time {d.CpuMilliseconds / 1000:N1} s · CPU ceiling {snapshot.CpuPercent}% · committed memory {Format.Bytes(d.PrivateBytes)}\n" +
+            $"{snapshot.PlannedMoves:N0} planned · {snapshot.VerifiedMoves:N0} verified · {snapshot.FailedMoves:N0} failed moves · {Format.Bytes(snapshot.BytesMoved)} relocated";
+        ScanDiagnosticsText.Text = Describe(d?.Scan);
+        PlanningDiagnosticsText.Text = Describe(d?.Planning);
+        ExecutionDiagnosticsText.Text = Describe(d?.Execution);
+        DiagnosticsAcceleration.Text = d == null ? "" : $"Map: {d.MapAcceleration}";
+        static string Describe(WorkProgress? p)
+        {
+            if (p == null) return "Pending / not applicable";
+            string rate = p.ElapsedMilliseconds > 0 ? $" · {p.Completed * 1000d / p.ElapsedMilliseconds:N0} {p.Unit}/s" : "";
+            string bytes = p.BytesProcessed > 0 ? $"\n{Format.Bytes(p.BytesProcessed)} processed · {Format.Bytes((long)(p.BytesProcessed * 1000d / Math.Max(1, p.ElapsedMilliseconds)))}/s" : "";
+            return $"{p.Phase}: {p.Completed:N0} / {p.Total:N0} {p.Unit}{rate}\n" +
+                $"Workers {p.ActiveWorkers:N0} active / {p.WorkerLimit:N0} limit · peak {p.PeakWorkers:N0} · requests in flight {p.InFlightIo:N0} / peak {p.PeakIo:N0}" +
+                bytes + $"\n{p.Acceleration}\n{p.Detail}";
+        }
     }
     private void PresentCompletionIfNeeded(VolumeSession session)
     {
         if (session.Snapshot is { IsTerminal: true } snapshot && snapshot.Id == session.AwaitingReport)
         {
             session.AwaitingReport = Guid.Empty;
+            DiagnosticsOverlay.IsVisible = false;
             _ = ShowCompletionReport(snapshot);
         }
     }
@@ -513,6 +564,9 @@ public partial class MainPage : ContentPage
         if (ResourcePreset.SelectedIndex < 0 || CpuSlider == null) return;
         var p = ResourcePreset.SelectedIndex switch { 0 => ResourcePolicy.Quiet, 2 => ResourcePolicy.Performance, _ => ResourcePolicy.Balanced };
         CpuSlider.Value = p.CpuPercent; MemoryEntry.Text = p.MemoryMiB.ToString(CultureInfo.InvariantCulture); IoEntry.Text = p.IoMiBPerSecond.ToString(CultureInfo.InvariantCulture); IdleSwitch.IsToggled = p.IdleOnly; AcSwitch.IsToggled = p.AcOnly; BackgroundSwitch.IsToggled = p.Background;
+        ScanWorkersEntry.Text = p.ScanWorkers.ToString(CultureInfo.InvariantCulture);
+        PlanningWorkersEntry.Text = p.PlanningWorkers.ToString(CultureInfo.InvariantCulture);
+        MoveQueueEntry.Text = p.MoveQueueDepth.ToString(CultureInfo.InvariantCulture);
     }
     private void OnToggleAdvanced(object? sender, EventArgs e)
     { AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible; AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide advanced" : "Show advanced"; }

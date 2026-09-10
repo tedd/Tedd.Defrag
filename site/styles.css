@@ -121,7 +121,7 @@ h1 em { color: transparent; font-style: normal; -webkit-text-stroke: 1.5px #6981
 .reference-links { display: flex; flex-direction: column; gap: .55rem; margin-top: 2rem; color: var(--aqua-dark); font: 600 .78rem var(--display); text-decoration: underline; text-underline-offset: 4px; }
 
 .free { background: #fff; }
-.free-card { max-width: 1250px; display: grid; grid-template-columns: .7fr 1.3fr; margin: 0 auto; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(34, 70, 70, .12); }
+.free-card { max-width: 1450px; display: grid; grid-template-columns: .55fr 1.45fr; margin: 0 auto; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(34, 70, 70, .12); }
 .price-block { display: flex; flex-direction: column; justify-content: center; padding: clamp(2.5rem, 5vw, 5rem); background: var(--aqua-light); }
 .price { margin: -.7rem 0 .3rem; color: var(--aqua); font: 700 clamp(6rem, 11vw, 10rem)/1 var(--display); letter-spacing: -.08em; }
 .price span { display: inline-block; margin-right: .25rem; font-size: .28em; vertical-align: top; transform: translateY(1.3em); }
@@ -130,7 +130,15 @@ h1 em { color: transparent; font-style: normal; -webkit-text-stroke: 1.5px #6981
 .included h2 { font-size: clamp(2.2rem, 4vw, 4.1rem); }
 .included ul { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem 2rem; margin: 2rem 0 0; padding: 0; color: #455e65; list-style: none; }
 .included li::before { content: "✓"; margin-right: .65rem; color: var(--aqua); }
+.download-platforms { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 2rem; }
+.download-platform { display: grid; grid-template-columns: 1fr auto auto; gap: .65rem 1rem; align-items: center; padding: 1.2rem; background: var(--soft); border: 1px solid var(--line); }
+.download-platform > div { grid-row: 1 / 3; }
+.download-platform span { color: var(--muted); font-size: .7rem; }
+.download-platform h3 { margin: .1rem 0 0; font: 700 1.5rem var(--display); }
+.download-platform .button { grid-row: 1 / 3; min-height: 44px; }
+.download-link { color: var(--aqua-dark); font: 600 .75rem var(--display); text-decoration: underline; text-underline-offset: 3px; }
 .download-note { margin: 1rem 0 0; color: #72858a; font-size: .75rem; }
+.download-note a { color: var(--aqua-dark); text-decoration: underline; text-underline-offset: 3px; }
 
 .preview-status { display: grid; grid-template-columns: .9fr 1.1fr; gap: clamp(4rem, 10vw, 12rem); background: #fff8ef; border-block: 1px solid #efdfcd; }
 .preview-status h2 { font-size: clamp(2.5rem, 4.5vw, 5rem); }
@@ -184,6 +192,7 @@ footer a:hover { color: var(--aqua); }
   .app-crop { height: 330px; }
   .crop-map img { top: -35%; }
   .included ul { grid-template-columns: 1fr; }
+  .download-platforms { grid-template-columns: 1fr; }
   .free-card { grid-template-columns: 1fr; }
   .price-block { min-height: 380px; }
 }
@@ -200,6 +209,8 @@ footer a:hover { color: var(--aqua); }
   .proof-strip p:last-child { border-bottom: 0; }
   .app-crop { height: 260px; }
   .feature-grid { grid-template-columns: 1fr; }
+  .download-platform { grid-template-columns: 1fr; }
+  .download-platform > div, .download-platform .button { grid-row: auto; }
   .feature-card { min-height: 235px; }
   .control-list div { grid-template-columns: 1fr; gap: .25rem; }
   .steps li { grid-template-columns: 54px 1fr; }

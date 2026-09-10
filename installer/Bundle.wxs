@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle
+    Name="Tedd.Defrag $(RuntimeLabel) Setup"
+    Manufacturer="Tedd"
+    Version="$(Version)"
+    UpgradeCode="$(BundleUpgradeCode)">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+        Theme="hyperlinkLicense"
+        LicenseUrl="https://github.com/tedd/Tedd.Defrag/blob/main/LICENSE"
+        SuppressOptionsUI="yes" />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage SourceFile="$(MsiPath)" Visible="no" />
+    </Chain>
+  </Bundle>
+</Wix>

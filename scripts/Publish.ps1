@@ -80,7 +80,7 @@ try {
         & (Join-Path $PSScriptRoot 'Test-WorkerStartup.ps1') -WorkerPath (Join-Path $bundle 'Tedd.Defrag.Worker.exe')
     }
 
-    $manifest = [ordered]@{ version = $Version; runtime = $Runtime; assetName = $assetName }
+    $manifest = [ordered]@{ version = $Version; runtime = $Runtime; assetName = $assetName; installType = 'portable' }
     $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle 'release-manifest.json') -Encoding utf8NoBOM
 
     $unexpected = Get-ChildItem -LiteralPath $bundle -Recurse -File | Where-Object { $_.Extension -in '.pdb', '.xml', '.deps.json', '.runtimeconfig.json' }
@@ -94,6 +94,9 @@ try {
     "$hash  $assetName" | Set-Content -LiteralPath $checksum -Encoding ascii
     Write-Output $archive
     Write-Output $checksum
+
+    & (Join-Path $PSScriptRoot 'Build-Installer.ps1') -Runtime $Runtime -Version $Version -PayloadDirectory $bundle -OutputDirectory $dist
+    if ($LASTEXITCODE -ne 0) { throw 'Installer packaging failed.' }
 }
 finally {
     Pop-Location

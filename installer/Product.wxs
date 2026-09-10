@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Tedd.Defrag"
+    Manufacturer="Tedd"
+    Version="$(Version)"
+    Language="1033"
+    UpgradeCode="$(UpgradeCode)"
+    Scope="perMachine"
+    InstallerVersion="500"
+    Compressed="yes">
+
+    <SummaryInformation Description="Tedd.Defrag Windows NTFS optimizer" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Tedd.Defrag is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPHELPLINK" Value="https://github.com/tedd/Tedd.Defrag" />
+    <Property Id="ARPURLINFOABOUT" Value="https://tedd.no/Tedd.Defrag/" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Tedd.Defrag" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="Tedd.Defrag" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <Component Id="DesktopExecutable" Guid="*" Bitness="always64">
+        <File Id="DesktopExe" Source="$(PayloadDir)\Tedd.Defrag.Desktop.exe" KeyPath="yes">
+          <Shortcut
+            Id="DesktopStartMenuShortcut"
+            Directory="ApplicationProgramsFolder"
+            Name="Tedd.Defrag"
+            Description="Analyze and optimize NTFS volumes"
+            Advertise="yes"
+            WorkingDirectory="INSTALLFOLDER" />
+        </File>
+        <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+      </Component>
+      <Component Id="CliExecutable" Guid="*" Bitness="always64">
+        <File Id="CliExe" Source="$(PayloadDir)\Tedd.Defrag.Cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="WorkerExecutable" Guid="*" Bitness="always64">
+        <File Id="WorkerExe" Source="$(PayloadDir)\Tedd.Defrag.Worker.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="ReleaseManifest" Guid="*" Bitness="always64">
+        <File Id="ManifestFile" Source="$(PayloadDir)\release-manifest.json" KeyPath="yes" />
+      </Component>
+      <Component Id="ReadmeFile" Guid="*" Bitness="always64">
+        <File Id="Readme" Source="$(PayloadDir)\README.md" KeyPath="yes" />
+      </Component>
+      <Component Id="LicenseFile" Guid="*" Bitness="always64">
+        <File Id="License" Source="$(PayloadDir)\LICENSE" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Complete" Title="Tedd.Defrag" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+    </Feature>
+  </Package>
+</Wix>

@@ -13,6 +13,7 @@ internal static class Program
     public static async Task<int> Main(string[] args)
     {
         if (args is ["--apply-update", var requestPayload]) return await ReleaseUpdater.ApplyUpdateAsync(requestPayload);
+        if (args is ["--apply-installer-update", var installerRequestPayload]) return await ReleaseUpdater.ApplyInstallerUpdateAsync(installerRequestPayload);
         bool json = args.Contains("--json");
         try
         {
@@ -106,7 +107,8 @@ internal static class Program
             if (explicitRequest) Console.WriteLine($"Tedd.Defrag {release.DisplayVersion} is available: {release.ReleasePageUri}");
             return false;
         }
-        Console.Error.Write($"Tedd.Defrag {release.DisplayVersion} is available. Download, replace this installation, and restart? [y/N] ");
+        string action = release.PackageKind == ReleasePackageKind.Installer ? "run the verified installer" : "replace this portable copy";
+        Console.Error.Write($"Tedd.Defrag {release.DisplayVersion} is available. Download, {action}, and restart? [y/N] ");
         string? answer = Console.ReadLine();
         if (!string.Equals(answer?.Trim(), "y", StringComparison.OrdinalIgnoreCase) && !string.Equals(answer?.Trim(), "yes", StringComparison.OrdinalIgnoreCase)) return false;
         try
@@ -130,6 +132,8 @@ internal static class Program
         operation = command switch { "analyze" => Operation.Analyze, "trim" => Operation.ReTrim, "zero" => Operation.ZeroFreeSpace, _ => operation };
         ResourcePolicy resources = args.Get("preset", "balanced").ToLowerInvariant() switch { "quiet" => ResourcePolicy.Quiet, "performance" => ResourcePolicy.Performance, "balanced" => ResourcePolicy.Balanced, _ => throw new ArgumentException("Unknown resource preset.") };
         resources = resources with { CpuPercent = args.Int("cpu", resources.CpuPercent), MemoryMiB = args.Int("memory", resources.MemoryMiB),
+            ScanWorkers = args.Int("scan-workers", resources.ScanWorkers), PlanningWorkers = args.Int("planning-workers", resources.PlanningWorkers),
+            MoveQueueDepth = args.Int("move-queue", resources.MoveQueueDepth),
             IoMiBPerSecond = args.Int("io", resources.IoMiBPerSecond), AffinityMask = Convert.ToUInt64(args.Get("affinity", "0").Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
             IdleOnly = args.Has("idle-only") || resources.IdleOnly, AcOnly = !args.Has("allow-battery") && resources.AcOnly, Background = !args.Has("foreground") && resources.Background };
         return new() { Volume = volume, Operation = operation, Preview = !args.Has("execute"), Resources = resources,
@@ -191,6 +195,8 @@ internal static class Program
         --preset quiet|balanced|performance
         --cpu 25 --memory 0 --io 0        CPU %, process commit MiB, relocation MiB/s; 0 means unlimited
         --affinity 0xF0        Advanced logical CPU mask (single processor group)
+        --scan-workers 0 --planning-workers 0   0 = automatic, 1–32 = explicit worker limit
+        --move-queue 1        1–16 independent file moves in flight; Performance preset uses 4
         --idle-only --allow-battery --foreground
         --budget-mib 0 --minutes 0 --allow-ssd   0 means unlimited
         --min-fragments 20 --min-file-mib 0 --max-file-mib 0

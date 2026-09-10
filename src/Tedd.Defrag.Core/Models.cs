@@ -45,14 +45,18 @@ public sealed record ResourcePolicy
     public int IdleSeconds { get; init; } = 600;
     public bool AcOnly { get; init; } = true;
     public int MapCells { get; init; } = 8192;
-    public static ResourcePolicy Quiet => new() { MemoryMiB = 512, CpuPercent = 10, IoMiBPerSecond = 8, IdleOnly = true };
+    public int ScanWorkers { get; init; }
+    public int PlanningWorkers { get; init; }
+    public int MoveQueueDepth { get; init; } = 1;
+    public static ResourcePolicy Quiet => new() { MemoryMiB = 512, CpuPercent = 10, IoMiBPerSecond = 8, IdleOnly = true, ScanWorkers = 1, PlanningWorkers = 1 };
     public static ResourcePolicy Balanced => new();
-    public static ResourcePolicy Performance => new() { CpuPercent = 80, Background = false, AcOnly = false };
+    public static ResourcePolicy Performance => new() { CpuPercent = 80, Background = false, AcOnly = false, ScanWorkers = 4, MoveQueueDepth = 4 };
     public void Validate()
     {
         if ((MemoryMiB != 0 && MemoryMiB < 256) || CpuPercent is < 1 or > 100 || IoMiBPerSecond < 0 ||
-            IdleSeconds is < 1 or > 86400 || MapCells is < 256 or > 65536)
-            throw new ArgumentException("Resource policy is out of range (memory 0 or at least 256 MiB, CPU 1–100%, I/O 0 or greater). ");
+            IdleSeconds is < 1 or > 86400 || MapCells is < 256 or > 65536 ||
+            ScanWorkers is < 0 or > 32 || PlanningWorkers is < 0 or > 32 || MoveQueueDepth is < 1 or > 16)
+            throw new ArgumentException("Resource policy is out of range (memory 0 or at least 256 MiB, CPU 1–100%, I/O 0 or greater, scan/planning workers 0–32, move queue 1–16).");
     }
 }
 public sealed record JobRequest
@@ -107,7 +111,7 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     int CpuPercent = 0, int MemoryMiB = 0, int IoMiBPerSecond = 0,
     int PlannedMoves = 0, int AttemptedMoves = 0, int VerifiedMoves = 0, int FailedMoves = 0,
     int FilesConsidered = 0, int FilesBlocked = 0, int InitialFragmentedFiles = 0, long ElapsedMilliseconds = 0,
-    string? WorkerBuild = null)
+    string? WorkerBuild = null, JobDiagnostics? Diagnostics = null)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
     public JobSnapshot Transition(JobState state, string message)

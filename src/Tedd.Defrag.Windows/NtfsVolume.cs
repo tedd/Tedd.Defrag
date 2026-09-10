@@ -120,13 +120,13 @@ public sealed unsafe class NtfsVolume : IDisposable
         if (resolved.StartsWith(@"\\?\")) resolved = resolved[4..];
         return (((ulong)info.nFileIndexHigh << 32) | info.nFileIndexLow, info.dwFileAttributes, info.nNumberOfLinks, resolved);
     }
-    public void Move(SafeFileHandle file, PlannedMove move)
+    public void Move(SafeFileHandle file, PlannedMove move, SafeFileHandle? volumeHandle = null)
     {
         if (move.Clusters is <= 0 or > uint.MaxValue || move.DestinationLcn < 0 || move.DestinationLcn > TotalClusters - move.Clusters)
             throw new ArgumentOutOfRangeException(nameof(move));
         MOVE_FILE_DATA data = new() { FileHandle = new(file.DangerousGetHandle()), StartingVcn = move.Vcn, StartingLcn = move.DestinationLcn, ClusterCount = (uint)move.Clusters };
         var input = new ReadOnlySpan<byte>(&data, sizeof(MOVE_FILE_DATA));
-        NativeIo.Control(Handle, PInvoke.FSCTL_MOVE_FILE, input, [], out int error);
+        NativeIo.Control(volumeHandle ?? Handle, PInvoke.FSCTL_MOVE_FILE, input, [], out int error);
         GC.KeepAlive(file);
         if (error != 0) throw new Win32Exception(error);
     }

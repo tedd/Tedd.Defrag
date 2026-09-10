@@ -14,7 +14,8 @@ public sealed class FreeSpaceIndex : IDisposable
     public FreeSpaceIndex(IEnumerable<ClusterRange> ranges, int capacity = 4096)
     {
         _nodes = ArrayPool<Node>.Shared.Rent(Math.Max(16, capacity));
-        foreach (var range in ranges) Add(range.Start, range.Length);
+        try { foreach (var range in ranges) Add(range.Start, range.Length); }
+        catch { ArrayPool<Node>.Shared.Return(_nodes); _nodes = []; throw; }
     }
     public long Largest => Max(_root);
     private long Max(int n) => n == 0 ? 0 : _nodes[n].Max;

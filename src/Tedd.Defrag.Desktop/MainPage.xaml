@@ -30,7 +30,7 @@
           <Border Style="{StaticResource Card}" Padding="18,16"><VerticalStackLayout Spacing="12">
             <Grid ColumnDefinitions="*,Auto"><Label x:Name="JobTitle" Text="Ready when you are" FontSize="15" FontFamily="OpenSansSemibold" /><Label x:Name="ProgressText" Grid.Column="1" Text="READY" FontSize="10" TextColor="{DynamicResource Accent}" CharacterSpacing="1" /></Grid>
             <ProgressBar x:Name="JobProgress" Progress="0" ProgressColor="{DynamicResource Accent}" BackgroundColor="{DynamicResource Track}" HeightRequest="5" /><Label x:Name="JobMessage" Text="Analyze a volume before making changes." FontSize="12" TextColor="{DynamicResource Muted}" MaxLines="3" LineBreakMode="TailTruncation" />
-            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8"><Label x:Name="ObservationText" Text="No disk operations running" FontSize="10" TextColor="{DynamicResource SubtleText}" VerticalOptions="Center" /><Button x:Name="PauseButton" Grid.Column="1" Text="Pause" Clicked="OnPause" IsEnabled="False" Padding="14,7" /><Button x:Name="CancelButton" Grid.Column="2" Text="Cancel" Clicked="OnCancel" IsEnabled="False" Padding="14,7" BackgroundColor="{DynamicResource DangerSurface}" TextColor="{DynamicResource DangerText}" /></Grid>
+            <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8"><Label x:Name="ObservationText" Text="No disk operations running" FontSize="10" TextColor="{DynamicResource SubtleText}" VerticalOptions="Center" /><Button Grid.Column="1" Text="Performance details" Clicked="OnPerformanceDetails" Padding="14,7" /><Button x:Name="PauseButton" Grid.Column="2" Text="Pause" Clicked="OnPause" IsEnabled="False" Padding="14,7" /><Button x:Name="CancelButton" Grid.Column="3" Text="Cancel" Clicked="OnCancel" IsEnabled="False" Padding="14,7" BackgroundColor="{DynamicResource DangerSurface}" TextColor="{DynamicResource DangerText}" /></Grid>
           </VerticalStackLayout></Border>
           <Grid ColumnDefinitions="*,Auto"><Label Text="Files worth a closer look" FontSize="17" FontFamily="OpenSansSemibold" /><Button Grid.Column="1" Text="Export report ↗" Clicked="OnExport" BackgroundColor="Transparent" TextColor="{DynamicResource Accent}" Padding="8,0" /></Grid>
           <Border Style="{StaticResource Card}" Padding="0"><VerticalStackLayout>
@@ -85,6 +85,12 @@
               <Grid ColumnDefinitions="*,Auto"><VerticalStackLayout Spacing="4"><Label Text="Advanced resource controls" FontSize="17" FontFamily="OpenSansSemibold" /><Label Text="Optional process and storage throttles." FontSize="11" TextColor="{DynamicResource Muted}" /></VerticalStackLayout><Button x:Name="AdvancedToggle" Grid.Column="1" Text="Show advanced" Clicked="OnToggleAdvanced" Padding="14,8" /></Grid>
               <VerticalStackLayout x:Name="AdvancedPanel" IsVisible="False" Spacing="13">
                 <Picker x:Name="ResourcePreset" Title="Resource preset" SelectedIndexChanged="OnPresetChanged" />
+                <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                  <VerticalStackLayout><Label Text="MFT WORKERS · 0–32" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="ScanWorkersEntry" Text="0" Keyboard="Numeric" /></VerticalStackLayout>
+                  <VerticalStackLayout Grid.Column="1"><Label Text="PLANNER WORKERS · 0–32" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="PlanningWorkersEntry" Text="0" Keyboard="Numeric" /></VerticalStackLayout>
+                  <VerticalStackLayout Grid.Column="2"><Label Text="MOVE QUEUE DEPTH · 1–16" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="MoveQueueEntry" Text="1" Keyboard="Numeric" /></VerticalStackLayout>
+                </Grid>
+                <Label Text="Zero workers selects automatically. Performance uses 4 MFT workers and up to 4 concurrent file moves. Each file sequence stays serial; metadata uses depth 1. Deeper queues can increase disk seeks. CPU, memory and bandwidth limits still apply." FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" />
                 <Grid ColumnDefinitions="*,Auto"><Label Text="CPU ceiling" TextColor="{DynamicResource Muted}" /><Label x:Name="CpuValue" Grid.Column="1" Text="25%" TextColor="{DynamicResource Accent}" /></Grid><Slider x:Name="CpuSlider" Minimum="1" Maximum="100" Value="25" ValueChanged="OnResourceChanged" />
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                   <VerticalStackLayout><Label Text="MEMORY CAP · MiB" FontSize="9" TextColor="{DynamicResource Muted}" /><Entry x:Name="MemoryEntry" Text="0" Keyboard="Numeric" Placeholder="0 · unlimited" /></VerticalStackLayout>
@@ -110,6 +116,28 @@
           <VerticalStackLayout Spacing="6"><Label Text="FILES IN CLUSTER RANGE" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="ClusterTitle" Text="Cluster contents" FontSize="24" FontAttributes="Bold" /><Label x:Name="ClusterSubtitle" FontSize="11" TextColor="{DynamicResource Muted}" /></VerticalStackLayout>
           <CollectionView x:Name="ClusterFilesList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnClusterFileSelected"><CollectionView.ItemTemplate><DataTemplate><Border Stroke="{DynamicResource OptionStroke}" Background="{DynamicResource OptionSurface}" StrokeShape="RoundRectangle 8" Padding="12" Margin="0,0,0,7"><Grid ColumnDefinitions="*,100,110" RowDefinitions="Auto,Auto" ColumnSpacing="10"><Label Text="{Binding DisplayPath}" FontSize="12" LineBreakMode="MiddleTruncation" /><Label Grid.Row="1" Text="{Binding Status}" FontSize="9" TextColor="{DynamicResource SubtleText}" /><Label Grid.Column="1" Text="{Binding ClusterLabel}" FontSize="11" HorizontalOptions="End" /><Label Grid.Column="2" Text="{Binding BytesLabel}" FontSize="11" HorizontalOptions="End" /></Grid></Border></DataTemplate></CollectionView.ItemTemplate><CollectionView.EmptyView><Label Text="No file-backed streams overlap this range." Padding="20" HorizontalTextAlignment="Center" TextColor="{DynamicResource Muted}" /></CollectionView.EmptyView></CollectionView>
           <HorizontalStackLayout Grid.Row="2" HorizontalOptions="End" Spacing="8"><Button x:Name="HighlightClusterFileButton" Text="Highlight selected" Clicked="OnHighlightClusterFile" IsEnabled="False" BackgroundColor="{DynamicResource ActionButton}" /><Button Text="Close" Clicked="OnCloseClusterFiles" /></HorizontalStackLayout>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <Grid x:Name="DiagnosticsOverlay" IsVisible="False" BackgroundColor="{DynamicResource Overlay}" Padding="36" ZIndex="90">
+      <Border Style="{StaticResource Card}" WidthRequest="760" MaximumHeightRequest="780" HorizontalOptions="Center" VerticalOptions="Center" Stroke="{DynamicResource ModalLine}" Background="{DynamicResource ModalSurface}" Padding="24">
+        <Grid RowDefinitions="Auto,*,Auto" RowSpacing="16">
+          <VerticalStackLayout Spacing="9">
+            <Label Text="PERFORMANCE DETAILS" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
+            <Grid ColumnDefinitions="*,Auto"><Label x:Name="DiagnosticsTitle" Text="Waiting for job telemetry" FontSize="23" FontAttributes="Bold" /><ActivityIndicator x:Name="DiagnosticsBusy" Grid.Column="1" Color="{DynamicResource Accent}" /></Grid>
+            <ProgressBar x:Name="DiagnosticsProgress" ProgressColor="{DynamicResource Accent}" BackgroundColor="{DynamicResource Track}" />
+            <Label x:Name="DiagnosticsCount" FontSize="12" TextColor="{DynamicResource Muted}" />
+          </VerticalStackLayout>
+          <ScrollView Grid.Row="1"><VerticalStackLayout Spacing="14">
+            <Label x:Name="DiagnosticsProcess" FontSize="12" LineHeight="1.3" />
+            <Border Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="6"><Label Text="MFT SCAN" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="ScanDiagnosticsText" Text="Pending" FontSize="12" LineHeight="1.35" /></VerticalStackLayout></Border>
+            <Border Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="6"><Label Text="EXECUTION PLAN" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="PlanningDiagnosticsText" Text="Pending" FontSize="12" LineHeight="1.35" /></VerticalStackLayout></Border>
+            <Border Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="6"><Label Text="RELOCATION" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="ExecutionDiagnosticsText" Text="Pending" FontSize="12" LineHeight="1.35" /></VerticalStackLayout></Border>
+            <Label x:Name="DiagnosticsAcceleration" FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.35" />
+            <Label Text="Workers are application operations. In-flight requests include validation and filesystem calls. Rates are phase averages." FontSize="11" TextColor="{DynamicResource SubtleText}" LineHeight="1.3" />
+          </VerticalStackLayout></ScrollView>
+          <HorizontalStackLayout Grid.Row="2" HorizontalOptions="End" Spacing="8"><Button x:Name="DiagnosticsPause" Text="Pause" Clicked="OnPause" /><Button x:Name="DiagnosticsCancel" Text="Cancel job" Clicked="OnCancel" /><Button Text="Close details" Clicked="OnClosePerformanceDetails" /></HorizontalStackLayout>
         </Grid>
       </Border>
     </Grid>

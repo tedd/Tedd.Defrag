@@ -2,67 +2,124 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Ntfs;
+using Microsoft.Win32.SafeHandles;
 
 namespace Tedd.Defrag.Windows;
 
 public sealed class RawMftScanner
 {
-    public VolumeLayout Scan(NtfsVolume volume, JobRequest request, Action<double, long, string>? progress, Action? checkpoint, CancellationToken token)
+    public VolumeLayout Scan(NtfsVolume volume, JobRequest request, Action<double, long, string>? progress, Action? checkpoint, CancellationToken token,
+        Action<WorkProgress>? diagnostics = null)
     {
-        byte[] bitmap = volume.ReadBitmap(request.Resources.MemoryMiB, p => { checkpoint?.Invoke(); progress?.Invoke(p * .1, 0, "Reading allocation bitmap"); }, token);
+        var watch = Stopwatch.StartNew(); long lastUpdate = -1000;
+        byte[] bitmap = volume.ReadBitmap(request.Resources.MemoryMiB, p =>
+        {
+            checkpoint?.Invoke();
+            diagnostics?.Invoke(new("Reading allocation bitmap", (long)(p * volume.TotalClusters), volume.TotalClusters, "clusters",
+                ActiveWorkers: 1, PeakWorkers: 1, ElapsedMilliseconds: watch.ElapsedMilliseconds,
+                Detail: "Windows allocation bitmap query; raw MFT reads follow."));
+            progress?.Invoke(p * .1, 0, "Reading allocation bitmap");
+        }, token);
         var warnings = new List<string>();
         var records = new Dictionary<ulong, NtfsRecord>();
         long skipped = 0, scanned = 0; bool complete = true;
         var mft = Parse(volume.ReadRecord(0), 0);
         var runs = GetMftRuns(volume, mft);
-        using var buffer = new AlignedReadBuffer(1024 * 1024);
         // Keep space for resolved paths, the final layout and temporary allocations. Check
         // every batch rather than waiting for the UI update timer or the OS hard limit.
         long scanHeapBudget = request.Resources.MemoryMiB == 0 ? long.MaxValue : request.Resources.MemoryMiB * 1024L * 1024 / 4;
         long totalRecords = volume.MftLength / volume.RecordSize;
-        var watch = Stopwatch.StartNew(); long lastUpdate = -1000;
-        foreach (var run in runs)
-        {
-            long byteOffset = run.Vcn * volume.Info.BytesPerCluster;
-            long runBytes = Math.Min(run.Length * volume.Info.BytesPerCluster, volume.MftLength - byteOffset);
-            if (runBytes <= 0) continue;
-            for (long offset = 0; offset < runBytes;)
+        int workers = WorkerPolicy.ScanWorkers(request.Resources);
+        var activity = new WorkerActivity(); long bytesRead = 0;
+        ReportScan(true);
+        OrderedPipeline.Run(Batches(), workers,
+            () => new ScanWorker(volume.Info.Root),
+            (worker, batch) =>
             {
-                token.ThrowIfCancellationRequested(); checkpoint?.Invoke();
-                if (GC.GetTotalMemory(false) >= scanHeapBudget)
+                activity.Enter();
+                try
                 {
-                    warnings.Add($"File coverage is limited by the {request.Resources.MemoryMiB:N0} MiB memory cap. Increase the cap for a more complete scan; the allocation bitmap covers the entire volume.");
-                    complete = false; break;
+                    activity.EnterIo();
+                    try { NativeIo.ReadExactly(worker.Handle, worker.Buffer.AsSpan(0, batch.Count), batch.Offset); }
+                    finally { activity.ExitIo(); }
+                    Interlocked.Add(ref bytesRead, batch.Count);
+                    var parsed = new List<NtfsRecord>(); long invalid = 0;
+                    for (int p = 0; p < batch.Count; p += volume.RecordSize)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var span = worker.Buffer.AsSpan(p, volume.RecordSize);
+                        if (span[..4].SequenceEqual("FILE"u8) && (BinaryPrimitives.ReadUInt16LittleEndian(span[22..]) & 1) == 0) continue;
+                        if (!NtfsRecordParser.TryParse(span, batch.FirstRecord + p / volume.RecordSize, volume.TotalClusters, out var record)) { invalid++; continue; }
+                        if (record!.BaseFileId == 0) parsed.Add(record);
+                    }
+                    return (Records: parsed, Skipped: invalid);
                 }
-                int count = (int)Math.Min(buffer.Length, runBytes - offset);
-                count -= count % volume.RecordSize;
-                if (count == 0) { complete = false; break; }
-                NativeIo.ReadExactly(volume.Handle, buffer.AsSpan(0, count), checked(run.Lcn * volume.Info.BytesPerCluster + offset));
-                for (int p = 0; p < count; p += volume.RecordSize)
+                finally { activity.Exit(); }
+            },
+            (batch, result) =>
+            {
+                scanned += batch.Count / volume.RecordSize; skipped += result.Skipped;
+                foreach (var record in result.Records) records[record.FileId] = record;
+                ReportScan();
+            },
+            () => { token.ThrowIfCancellationRequested(); checkpoint?.Invoke(); ReportScan(); }, CanSchedule);
+        ReportScan(true);
+
+        bool CanSchedule()
+        {
+            if (!complete) return false;
+            using var process = Process.GetCurrentProcess();
+            if (GC.GetTotalMemory(false) >= scanHeapBudget ||
+                (request.Resources.MemoryMiB > 0 && process.PrivateMemorySize64 > request.Resources.MemoryMiB * 1024L * 1024 * .65))
+            {
+                warnings.Add($"File coverage is limited by the {request.Resources.MemoryMiB:N0} MiB memory cap. Increase the cap for a more complete scan; the allocation bitmap covers the entire volume.");
+                complete = false;
+            }
+            return complete;
+        }
+        void ReportScan(bool force = false)
+        {
+            if (!force && watch.ElapsedMilliseconds - lastUpdate < 200) return;
+            diagnostics?.Invoke(new("Scanning MFT", scanned, totalRecords, "records", workers, activity.Active, activity.Peak,
+                activity.Io, activity.PeakIo, Interlocked.Read(ref bytesRead), watch.ElapsedMilliseconds,
+                Detail: $"1 MiB sequential batches per worker; independent volume handles. Scalar record validation. {records.Count:N0} base records retained; {skipped:N0} rejected."));
+            progress?.Invoke(.1 + .8 * scanned / Math.Max(1d, totalRecords), scanned, "Scanning NTFS master file table");
+            lastUpdate = watch.ElapsedMilliseconds;
+        }
+        IEnumerable<ReadBatch> Batches()
+        {
+            foreach (var run in runs)
+            {
+                long byteOffset = run.Vcn * volume.Info.BytesPerCluster;
+                long runBytes = Math.Min(run.Length * volume.Info.BytesPerCluster, volume.MftLength - byteOffset);
+                for (long offset = 0; offset < runBytes;)
                 {
-                    long number = (byteOffset + offset + p) / volume.RecordSize;
-                    var span = buffer.AsSpan(p, volume.RecordSize); scanned++;
-                    // Unused records are not scan failures.
-                    if (span[..4].SequenceEqual("FILE"u8) && (BinaryPrimitives.ReadUInt16LittleEndian(span[22..]) & 1) == 0) continue;
-                    if (!NtfsRecordParser.TryParse(span, number, volume.TotalClusters, out var record)) { skipped++; continue; }
-                    if (record!.BaseFileId == 0) records[record.FileId] = record;
-                }
-                offset += count;
-                if (watch.ElapsedMilliseconds - lastUpdate >= 200)
-                {
-                    progress?.Invoke(.1 + .8 * scanned / Math.Max(1d, totalRecords), scanned, "Scanning NTFS master file table"); lastUpdate = watch.ElapsedMilliseconds;
-                    using var process = Process.GetCurrentProcess();
-                    if (request.Resources.MemoryMiB > 0 && process.PrivateMemorySize64 > request.Resources.MemoryMiB * 1024L * 1024 * .65)
-                    { warnings.Add("File scan stopped at the memory headroom threshold; allocation bitmap remains available."); complete = false; break; }
+                    int count = (int)Math.Min(1024 * 1024, runBytes - offset);
+                    count -= count % volume.RecordSize;
+                    if (count == 0) { complete = false; yield break; }
+                    yield return new(checked(run.Lcn * volume.Info.BytesPerCluster + offset), (byteOffset + offset) / volume.RecordSize, count);
+                    offset += count;
                 }
             }
-            if (!complete) break;
         }
         var cache = new Dictionary<ulong, string>(); var rules = new PathRules(request.SelectedPaths, request.Exclusions);
         var files = new List<FileLayout>(records.Count);
+        int resolved = 0;
         foreach (var (id, record) in records)
         {
             token.ThrowIfCancellationRequested();
+            if (resolved++ % 1024 == 0)
+            {
+                checkpoint?.Invoke();
+                if (watch.ElapsedMilliseconds - lastUpdate >= 200)
+                {
+                    diagnostics?.Invoke(new("Resolving paths and streams", resolved - 1, records.Count, "base records", ActiveWorkers: 1,
+                        PeakWorkers: 1, BytesProcessed: bytesRead, ElapsedMilliseconds: watch.ElapsedMilliseconds,
+                        Detail: "Serial ancestry resolution after ordered parallel record parsing."));
+                    progress?.Invoke(.9 + .1 * (resolved - 1) / Math.Max(1d, records.Count), scanned, "Resolving paths and streams");
+                    lastUpdate = watch.ElapsedMilliseconds;
+                }
+            }
             string path = Resolve(id, 0); StreamFlags flags = record.Flags;
             if (path.Contains("<unresolved>", StringComparison.Ordinal)) flags |= StreamFlags.Incomplete;
             if (rules.IsExcluded(path)) flags |= StreamFlags.Excluded;
@@ -85,6 +142,8 @@ public sealed class RawMftScanner
         int incomplete = files.Count(f => (f.Flags & StreamFlags.Incomplete) != 0);
         if (incomplete > 0) warnings.Add($"{incomplete:N0} streams have extension attributes or unresolved ancestry and are excluded from custom moves.");
         warnings.Add("Live NTFS observations may change during the scan. Every relocation is revalidated through the filesystem.");
+        diagnostics?.Invoke(new("Analysis complete", scanned, totalRecords, "records", workers, 0, activity.Peak, 0, activity.PeakIo,
+            bytesRead, watch.ElapsedMilliseconds, Detail: $"{files.Count:N0} streams; {skipped:N0} rejected records. Paths resolved serially; live moves are revalidated by NTFS."));
         progress?.Invoke(1, scanned, "Analysis complete");
         return new(volume.Info, volume.TotalClusters, bitmap, files.ToArray(), DateTimeOffset.UtcNow, scanned, skipped,
             complete && skipped == 0, warnings.ToArray(), volume.MftZone);
@@ -100,6 +159,19 @@ public sealed class RawMftScanner
             string result = Resolve(name.ParentId, depth + 1) + "\\" + name.Name;
             cache[id] = result; return result;
         }
+    }
+    private readonly record struct ReadBatch(long Offset, long FirstRecord, int Count);
+    private sealed class ScanWorker : IDisposable
+    {
+        public SafeFileHandle Handle { get; }
+        public AlignedReadBuffer Buffer { get; }
+        public ScanWorker(string root)
+        {
+            Handle = NativeIo.Open(VolumeDiscovery.Device(root));
+            try { Buffer = new(1024 * 1024); }
+            catch { Handle.Dispose(); throw; }
+        }
+        public void Dispose() { Buffer.Dispose(); Handle.Dispose(); }
     }
     private static Extent[] GetMftRuns(NtfsVolume volume, NtfsRecord mft)
     {

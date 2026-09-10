@@ -33,6 +33,9 @@ public sealed class JobExecutor
         int filesConsidered = 0, filesBlocked = 0, initialFragmentedFiles = 0;
         bool noMovesPlanned = false;
         bool layoutIndexDirty = false;
+        long scannedRecords = 0;
+        WorkProgress? scanWork = null, planningWork = null, executionWork = null;
+        var executionWatch = new Stopwatch(); var moveActivity = new WorkerActivity();
         var explorer = new LayoutExplorerStore(store);
         try
         {
@@ -42,7 +45,7 @@ public sealed class JobExecutor
             if (!request.Preview && request.Operation is not (Operation.Analyze or Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace)
                 && volume!.Info.SeekPenalty != true && !request.AllowSsdRelocation)
                 throw new InvalidOperationException("Custom relocation on SSD or unknown media requires explicit opt-in.");
-            layout = volume.Scan(request, ScanProgress, Checkpoint, token);
+            layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
             layoutIndexDirty = true;
             warnings.AddRange(layout.Warnings);
             initialFragmentedFiles = layout.Files.Count(f => f.Fragmented);
@@ -53,12 +56,13 @@ public sealed class JobExecutor
                 if (request.Exclusions.Length != 0 && request.Operation is Operation.Automatic or Operation.SlabConsolidate)
                     throw new NotSupportedException("Volume-wide Windows optimization does not support file exclusions.");
                 if (request.Preview) { state = JobState.Completed; progress = 1; message = "Maintenance preview ready; no storage changes submitted"; return; }
-                state = JobState.Running; message = "Windows maintenance; progress is indeterminate"; Publish(true);
+                state = JobState.Running; progress = 0; message = "Windows maintenance; progress is indeterminate"; Publish(true);
                 if (request.Operation == Operation.ZeroFreeSpace)
                     moved = VirtualDiskPreparation.Zero(request, volume!.Info, b => { Pace(b - moved); moved = b; Publish(); }, Checkpoint, token);
                 else WindowsMaintenance.Run(request, volume!.Info, line => { message = line; Publish(); }, ExternalCheckpoint, token);
+                state = JobState.Scanning; progress = 0; scanWork = null;
                 ReleaseLayoutForRescan();
-                layout = volume.Scan(request, ScanProgress, Checkpoint, token);
+                layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
                 layoutIndexDirty = true;
                 AddWarnings(layout.Warnings);
                 MapAggregator.Build(layout, map); state = JobState.Completed; progress = 1; message = "Maintenance completed; allocation map refreshed"; return;
@@ -69,8 +73,9 @@ public sealed class JobExecutor
             var planner = new LayoutPlanner();
             while (request.MaxMoveBytes == 0 || moved < request.MaxMoveBytes)
             {
-                Checkpoint(); state = JobState.Planning; message = "Calculating minimum-cost eligible placements"; Publish(true);
-                var plan = planner.Plan(layout, request with { MaxMoveBytes = request.MaxMoveBytes == 0 ? 0 : request.MaxMoveBytes - moved }, token, session);
+                Checkpoint(); state = JobState.Planning; progress = 0; message = "Calculating eligible placements"; Publish(true);
+                var plan = planner.Plan(layout, request with { MaxMoveBytes = request.MaxMoveBytes == 0 ? 0 : request.MaxMoveBytes - moved }, token, session,
+                    p => { planningWork = p; message = p.Phase; progress = p.Total > 0 ? (double)p.Completed / p.Total : 0; Publish(); }, Checkpoint);
                 long batchPlannedBytes = plan.ClustersToMove * layout.Volume.BytesPerCluster;
                 filesConsidered = Math.Max(filesConsidered, plan.FilesConsidered);
                 filesBlocked = Math.Max(filesBlocked, plan.FilesBlocked);
@@ -82,29 +87,36 @@ public sealed class JobExecutor
                     state = JobState.Completed; progress = 1;
                     message = $"Preview of first batch: {plan.Moves.Length:N0} moves · {Format.Bytes(batchPlannedBytes)} · {plan.FilesBlocked:N0} constrained files. Execution continues through further batches. No writes performed."; return;
                 }
-                state = JobState.Running; int completed = 0, failuresBeforeBatch = failedMoves;
-                foreach (var move in plan.Moves)
+                state = JobState.Running; int failuresBeforeBatch = failedMoves;
+                // Metadata moves remain serial. User queue depth applies to independent ordinary files.
+                int depth = request.Operation is Operation.OptimizeMft or Operation.DirectoryIndexes or Operation.DirectoryLocality
+                    ? 1 : request.Resources.MoveQueueDepth;
+                if (!executionWatch.IsRunning) { executionWatch.Start(); pacing.Restart(); }
+                var batchWatch = Stopwatch.StartNew(); long bytesBeforeBatch = moved;
+                MoveScheduler.Run(plan.Moves, depth, move =>
                 {
                     Checkpoint(); var file = layout.Files[move.FileIndex];
-                    if (session.BlockedFiles.Contains(file.FileId)) continue;
-                    message = file.Path; progress = (double)completed++ / plan.Moves.Length;
+                    if (session.BlockedFiles.Contains(file.FileId)) return false;
+                    Pace(move.Clusters * layout.Volume.BytesPerCluster);
+                    Checkpoint(); message = file.Path;
                     MapAggregator.Activity(map, layout.TotalClusters, move.SourceLcn, move.Clusters, false);
                     Publish();
-                    attemptedMoves++;
                     store.Journal(request.Id, new(DateTimeOffset.UtcNow, "intent", move));
+                    attemptedMoves++;
+                    return true;
+                }, move =>
+                {
+                    moveActivity.Enter();
+                    try { volume.ExecuteMove(layout.Files[move.FileIndex], move, rules); }
+                    finally { moveActivity.Exit(); }
+                }, (move, error) =>
+                {
+                    var file = layout.Files[move.FileIndex];
                     try
                     {
-                        volume.ExecuteMove(file, move, rules);
+                        if (error != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
                         // Native success has been verified by retrieval pointers before changing the display model.
                         LayoutMutation.Apply(layout, move);
-                        layoutIndexDirty = true;
-                        long bytes = move.Clusters * layout.Volume.BytesPerCluster;
-                        moved += bytes;
-                        verifiedMoves++;
-                        store.Journal(request.Id, new(DateTimeOffset.UtcNow, "verified", move));
-                        if (clock.ElapsedMilliseconds - lastPublish >= 200) MapAggregator.Build(layout, map);
-                        MapAggregator.Activity(map, layout.TotalClusters, move.DestinationLcn, move.Clusters, true);
-                        Publish(); Pace(bytes);
                     }
                     catch (Exception e) when (e is Win32Exception or IOException or InvalidOperationException)
                     {
@@ -112,20 +124,41 @@ public sealed class JobExecutor
                         layout.Files[move.FileIndex] = file with { Flags = file.Flags | StreamFlags.Excluded };
                         store.Journal(request.Id, new(DateTimeOffset.UtcNow, "reconcile-required", move, e.Message));
                         if (warnings.Count < 50) warnings.Add($"{file.Path}: {e.Message}");
+                        return;
                     }
-                }
+                    layoutIndexDirty = true;
+                    moved += move.Clusters * layout.Volume.BytesPerCluster;
+                    verifiedMoves++;
+                    // Publication failures must stop dispatch, not count a verified native move as failed too.
+                    store.Journal(request.Id, new(DateTimeOffset.UtcNow, "verified", move));
+                    if (clock.ElapsedMilliseconds - lastPublish >= 200) MapAggregator.Build(layout, map);
+                    MapAggregator.Activity(map, layout.TotalClusters, move.DestinationLcn, move.Clusters, true);
+                    Publish();
+                }, Checkpoint, (completed, pending, peak) =>
+                {
+                    progress = (double)completed / plan.Moves.Length;
+                    executionWork = new("Relocating and verifying", completed, plan.Moves.Length, "batch moves", depth,
+                        moveActivity.Active, moveActivity.Peak, moveActivity.Active, moveActivity.Peak, moved - bytesBeforeBatch, batchWatch.ElapsedMilliseconds,
+                        "NTFS filesystem I/O; scalar validation",
+                        $"{pending:N0} submitted requests pending (peak {peak:N0}); {verifiedMoves:N0} verified, {failedMoves:N0} failed. Per-file sequences stay serial; metadata queue depth is 1. Device scheduling remains under Windows control.");
+                    Publish();
+                });
                 if (failedMoves > failuresBeforeBatch)
                 {
                     // A failed request may have changed allocation before verification
                     // failed. Refresh before recycling source space in another batch.
-                    state = JobState.Scanning; message = $"Refreshing allocation after {failedMoves - failuresBeforeBatch:N0} failed moves; continuing with other files"; Publish(true);
+                    state = JobState.Scanning; progress = 0;
+                    message = $"Refreshing allocation after {failedMoves - failuresBeforeBatch:N0} failed moves; continuing with other files";
+                    scanWork = new("Refreshing allocation", 0, 0, "clusters", ActiveWorkers: 1, PeakWorkers: 1, Detail: "Indeterminate bitmap refresh before source space can be reused.");
+                    Publish(true);
                     layout = layout with { Bitmap = volume.ReadBitmap(request, Checkpoint, token) };
                     layoutIndexDirty = true; MapAggregator.Build(layout, map); SaveLayoutIndex();
                 }
             }
-            state = JobState.Scanning; message = "Reconciling actual allocation after execution"; Publish(true);
+            state = JobState.Scanning; progress = 0; scanWork = null;
+            message = "Reconciling actual allocation after execution"; Publish(true);
             ReleaseLayoutForRescan();
-            layout = volume.Scan(request, ScanProgress, Checkpoint, token);
+            layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
             layoutIndexDirty = true;
             AddWarnings(layout.Warnings);
             MapAggregator.Build(layout, map);
@@ -152,21 +185,32 @@ public sealed class JobExecutor
             state = JobState.Failed; message = e.Message;
             try { File.WriteAllText(Path.Combine(store.JobDirectory(request.Id), "error.txt"), e.ToString()); } catch (IOException) { }
         }
-        finally { SaveLayoutIndex(); Publish(true); }
+        finally
+        {
+            // Pipelines drain before returning, including cancellation and failure paths.
+            if (scanWork != null) scanWork = scanWork with { ActiveWorkers = 0, InFlightIo = 0 };
+            if (planningWork != null) planningWork = planningWork with { ActiveWorkers = 0, InFlightIo = 0 };
+            if (executionWork != null) executionWork = executionWork with { ActiveWorkers = 0, InFlightIo = 0 };
+            SaveLayoutIndex(); Publish(true);
+        }
 
-        void ScanProgress(double p, long count, string text) { progress = p; message = $"{text} · {count:N0} records"; Publish(); }
+        void ScanProgress(double p, long count, string text) { progress = p; scannedRecords = count; message = $"{text} · {count:N0} records"; Publish(); }
         void Publish(bool force = false)
         {
             if (!force && clock.ElapsedMilliseconds - lastPublish < 200) return;
             var files = layout?.Files;
+            using var process = Process.GetCurrentProcess();
+            var diagnostics = new JobDiagnostics(scanWork, planningWork, executionWork, Environment.ProcessorCount,
+                process.Threads.Count, process.PrivateMemorySize64, process.TotalProcessorTime.TotalMilliseconds,
+                System.Runtime.Intrinsics.X86.Avx2.IsSupported ? "AVX2 for aligned map ranges of at least 64 bytes; scalar tails" : "POPCNT / scalar bitmap counting");
             store.Save(new(request.Id, request.Volume, request.Operation, state, message, progress, moved,
-                layout?.RecordsScanned ?? 0, files?.Count(f => f.Fragmented) ?? 0, files?.Length ?? 0, DateTimeOffset.UtcNow,
+                state == JobState.Scanning ? scannedRecords : layout?.RecordsScanned ?? scannedRecords, files?.Count(f => f.Fragmented) ?? 0, files?.Length ?? 0, DateTimeOffset.UtcNow,
                 layout?.ObservedAt, layout == null ? null : map, files?.Where(f => f.Fragmented).OrderByDescending(f => f.Extents.Length).Take(100)
                     .Select(f => new FileSummary(f.Path, f.StreamName, f.Extents.Length, f.Size, f.Movable ? "Eligible" : f.Flags.ToString())).ToArray(),
                 warnings.ToArray(), plannedBytes, layout?.Volume.SizeBytes ?? 0, layout?.Volume.FreeBytes ?? 0,
                 request.Resources.CpuPercent, request.Resources.MemoryMiB, request.Resources.IoMiBPerSecond,
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,
-                initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion));
+                initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics));
             lastPublish = clock.ElapsedMilliseconds;
         }
         void Checkpoint()

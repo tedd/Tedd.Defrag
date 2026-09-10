@@ -112,6 +112,32 @@ public sealed class ExecutionContinuationTests
     }
 
     [Fact]
+    public void ConcurrentExecutionReconcilesFailureAndHonorsTheSharedByteBudget()
+    {
+        var volume = ManyFiles(60);
+        ulong failedId = volume.Layout.Files[0].FileId;
+        volume.BeforeMove = (file, move) =>
+        {
+            if (file.FileId != failedId) return;
+            LayoutMutation.Apply(volume.Layout, move);
+            throw new IOException("Native move succeeded but verification failed");
+        };
+        var request = Request(Operation.MinimumWrite) with { MaxMoveBytes = 100 * 4096 };
+        request = request with { Resources = request.Resources with { MoveQueueDepth = 4 } };
+        var result = Run(volume, request);
+        Assert.Equal(JobState.Partial, result.State);
+        Assert.Equal(1, result.FailedMoves);
+        Assert.Single(volume.Attempts, m => m.FileId == failedId);
+        Assert.True(result.VerifiedMoves > 0);
+        Assert.True(result.BytesMoved <= request.MaxMoveBytes);
+        Assert.Equal(1, volume.BitmapRefreshes);
+        Assert.Equal(120, BitmapOperations.CountAllocated(volume.Layout.Bitmap));
+        Assert.Equal(4, result.Diagnostics?.Execution?.WorkerLimit);
+        Assert.Equal(0, result.Diagnostics?.Execution?.ActiveWorkers);
+        Assert.Equal(0, result.Diagnostics?.Execution?.InFlightIo);
+    }
+
+    [Fact]
     public void CancellationStillStopsAtTheNextMoveBoundary()
     {
         using var cancellation = new CancellationTokenSource();
@@ -218,6 +244,7 @@ public sealed class ExecutionContinuationTests
 
     private sealed class TestVolume(VolumeLayout layout) : IJobVolume
     {
+        private readonly object gate = new();
         public VolumeLayout Layout { get; } = layout;
         public VolumeInfo Info => Layout.Volume;
         public List<PlannedMove> Attempts { get; } = [];
@@ -226,7 +253,7 @@ public sealed class ExecutionContinuationTests
         public int Scans { get; private set; }
         public bool FailBitmapRefresh { get; set; }
         public bool IsDirty() => false;
-        public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token)
+        public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null)
         {
             checkpoint(); Scans++;
             return Layout with { Bitmap = Layout.Bitmap.ToArray(), Files = Layout.Files.ToArray() };
@@ -239,11 +266,14 @@ public sealed class ExecutionContinuationTests
         }
         public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules)
         {
+            lock (gate)
+            {
             Attempts.Add(move);
             BeforeMove?.Invoke(file, move);
             // A separate volume model detects stale sources, occupied destinations,
             // and accidental reuse of allocation after an ambiguous native result.
             LayoutMutation.Apply(Layout, move);
+            }
         }
         public void Dispose() { }
     }

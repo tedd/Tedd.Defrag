@@ -1,41 +1,67 @@
 using Tedd.Defrag.Core;
 using System.Buffers;
+using System.Diagnostics;
 
 namespace Tedd.Defrag.Planning;
 
 public sealed class LayoutPlanner
 {
-    public MovePlan Plan(VolumeLayout layout, JobRequest request, CancellationToken cancellationToken = default, PlanningSession? session = null)
+    public MovePlan Plan(VolumeLayout layout, JobRequest request, CancellationToken cancellationToken = default, PlanningSession? session = null,
+        Action<WorkProgress>? progress = null, Action? checkpoint = null)
     {
         request.Validate();
-        var rules = new PathRules(request.SelectedPaths, request.Exclusions);
-        using var free = new FreeSpaceIndex(BitmapOperations.FreeRanges(layout.Bitmap, layout.TotalClusters));
-        // Never consume MFT growth reservation, including its currently unallocated portion.
-        if (layout.MftZone.Length > 0)
+        var watch = Stopwatch.StartNew(); long lastReport = -1000;
+        int peakWorkers = 0;
+        int workers = WorkerPolicy.PlanningWorkers(request.Resources, layout.Files.Length);
+        void Checkpoint() { cancellationToken.ThrowIfCancellationRequested(); checkpoint?.Invoke(); }
+        void Report(string phase, long done, long total, string unit, int active = 1, int peak = 1, bool force = false)
         {
-            foreach (var range in BitmapOperations.FreeRanges(layout.Bitmap, layout.TotalClusters))
+            peakWorkers = Math.Max(peakWorkers, peak);
+            if (!force && watch.ElapsedMilliseconds - lastReport < 200) return;
+            progress?.Invoke(new(phase, done, total, unit, phase == "Sorting candidates" ? workers : 1,
+                active, peak, ElapsedMilliseconds: watch.ElapsedMilliseconds,
+                Acceleration: phase == "Indexing free space" ? WorkerPolicy.BitmapAcceleration : "Scalar CPU",
+                Detail: phase == "Sorting candidates" ? "Parallel partition sort; deterministic merge. Small inventories use one worker." :
+                    "Destination reservations are serial; each destination is unique and source space is retained until the batch finishes."));
+            lastReport = watch.ElapsedMilliseconds;
+        }
+        var rules = new PathRules(request.SelectedPaths, request.Exclusions);
+        Report("Indexing free space", 0, layout.TotalClusters, "clusters", force: true);
+        using var free = new FreeSpaceIndex(Ranges());
+        IEnumerable<ClusterRange> Ranges()
+        {
+            foreach (var range in BitmapOperations.FreeRanges(layout.Bitmap, layout.TotalClusters, cancellationToken,
+                n => { Checkpoint(); Report("Indexing free space", n, layout.TotalClusters, "clusters"); }))
             {
-                long start = Math.Max(range.Start, layout.MftZone.Start), end = Math.Min(range.End, layout.MftZone.End);
-                if (end > start) free.Reserve(start, end - start);
+                // Exclude the growth reservation while indexing, avoiding a second bitmap scan.
+                if (layout.MftZone.Length == 0 || range.End <= layout.MftZone.Start || range.Start >= layout.MftZone.End) yield return range;
+                else
+                {
+                    if (range.Start < layout.MftZone.Start) yield return new(range.Start, layout.MftZone.Start - range.Start);
+                    if (range.End > layout.MftZone.End) yield return new(layout.MftZone.End, range.End - layout.MftZone.End);
+                }
             }
         }
         using var order = new PooledBuffer<int>(layout.Files.Length);
         for (int i = 0; i < layout.Files.Length; i++) order.Add(i);
-        order.Span.Sort((a, b) =>
+        Report("Sorting candidates", 0, (long)layout.Files.Length * (workers > 1 ? 2 : 1), "sort / merge entries", force: true);
+        ParallelOrder.Sort(order.Array, order.Count, workers, (a, b) =>
         {
             int comparison = Compare(layout.Files[a], layout.Files[b], request.Operation);
             // Stable ties are required when an ordered pass resumes in a later batch.
             return comparison != 0 ? comparison : a.CompareTo(b);
-        });
+        }, (done, active, peak) => Report("Sorting candidates", done, (long)layout.Files.Length * (workers > 1 ? 2 : 1), "sort / merge entries", active, peak), Checkpoint, cancellationToken);
         using var moves = new PooledBuffer<PlannedMove>(1024);
         long remaining = request.MaxMoveBytes == 0 ? long.MaxValue : request.MaxMoveBytes / layout.Volume.BytesPerCluster;
         bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
         long planned = 0, cursor = ordered ? session?.DestinationCursor ?? 0 : 0;
         long chunk = Math.Max(1, 16L * 1024 * 1024 / layout.Volume.BytesPerCluster);
         int blocked = ordered ? session?.FilesBlocked ?? 0 : 0, considered = ordered ? session?.FilesConsidered ?? 0 : 0;
+        Report("Reserving destinations", ordered ? session?.OrderedPosition ?? 0 : 0, order.Count, "files", force: true);
         for (int position = ordered ? session?.OrderedPosition ?? 0 : 0; position < order.Count; position++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if ((position & 1023) == 0) { Checkpoint(); Report("Reserving destinations", position, order.Count, "files"); }
             if (ordered && session != null) session.OrderedPosition = position + 1;
             int index = order.Span[position];
             var file = layout.Files[index];
@@ -119,6 +145,9 @@ public sealed class LayoutPlanner
             session.FilesConsidered = considered;
             session.FilesBlocked = blocked;
         }
+        progress?.Invoke(new("Plan ready", considered, layout.Files.Length, "considered files", workers, 0, peakWorkers,
+            ElapsedMilliseconds: watch.ElapsedMilliseconds, Acceleration: WorkerPolicy.BitmapAcceleration + "; scalar sort / placement",
+            Detail: $"{moves.Count:N0} moves, {planned:N0} clusters, {blocked:N0} constrained files. At most 1,024 moves per batch."));
         return new(moves.ToArray(), planned, considered, blocked,
             "Bounded free-destination plan. Existing anchors are preserved where possible; excluded objects are never moved. Constraints may prevent full packing or ordering.");
 
@@ -150,6 +179,7 @@ internal sealed class PooledBuffer<T>(int capacity) : IDisposable
 {
     private T[] _data = ArrayPool<T>.Shared.Rent(Math.Max(1, capacity));
     public int Count { get; private set; }
+    public T[] Array => _data;
     public Span<T> Span => _data.AsSpan(0, Count);
     public void Add(T value) => _data[Count++] = value;
     public T[] ToArray() => Span.ToArray();

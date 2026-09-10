@@ -15,12 +15,19 @@ public sealed record AvailableRelease(
     string AssetName,
     Uri DownloadUri,
     Uri ChecksumUri,
-    Uri ReleasePageUri);
+    Uri ReleasePageUri,
+    ReleasePackageKind PackageKind);
+
+public enum ReleasePackageKind
+{
+    Portable,
+    Installer
+}
 
 public static class ReleaseUpdater
 {
     private const string Repository = "tedd/Tedd.Defrag";
-    private const long MaximumArchiveBytes = 1_073_741_824;
+    private const long MaximumPackageBytes = 1_073_741_824;
     private const long MaximumExtractedBytes = 1_610_612_736;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true, WriteIndented = true };
     private static readonly HttpClient Http = CreateHttpClient();
@@ -31,6 +38,11 @@ public static class ReleaseUpdater
         ?? "0.0.0";
 
     public static Version CurrentVersion => ParseVersion(DisplayVersion) ?? new Version(0, 0, 0);
+
+    public static ReleasePackageKind CurrentPackageKind =>
+        string.Equals(ReadManifest()?.InstallType, "installer", StringComparison.OrdinalIgnoreCase)
+            ? ReleasePackageKind.Installer
+            : ReleasePackageKind.Portable;
 
     public static bool IsPackaged => ReadManifest() is not null
         && File.Exists(Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Cli.exe"))
@@ -49,6 +61,19 @@ public static class ReleaseUpdater
     {
         Version? currentVersion = ParseVersion(current), candidateVersion = ParseVersion(candidate);
         return currentVersion is not null && candidateVersion is not null && candidateVersion > currentVersion;
+    }
+
+    public static string AssetNameFor(ReleasePackageKind packageKind, Architecture architecture)
+    {
+        string runtime = architecture switch
+        {
+            Architecture.X64 => "win-x64",
+            Architecture.Arm64 => "win-arm64",
+            _ => throw new PlatformNotSupportedException("Release updates are available for Windows x64 and ARM64.")
+        };
+        return packageKind == ReleasePackageKind.Installer
+            ? $"Tedd.Defrag-Setup-{runtime}.exe"
+            : $"Tedd.Defrag-{runtime}.zip";
     }
 
     public static async Task LaunchUpdateAsync(AvailableRelease release, string launcherName, IReadOnlyList<string> launchArguments, CancellationToken cancellationToken = default)
@@ -74,9 +99,20 @@ public static class ReleaseUpdater
         }
         File.Move(partialPath, archivePath, true);
 
-        string updaterSource = Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Cli.exe");
-        string updaterPath = Path.Combine(updateDirectory, "Tedd.Defrag.Updater.exe");
-        File.Copy(updaterSource, updaterPath, true);
+        string updaterPath = CopyUpdater(updateDirectory);
+        if (release.PackageKind == ReleasePackageKind.Installer)
+        {
+            var installerRequest = new InstallerUpdateRequest(
+                Environment.ProcessId,
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)),
+                archivePath,
+                expectedHash,
+                launcherName,
+                [.. launchArguments]);
+            StartUpdater(updaterPath, "--apply-installer-update", installerRequest);
+            return;
+        }
+
         var request = new UpdateRequest(
             Environment.ProcessId,
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)),
@@ -85,13 +121,7 @@ public static class ReleaseUpdater
             release.DisplayVersion,
             launcherName,
             [.. launchArguments]);
-        string requestPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, Json)));
-        if (requestPayload.Length > 24_000) throw new InvalidOperationException("The command line is too long to preserve across the update.");
-
-        var start = new ProcessStartInfo(updaterPath) { UseShellExecute = false, WorkingDirectory = updateDirectory };
-        start.ArgumentList.Add("--apply-update");
-        start.ArgumentList.Add(requestPayload);
-        using Process updater = Process.Start(start) ?? throw new IOException("The detached updater could not be started.");
+        StartUpdater(updaterPath, "--apply-update", request);
     }
 
     public static async Task<int> ApplyUpdateAsync(string requestPayload)
@@ -123,6 +153,46 @@ public static class ReleaseUpdater
         }
     }
 
+    public static async Task<int> ApplyInstallerUpdateAsync(string requestPayload)
+    {
+        InstallerUpdateRequest? request = null;
+        bool requestValidated = false;
+        try
+        {
+            request = DeserializeRequest<InstallerUpdateRequest>(requestPayload);
+            ValidateInstallerUpdateRequest(request);
+            requestValidated = true;
+            await WaitForProcessAsync(request.ParentProcessId, TimeSpan.FromMinutes(2));
+            await WaitForInstallationProcessesAsync(request.TargetDirectory, TimeSpan.FromSeconds(30));
+            await VerifyArchiveAsync(request.InstallerPath, request.ExpectedSha256);
+
+            var start = new ProcessStartInfo(request.InstallerPath)
+            {
+                UseShellExecute = true,
+                Verb = "runas",
+                WorkingDirectory = Path.GetDirectoryName(request.InstallerPath)!
+            };
+            start.ArgumentList.Add("/passive");
+            start.ArgumentList.Add("/norestart");
+            using Process installer = Process.Start(start) ?? throw new IOException("The installer could not be started.");
+            await installer.WaitForExitAsync();
+            if (installer.ExitCode is not (0 or 1641 or 3010))
+                throw new InvalidOperationException($"The installer exited with code {installer.ExitCode}.");
+            StartApplication(request.TargetDirectory, request.LauncherName, request.LaunchArguments);
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            WriteLog(exception.ToString());
+            if (requestValidated && request is not null)
+            {
+                try { StartApplication(request.TargetDirectory, request.LauncherName, request.LaunchArguments); }
+                catch (Exception restartException) { WriteLog("The previous application could not be restarted: " + restartException); }
+            }
+            return 1;
+        }
+    }
+
     private static async Task<AvailableRelease?> FetchLatestReleaseAsync(CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{Repository}/releases/latest");
@@ -134,13 +204,14 @@ public static class ReleaseUpdater
             ?? throw new InvalidDataException("GitHub returned an invalid release response.");
         if (release.Draft || release.Prerelease || !IsNewerVersion(DisplayVersion, release.TagName)) return null;
 
-        string assetName = $"Tedd.Defrag-{RuntimeId()}.zip";
+        ReleasePackageKind packageKind = CurrentPackageKind;
+        string assetName = AssetNameFor(packageKind, RuntimeInformation.ProcessArchitecture);
         GitHubAsset? package = release.Assets.FirstOrDefault(asset => asset.Name.Equals(assetName, StringComparison.OrdinalIgnoreCase));
         GitHubAsset? checksum = release.Assets.FirstOrDefault(asset => asset.Name.Equals(assetName + ".sha256", StringComparison.OrdinalIgnoreCase));
         if (package is null || checksum is null) return null;
         Uri downloadUri = TrustedGitHubUri(package.BrowserDownloadUrl);
         Uri checksumUri = TrustedGitHubUri(checksum.BrowserDownloadUrl);
-        return new(ParseVersion(release.TagName)!, release.TagName.TrimStart('v', 'V'), assetName, downloadUri, checksumUri, new Uri(release.HtmlUrl));
+        return new(ParseVersion(release.TagName)!, release.TagName.TrimStart('v', 'V'), assetName, downloadUri, checksumUri, TrustedGitHubUri(release.HtmlUrl), packageKind);
     }
 
     private static async Task<string> DownloadChecksumAsync(Uri uri, CancellationToken cancellationToken)
@@ -158,7 +229,7 @@ public static class ReleaseUpdater
     {
         using var response = await Http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
-        if (response.Content.Headers.ContentLength > MaximumArchiveBytes) throw new InvalidDataException("The release archive is unexpectedly large.");
+        if (response.Content.Headers.ContentLength > MaximumPackageBytes) throw new InvalidDataException("The release package is unexpectedly large.");
         await using Stream input = await response.Content.ReadAsStreamAsync(cancellationToken);
         await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 128, FileOptions.Asynchronous | FileOptions.SequentialScan);
         byte[] buffer = new byte[1024 * 128];
@@ -168,7 +239,7 @@ public static class ReleaseUpdater
             int read = await input.ReadAsync(buffer, cancellationToken);
             if (read == 0) break;
             total += read;
-            if (total > MaximumArchiveBytes) throw new InvalidDataException("The release archive exceeded the download limit.");
+            if (total > MaximumPackageBytes) throw new InvalidDataException("The release package exceeded the download limit.");
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
         }
         await output.FlushAsync(cancellationToken);
@@ -263,6 +334,42 @@ public static class ReleaseUpdater
         if (Path.GetFileName(request.LauncherName) != request.LauncherName) throw new InvalidDataException("The launcher name is invalid.");
     }
 
+    private static void ValidateInstallerUpdateRequest(InstallerUpdateRequest request)
+    {
+        string target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.TargetDirectory));
+        if (Directory.GetParent(target) is null || !Directory.Exists(target)) throw new InvalidOperationException("The installation directory is invalid.");
+        if (!File.Exists(Path.Combine(target, "release-manifest.json"))) throw new InvalidOperationException("The target is not a release distribution.");
+        if (!File.Exists(request.InstallerPath)) throw new FileNotFoundException("The downloaded installer was not found.", request.InstallerPath);
+        if (!Path.GetExtension(request.InstallerPath).Equals(".exe", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The downloaded installer has an invalid file type.");
+        if (request.ExpectedSha256.Length != 64 || !request.ExpectedSha256.All(Uri.IsHexDigit)) throw new InvalidDataException("The expected checksum is invalid.");
+        if (Path.GetFileName(request.LauncherName) != request.LauncherName) throw new InvalidDataException("The launcher name is invalid.");
+    }
+
+    private static string CopyUpdater(string updateDirectory)
+    {
+        string updaterSource = Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Cli.exe");
+        string updaterPath = Path.Combine(updateDirectory, "Tedd.Defrag.Updater.exe");
+        File.Copy(updaterSource, updaterPath, true);
+        return updaterPath;
+    }
+
+    private static void StartUpdater<T>(string updaterPath, string command, T request)
+    {
+        string requestPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, Json)));
+        if (requestPayload.Length > 24_000) throw new InvalidOperationException("The command line is too long to preserve across the update.");
+        var start = new ProcessStartInfo(updaterPath) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(updaterPath)! };
+        start.ArgumentList.Add(command);
+        start.ArgumentList.Add(requestPayload);
+        using Process updater = Process.Start(start) ?? throw new IOException("The detached updater could not be started.");
+    }
+
+    private static T DeserializeRequest<T>(string requestPayload)
+    {
+        if (requestPayload.Length > 30_000) throw new InvalidDataException("The update request is too large.");
+        return JsonSerializer.Deserialize<T>(Convert.FromBase64String(requestPayload), Json)
+            ?? throw new InvalidDataException("The update request is invalid.");
+    }
+
     private static async Task WaitForProcessAsync(int processId, TimeSpan timeout)
     {
         try
@@ -349,8 +456,9 @@ public static class ReleaseUpdater
         catch { }
     }
 
-    private sealed record ReleaseManifest(string Version, string Runtime, string AssetName);
+    private sealed record ReleaseManifest(string Version, string Runtime, string AssetName, string? InstallType);
     private sealed record UpdateRequest(int ParentProcessId, string TargetDirectory, string ArchivePath, string ExpectedSha256, string Version, string LauncherName, string[] LaunchArguments);
+    private sealed record InstallerUpdateRequest(int ParentProcessId, string TargetDirectory, string InstallerPath, string ExpectedSha256, string LauncherName, string[] LaunchArguments);
     private sealed record GitHubRelease(
         [property: JsonPropertyName("tag_name")] string TagName,
         [property: JsonPropertyName("html_url")] string HtmlUrl,

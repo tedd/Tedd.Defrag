@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    name: Stand-alone ${{ matrix.runtime }}
+    name: Packages ${{ matrix.runtime }}
     runs-on: windows-2025
     strategy:
       fail-fast: false
@@ -45,6 +45,15 @@ jobs:
           }
           if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw "Invalid semantic version: $version" }
           "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          $toolDirectory = Join-Path $env:RUNNER_TEMP 'wix'
+          dotnet tool install wix --tool-path $toolDirectory --version 5.0.2
+          $wix = Join-Path $toolDirectory 'wix.exe'
+          & $wix extension add --global WixToolset.BootstrapperApplications.wixext/5.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper extension installation failed.' }
+          "WIX=$wix" >> $env:GITHUB_ENV
       - name: Publish and package
         shell: pwsh
         run: ./scripts/Publish.ps1 -Runtime '${{ matrix.runtime }}' -Version '${{ steps.version.outputs.version }}' -SourceRevision $env:GITHUB_SHA
@@ -54,6 +63,10 @@ jobs:
           path: |
             artifacts/dist/Tedd.Defrag-${{ matrix.runtime }}.zip
             artifacts/dist/Tedd.Defrag-${{ matrix.runtime }}.zip.sha256
+            artifacts/dist/Tedd.Defrag-${{ matrix.runtime }}.msi
+            artifacts/dist/Tedd.Defrag-${{ matrix.runtime }}.msi.sha256
+            artifacts/dist/Tedd.Defrag-Setup-${{ matrix.runtime }}.exe
+            artifacts/dist/Tedd.Defrag-Setup-${{ matrix.runtime }}.exe.sha256
           if-no-files-found: error
           compression-level: 0
 
@@ -70,7 +83,7 @@ jobs:
           pattern: Tedd.Defrag-*
           path: release-assets
           merge-multiple: true
-      - name: Create release and upload verified archives
+      - name: Create release and upload verified packages
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
