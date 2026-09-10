@@ -2,17 +2,36 @@
 <Application xmlns="http://schemas.microsoft.com/dotnet/2021/maui" xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="Tedd.Defrag.Desktop.App">
   <Application.Resources>
     <ResourceDictionary>
-      <Color x:Key="Canvas">#0A1018</Color><Color x:Key="Surface">#101A26</Color>
-      <Color x:Key="Line">#233140</Color><Color x:Key="Accent">#54D5CB</Color>
-      <Color x:Key="Ink">#E5EEF4</Color><Color x:Key="Muted">#91A2B4</Color>
-      <Style TargetType="Label"><Setter Property="TextColor" Value="{StaticResource Ink}" /><Setter Property="FontFamily" Value="OpenSansRegular" /><Setter Property="FontSize" Value="13" /></Style>
-      <Style TargetType="Button"><Setter Property="BackgroundColor" Value="#1B2B3A" /><Setter Property="TextColor" Value="{StaticResource Ink}" /><Setter Property="CornerRadius" Value="9" /><Setter Property="FontFamily" Value="OpenSansSemibold" /><Setter Property="FontSize" Value="12" /><Setter Property="Padding" Value="16,11" /><Setter Property="MinimumHeightRequest" Value="38" /></Style>
-      <Style TargetType="Entry"><Setter Property="TextColor" Value="{StaticResource Ink}" /><Setter Property="PlaceholderColor" Value="#667D92" /><Setter Property="BackgroundColor" Value="#152231" /><Setter Property="FontSize" Value="12" /></Style>
-      <Style TargetType="Picker"><Setter Property="TextColor" Value="{StaticResource Ink}" /><Setter Property="TitleColor" Value="{StaticResource Muted}" /><Setter Property="BackgroundColor" Value="#152231" /><Setter Property="FontSize" Value="12" /></Style>
-      <Style TargetType="Switch"><Setter Property="OnColor" Value="{StaticResource Accent}" /><Setter Property="ThumbColor" Value="#E5EEF4" /></Style>
-      <Style TargetType="Slider"><Setter Property="MinimumTrackColor" Value="{StaticResource Accent}" /><Setter Property="MaximumTrackColor" Value="#29394C" /><Setter Property="ThumbColor" Value="{StaticResource Accent}" /></Style>
-      <Style x:Key="Card" TargetType="Border"><Setter Property="Stroke" Value="{StaticResource Line}" /><Setter Property="Background" Value="{StaticResource Surface}" /><Setter Property="StrokeShape" Value="RoundRectangle 14" /><Setter Property="Padding" Value="18" /></Style>
-      <Style x:Key="Caption" TargetType="Label"><Setter Property="TextColor" Value="{StaticResource Muted}" /><Setter Property="FontSize" Value="11" /><Setter Property="CharacterSpacing" Value="1" /></Style>
+      <!-- Light is the initial palette. App.xaml.cs applies the saved Windows/light/dark preference at startup. -->
+      <Color x:Key="Canvas">#F6F9FA</Color><Color x:Key="Surface">#FFFFFF</Color>
+      <Color x:Key="Line">#D6E1E5</Color><Color x:Key="Accent">#087F7B</Color>
+      <Color x:Key="Ink">#13232C</Color><Color x:Key="Muted">#5E727D</Color>
+      <Color x:Key="ButtonSurface">#E7EEF1</Color><Color x:Key="Field">#EDF3F5</Color>
+      <Color x:Key="Placeholder">#728691</Color><Color x:Key="SwitchThumb">#FFFFFF</Color>
+      <Color x:Key="Track">#D8E2E6</Color><Color x:Key="Sidebar">#F1F6F7</Color>
+      <Color x:Key="SidebarLine">#D8E2E5</Color><Color x:Key="SidebarText">#48616D</Color>
+      <Color x:Key="NavSelected">#D5EEEC</Color><Color x:Key="NoticeSurface">#E3F4F3</Color>
+      <Color x:Key="NoticeLine">#BEDDDA</Color><Color x:Key="NoticeText">#3D6669</Color>
+      <Color x:Key="BadgeSurface">#E9F0F5</Color><Color x:Key="BadgeLine">#D1DCE4</Color>
+      <Color x:Key="BadgeText">#465E73</Color><Color x:Key="MapCanvas">#0C141F</Color>
+      <Color x:Key="SubtleText">#6C8290</Color><Color x:Key="DangerSurface">#F5E8EC</Color>
+      <Color x:Key="DangerText">#9B485B</Color><Color x:Key="ActionSurface">#E8F5F4</Color>
+      <Color x:Key="ActionLine">#B7D7D5</Color><Color x:Key="ActionInner">#F6FAFA</Color>
+      <Color x:Key="ActionButton">#D5E8E8</Color><Color x:Key="PrimaryText">#062C2F</Color>
+      <Color x:Key="HeaderSurface">#EEF3F5</Color><Color x:Key="Overlay">#9913232C</Color>
+      <Color x:Key="ModalSurface">#FFFFFF</Color><Color x:Key="ModalLine">#96C3C0</Color>
+      <Color x:Key="OptionSurface">#F6F9FA</Color><Color x:Key="OptionStroke">#D0DEE2</Color>
+      <Color x:Key="OptionIconSurface">#DDF5F2</Color><Color x:Key="OptionIconStroke">#ABD0CD</Color>
+      <Color x:Key="Chevron">#647B88</Color>
+
+      <Style TargetType="Label"><Setter Property="TextColor" Value="{DynamicResource Ink}" /><Setter Property="FontFamily" Value="OpenSansRegular" /><Setter Property="FontSize" Value="13" /></Style>
+      <Style TargetType="Button"><Setter Property="BackgroundColor" Value="{DynamicResource ButtonSurface}" /><Setter Property="TextColor" Value="{DynamicResource Ink}" /><Setter Property="CornerRadius" Value="9" /><Setter Property="FontFamily" Value="OpenSansSemibold" /><Setter Property="FontSize" Value="12" /><Setter Property="Padding" Value="16,11" /><Setter Property="MinimumHeightRequest" Value="38" /></Style>
+      <Style TargetType="Entry"><Setter Property="TextColor" Value="{DynamicResource Ink}" /><Setter Property="PlaceholderColor" Value="{DynamicResource Placeholder}" /><Setter Property="BackgroundColor" Value="{DynamicResource Field}" /><Setter Property="FontSize" Value="12" /></Style>
+      <Style TargetType="Picker"><Setter Property="TextColor" Value="{DynamicResource Ink}" /><Setter Property="TitleColor" Value="{DynamicResource Muted}" /><Setter Property="BackgroundColor" Value="{DynamicResource Field}" /><Setter Property="FontSize" Value="12" /></Style>
+      <Style TargetType="Switch"><Setter Property="OnColor" Value="{DynamicResource Accent}" /><Setter Property="ThumbColor" Value="{DynamicResource SwitchThumb}" /></Style>
+      <Style TargetType="Slider"><Setter Property="MinimumTrackColor" Value="{DynamicResource Accent}" /><Setter Property="MaximumTrackColor" Value="{DynamicResource Track}" /><Setter Property="ThumbColor" Value="{DynamicResource Accent}" /></Style>
+      <Style x:Key="Card" TargetType="Border"><Setter Property="Stroke" Value="{DynamicResource Line}" /><Setter Property="Background" Value="{DynamicResource Surface}" /><Setter Property="StrokeShape" Value="RoundRectangle 14" /><Setter Property="Padding" Value="18" /></Style>
+      <Style x:Key="Caption" TargetType="Label"><Setter Property="TextColor" Value="{DynamicResource Muted}" /><Setter Property="FontSize" Value="11" /><Setter Property="CharacterSpacing" Value="1" /></Style>
     </ResourceDictionary>
   </Application.Resources>
 </Application>

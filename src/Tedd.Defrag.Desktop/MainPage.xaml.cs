@@ -17,6 +17,7 @@ public partial class MainPage : ContentPage
     private VolumeInfo[] _volumes = [];
     private VolumeInfo? _volume;
     private bool _polling, _refreshing, _submitting;
+    private bool _settingTheme;
     private readonly IDispatcherTimer _timer;
     private TaskCompletionSource<Operation?>? _policyChoice;
     private static readonly PolicyOption[] Policies =
@@ -44,6 +45,15 @@ public partial class MainPage : ContentPage
     {
         InitializeComponent(); DiskMap.Drawable = _map;
         PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
+        ThemePicker.ItemsSource = new[] { "Follow Windows", "Light", "Dark" };
+        _settingTheme = true;
+        ThemePicker.SelectedItem = (Application.Current as App)?.ThemePreference switch
+        {
+            "Light" => "Light",
+            "Dark" => "Dark",
+            _ => "Follow Windows"
+        };
+        _settingTheme = false;
         ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · unlimited I/O", "Performance · dedicated" }; ResourcePreset.SelectedIndex = 1;
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
         Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await CheckForUpdate(); };
@@ -97,7 +107,11 @@ public partial class MainPage : ContentPage
                     ?? volumes.FirstOrDefault(v => v.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase)) ?? volumes.FirstOrDefault());
             }
             if (volumes.Length == 0)
-                VolumesPanel.Children.Add(new Label { Text = "No available volumes", FontSize = 11, TextColor = Color.FromArgb("#8095A9") });
+            {
+                var empty = new Label { Text = "No available volumes", FontSize = 11 };
+                empty.SetDynamicResource(Label.TextColorProperty, "SubtleText");
+                VolumesPanel.Children.Add(empty);
+            }
             UpdateVolumeActions();
         }
         catch (Exception e) { FooterStatus.Text = e.Message; }
@@ -106,7 +120,8 @@ public partial class MainPage : ContentPage
     private void AddVolume(VolumeInfo volume)
     {
         var button = new Button { Text = $"▣  {volume.Root[..2]}   {volume.Label}", FontSize = 12, Padding = new Thickness(10, 12),
-            BackgroundColor = Color.FromArgb("#132131"), HorizontalOptions = LayoutOptions.Fill, BindingContext = volume.Id };
+            HorizontalOptions = LayoutOptions.Fill, BindingContext = volume.Id };
+        button.SetDynamicResource(Button.BackgroundColorProperty, "ButtonSurface");
         button.Clicked += (_, _) => SelectVolume(volume); VolumesPanel.Children.Add(button);
     }
     private void SelectVolume(VolumeInfo? volume)
@@ -145,7 +160,7 @@ public partial class MainPage : ContentPage
         foreach (var button in VolumesPanel.Children.OfType<Button>())
         {
             button.IsEnabled = !_submitting;
-            button.BackgroundColor = Color.FromArgb(Equals(button.BindingContext, _volume?.Id) ? "#1B3D45" : "#132131");
+            button.SetDynamicResource(Button.BackgroundColorProperty, Equals(button.BindingContext, _volume?.Id) ? "NavSelected" : "ButtonSurface");
         }
     }
     private JobRequest Request(Operation operation, bool preview)
@@ -287,13 +302,28 @@ public partial class MainPage : ContentPage
     private async void OnRefreshVolumes(object? sender, EventArgs e) => await RefreshVolumes();
     private void OnOverview(object? sender, EventArgs e) { ShowSettings(false); OnResetZoom(sender, e); }
     private void OnSettings(object? sender, EventArgs e) => ShowSettings(true);
+    private void OnThemeChanged(object? sender, EventArgs e)
+    {
+        if (_settingTheme || ThemePicker.SelectedItem is not string selected || Application.Current is not App app) return;
+        app.SetThemePreference(selected switch { "Light" => "Light", "Dark" => "Dark", _ => "System" });
+    }
     private void ShowSettings(bool settings)
     {
         OverviewContent.IsVisible = ActionContent.IsVisible = !settings; SettingsContent.IsVisible = settings;
-        OverviewButton.BackgroundColor = Color.FromArgb(settings ? "#00000000" : "#193A40");
-        OverviewButton.TextColor = Color.FromArgb(settings ? "#E5EEF4" : "#54D5CB");
-        SettingsButton.BackgroundColor = Color.FromArgb(settings ? "#193A40" : "#00000000");
-        SettingsButton.TextColor = Color.FromArgb(settings ? "#54D5CB" : "#E5EEF4");
+        if (settings)
+        {
+            OverviewButton.BackgroundColor = Colors.Transparent;
+            OverviewButton.SetDynamicResource(Button.TextColorProperty, "Ink");
+            SettingsButton.SetDynamicResource(Button.BackgroundColorProperty, "NavSelected");
+            SettingsButton.SetDynamicResource(Button.TextColorProperty, "Accent");
+        }
+        else
+        {
+            OverviewButton.SetDynamicResource(Button.BackgroundColorProperty, "NavSelected");
+            OverviewButton.SetDynamicResource(Button.TextColorProperty, "Accent");
+            SettingsButton.BackgroundColor = Colors.Transparent;
+            SettingsButton.SetDynamicResource(Button.TextColorProperty, "Ink");
+        }
     }
     private void OnZoomIn(object? sender, EventArgs e) { _map.Zoom(true); DiskMap.Invalidate(); UpdateRange(); }
     private void OnZoomOut(object? sender, EventArgs e) { _map.Zoom(false); DiskMap.Invalidate(); UpdateRange(); }
