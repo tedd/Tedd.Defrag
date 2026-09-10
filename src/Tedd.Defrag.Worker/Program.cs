@@ -58,6 +58,7 @@ internal sealed class Broker
     private readonly Dictionary<Guid, Process> _active = [];
     private readonly Dictionary<Guid, string[]> _resources = [];
     private readonly ResourceScheduler _scheduler = new();
+    private bool _stopping;
     public Broker(JobStore store)
     {
         _store = store;
@@ -103,9 +104,13 @@ internal sealed class Broker
     }
     private BrokerReply Handle(BrokerCommand command)
     {
+        if (_stopping && command.Action is not ("ping" or "list" or "get" or "schedules" or "stop"))
+            throw new InvalidOperationException("The worker is stopping. Retry after it has restarted.");
+        if (command.Action is "submit" or "schedule-add" && command.ClientBuild != null && command.ClientBuild != BrokerProtocol.BuildVersion)
+            throw new InvalidOperationException($"Worker build {BrokerProtocol.BuildVersion} differs from client build {command.ClientBuild}. Reconnect to the matching worker before submitting work.");
         switch (command.Action)
         {
-            case "ping": return new(true);
+            case "ping": return new(true, Worker: new(BrokerProtocol.BuildVersion, Environment.ProcessId, Environment.ProcessPath ?? "", _stopping));
             case "submit":
                 var job = command.Job ?? throw new ArgumentException("Missing job.");
                 job.Validate();
@@ -130,6 +135,8 @@ internal sealed class Broker
             case "schedule-remove": _store.SaveSchedules(_store.Schedules.Where(s => s.Name != command.Name).ToArray()); return new(true);
             case "stop":
                 if (_active.Count != 0 || _queue.Count != 0) throw new InvalidOperationException("Cancel or finish active and queued jobs before stopping the worker.");
+                if (_stopping) return new(true);
+                _stopping = true;
                 _ = Task.Run(async () => { await Task.Delay(500); Environment.Exit(0); }); return new(true);
             default: throw new ArgumentException("Unknown broker command.");
         }
@@ -146,6 +153,7 @@ internal sealed class Broker
         {
             lock (_sync)
             {
+                if (_stopping) return;
                 foreach (var (id, process) in _active.ToArray())
                 {
                     if (!process.HasExited) continue;

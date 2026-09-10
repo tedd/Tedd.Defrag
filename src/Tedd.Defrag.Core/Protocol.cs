@@ -2,14 +2,18 @@ using System.Buffers.Binary;
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Reflection;
 
 namespace Tedd.Defrag.Core;
 
-public sealed record BrokerCommand(string Action, JobRequest? Job = null, Guid Id = default, SchedulerSettings? Settings = null, ScheduleDefinition? Schedule = null, string? Name = null);
+public sealed record BrokerCommand(string Action, JobRequest? Job = null, Guid Id = default, SchedulerSettings? Settings = null, ScheduleDefinition? Schedule = null, string? Name = null, string? ClientBuild = null);
 public sealed record BrokerReply(bool Success, string? Error = null, Guid Id = default, JobSnapshot? Snapshot = null,
-    JobSnapshot[]? Jobs = null, SchedulerSettings? Settings = null, ScheduleDefinition[]? Schedules = null);
+    JobSnapshot[]? Jobs = null, SchedulerSettings? Settings = null, ScheduleDefinition[]? Schedules = null, WorkerIdentity? Worker = null);
+public sealed record WorkerIdentity(string Build, int ProcessId, string ExecutablePath, bool Stopping = false);
 public static class BrokerProtocol
 {
+    public static string BuildVersion { get; } = typeof(BrokerProtocol).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(BrokerProtocol).Assembly.GetName().Version?.ToString() ?? "unknown";
     public static string PipeName => "Tedd.Defrag." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Environment.UserDomainName + "\\" + Environment.UserName)))[..24];
     public static async Task Write<T>(Stream stream, T data, JsonSerializerOptions options, CancellationToken token)
     {

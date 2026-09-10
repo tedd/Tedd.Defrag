@@ -160,7 +160,7 @@ public sealed class JobExecutor
                 warnings.ToArray(), plannedBytes, layout?.Volume.SizeBytes ?? 0, layout?.Volume.FreeBytes ?? 0,
                 request.Resources.CpuPercent, request.Resources.MemoryMiB, request.Resources.IoMiBPerSecond,
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,
-                initialFragmentedFiles, clock.ElapsedMilliseconds));
+                initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion));
             lastPublish = clock.ElapsedMilliseconds;
         }
         void Checkpoint()

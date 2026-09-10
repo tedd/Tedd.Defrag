@@ -43,7 +43,15 @@ internal static class Program
                 if (action == "watch") return await Watch(client, id, json, parsed.Has("events"));
                 await client.Send(new(action, Id: id)); return 0;
             }
-            if (command == "worker") { await client.Send(new(parsed.Positionals.ElementAtOrDefault(1) == "stop" ? "stop" : "ping")); return 0; }
+            if (command == "worker")
+            {
+                string action = parsed.Positionals.ElementAtOrDefault(1) ?? "status";
+                var reply = await client.Send(new(action == "stop" ? "stop" : "ping"), startBroker: action == "start");
+                if (json) PrintJson(reply);
+                else if (reply.Worker is { } worker) Console.WriteLine($"Worker {worker.Build} · PID {worker.ProcessId} · {worker.ExecutablePath}");
+                else if (action != "stop") Console.WriteLine("Legacy worker: build information unavailable. Submit with the current client or use 'worker start' to replace it when idle.");
+                return 0;
+            }
             if (command == "settings")
             {
                 var current = (await client.Send(new("settings"))).Settings!;
@@ -210,7 +218,7 @@ internal static class Program
         schedule add --name nightly --volume D: --days Sunday --at 02:00
           --policy MinimumWrite --execute --idle-only
         schedule list|remove [--name nightly]
-        worker stop
+        worker status | start | stop          Inspect, start/refresh, or stop an idle worker
 
         Exit codes: 0 complete; 1 failed; 2 arguments; 3 partial; 4 unsupported; 130 detached/cancelled.
         Affinity cannot guarantee cache isolation. I/O pacing covers custom relocation/zeroing,

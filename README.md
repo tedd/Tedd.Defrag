@@ -22,6 +22,8 @@ The dashboard requests administrator access at startup, lists real volumes, and 
 
 Simulation mode and the `--demo` option have been removed. Legacy simulation requests are rejected and their schedules are disabled, so they cannot become real disk operations. Synthetic volume fixtures are compiled only into tests and benchmarks.
 
+Before submitting work, the client checks the persistent worker's build. An idle worker from an older build is replaced automatically; active or queued jobs must finish or be cancelled first. Development worker discovery matches the client build and prefers its Debug/Release configuration. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them.
+
 Publish a versioned, self-contained Windows distribution. The Desktop, CLI, and isolated worker are each single-file ReadyToRun executables and are placed together in one ZIP:
 
 ```powershell

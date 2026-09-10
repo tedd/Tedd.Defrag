@@ -1,15 +1,37 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.CompilerServices;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Persistence;
+
+[assembly: InternalsVisibleTo("Tedd.Defrag.Tests")]
 
 namespace Tedd.Defrag.Client;
 
 public sealed class DefragClient
 {
+    private readonly Func<BrokerCommand, CancellationToken, Task<BrokerReply>> _connect;
+    private readonly Func<Action> _prepareStart;
+    private readonly Func<int, CancellationToken, Task> _delay;
+
+    public DefragClient() : this(Connect, PrepareBrokerStart, Task.Delay) { }
+    internal DefragClient(Func<BrokerCommand, CancellationToken, Task<BrokerReply>> connect,
+        Func<Action> prepareStart, Func<int, CancellationToken, Task> delay)
+    {
+        _connect = connect; _prepareStart = prepareStart; _delay = delay;
+    }
+
     public async Task<BrokerReply> Send(BrokerCommand command, bool startBroker = false, CancellationToken token = default)
     {
-        try { return await Connect(command, token); }
+        bool submitsWork = command.Action is "submit" or "schedule-add";
+        if (startBroker || submitsWork)
+        {
+            await EnsureMatchingBroker(startBroker, token);
+            // The broker also checks this stamp, covering replacement between the
+            // handshake and submission. Never retry a submitted command implicitly.
+            return await _connect(submitsWork ? command with { ClientBuild = BrokerProtocol.BuildVersion } : command, token);
+        }
+        try { return await _connect(command, token); }
         catch (TimeoutException) when (!startBroker && command.Action is "list" or "get" or "schedules" || !startBroker && command.Action == "settings" && command.Settings == null)
         {
             var store = new JobStore();
@@ -21,20 +43,74 @@ public sealed class DefragClient
                 _ => new(true, Settings: store.Settings)
             };
         }
-        catch (TimeoutException) when (startBroker)
+    }
+
+    private static bool Matches(BrokerReply reply) => reply.Worker is { Stopping: false } worker && worker.Build == BrokerProtocol.BuildVersion;
+
+    private async Task EnsureMatchingBroker(bool mayStart, CancellationToken token)
+    {
+        BrokerReply reply;
+        try { reply = await _connect(new("ping"), token); }
+        catch (TimeoutException) when (mayStart)
         {
-            var start = WorkerStart("--broker");
-            start.UseShellExecute = true; start.WindowStyle = ProcessWindowStyle.Hidden;
-            start.Verb = "runas";
-            using var process = Process.Start(start) ?? throw new IOException("Worker could not be started.");
-            for (int i = 0; i < 60; i++)
-            {
-                token.ThrowIfCancellationRequested();
-                try { return await Connect(command, token); }
-                catch (TimeoutException) { await Task.Delay(250, token); }
-            }
-            throw new TimeoutException("Worker did not become available.");
+            await StartAndWait(_prepareStart(), token);
+            return;
         }
+        if (Matches(reply)) return;
+        string oldBuild = reply.Worker?.Build ?? "legacy (version unavailable)";
+        if (!mayStart) throw new InvalidOperationException($"Worker build {oldBuild} does not match client build {BrokerProtocol.BuildVersion}. Restart the worker before submitting work.");
+
+        // Resolve and validate the replacement before retiring a working broker.
+        Action launch = _prepareStart();
+        if (reply.Worker?.Stopping != true)
+        {
+            try { await _connect(new("stop"), token); }
+            catch (InvalidOperationException e)
+            {
+                throw new InvalidOperationException($"Worker build {oldBuild} must be replaced with {BrokerProtocol.BuildVersion}. {e.Message}", e);
+            }
+        }
+        for (int i = 0; i < 60; i++)
+        {
+            await _delay(250, token);
+            try
+            {
+                reply = await _connect(new("ping"), token);
+                if (Matches(reply)) return; // Another client already replaced it.
+            }
+            catch (TimeoutException)
+            {
+                await StartAndWait(launch, token);
+                return;
+            }
+        }
+        throw new TimeoutException("The old worker did not stop; no job was submitted.");
+    }
+
+    private async Task StartAndWait(Action launch, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        launch();
+        for (int i = 0; i < 60; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                var reply = await _connect(new("ping"), token);
+                if (Matches(reply)) return;
+                throw new InvalidOperationException($"The started worker does not match client build {BrokerProtocol.BuildVersion}. No job was submitted.");
+            }
+            catch (TimeoutException) { await _delay(250, token); }
+        }
+        throw new TimeoutException("Worker did not become available; no job was submitted.");
+    }
+
+    private static Action PrepareBrokerStart()
+    {
+        var start = WorkerStart("--broker");
+        start.UseShellExecute = true; start.WindowStyle = ProcessWindowStyle.Hidden;
+        start.Verb = "runas";
+        return () => { using var process = Process.Start(start) ?? throw new IOException("Worker could not be started."); };
     }
     private static async Task<BrokerReply> Connect(BrokerCommand command, CancellationToken token)
     {
@@ -48,18 +124,31 @@ public sealed class DefragClient
     public static ProcessStartInfo WorkerStart(params string[] args)
     {
         string? configured = Environment.GetEnvironmentVariable("TEDD_DEFRAG_WORKER");
-        string? worker = !string.IsNullOrWhiteSpace(configured) && File.Exists(configured) ? configured : null;
+        string? worker = !string.IsNullOrWhiteSpace(configured) ? configured : null;
         worker ??= new[] { Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Worker.exe"), Path.Combine(AppContext.BaseDirectory, "worker", "Tedd.Defrag.Worker.exe"), Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "worker", "Tedd.Defrag.Worker.exe")) }.FirstOrDefault(File.Exists);
         // Development checkout: locate an actually built worker, never build or execute downloaded code implicitly.
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); worker == null && directory != null; directory = directory.Parent)
         {
             string project = Path.Combine(directory.FullName, "src", "Tedd.Defrag.Worker", "bin");
             if (!Directory.Exists(project)) continue;
-            worker = Directory.EnumerateFiles(project, "Tedd.Defrag.Worker.exe", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+            string? configuration = AppContext.BaseDirectory.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .LastOrDefault(p => p.Equals("Debug", StringComparison.OrdinalIgnoreCase) || p.Equals("Release", StringComparison.OrdinalIgnoreCase));
+            worker = SelectDevelopmentWorker(Directory.EnumerateFiles(project, "Tedd.Defrag.Worker.exe", SearchOption.AllDirectories),
+                configuration, path => FileVersionInfo.GetVersionInfo(path).ProductVersion, File.GetLastWriteTimeUtc);
         }
-        if (worker == null) throw new FileNotFoundException("Build Tedd.Defrag.Worker or place its published folder beside the application as 'worker'.");
+        if (worker == null || !File.Exists(worker)) throw new FileNotFoundException($"Build Tedd.Defrag.Worker for client build {BrokerProtocol.BuildVersion}, or place the matching published worker beside the application.", worker);
+        string? workerBuild = FileVersionInfo.GetVersionInfo(worker).ProductVersion;
+        if (workerBuild != BrokerProtocol.BuildVersion)
+            throw new InvalidOperationException($"Worker '{worker}' is build {workerBuild ?? "unknown"}; the client is {BrokerProtocol.BuildVersion}. Use executables from the same build.");
         var info = new ProcessStartInfo(worker) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(worker)! };
         foreach (string arg in args) info.ArgumentList.Add(arg);
         return info;
     }
+
+    internal static string? SelectDevelopmentWorker(IEnumerable<string> candidates, string? configuration,
+        Func<string, string?> readBuild, Func<string, DateTime> lastWrite)
+        => candidates.Where(path => readBuild(path) == BrokerProtocol.BuildVersion)
+            .OrderByDescending(path => configuration != null && path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Contains(configuration, StringComparer.OrdinalIgnoreCase))
+            .ThenByDescending(lastWrite).FirstOrDefault();
 }

@@ -106,7 +106,8 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     string[]? Warnings = null, long PlannedBytes = 0, long TotalBytes = 0, long FreeBytes = 0,
     int CpuPercent = 0, int MemoryMiB = 0, int IoMiBPerSecond = 0,
     int PlannedMoves = 0, int AttemptedMoves = 0, int VerifiedMoves = 0, int FailedMoves = 0,
-    int FilesConsidered = 0, int FilesBlocked = 0, int InitialFragmentedFiles = 0, long ElapsedMilliseconds = 0)
+    int FilesConsidered = 0, int FilesBlocked = 0, int InitialFragmentedFiles = 0, long ElapsedMilliseconds = 0,
+    string? WorkerBuild = null)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
 }

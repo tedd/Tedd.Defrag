@@ -25,6 +25,7 @@ public sealed class ExecutionContinuationTests
         var result = Run(volume, Request(operation));
 
         Assert.Equal(JobState.Partial, result.State);
+        Assert.Equal(BrokerProtocol.BuildVersion, result.WorkerBuild);
         Assert.True(result.VerifiedMoves > 1024);
         Assert.Equal(1, result.FailedMoves);
         Assert.Single(volume.Attempts, m => m.FileId == failedId);
