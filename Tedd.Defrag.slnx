@@ -10,7 +10,6 @@
     <Project Path="src/Tedd.Defrag.Ntfs/Tedd.Defrag.Ntfs.csproj" />
     <Project Path="src/Tedd.Defrag.Persistence/Tedd.Defrag.Persistence.csproj" />
     <Project Path="src/Tedd.Defrag.Planning/Tedd.Defrag.Planning.csproj" />
-    <Project Path="src/Tedd.Defrag.Scheduling/Tedd.Defrag.Scheduling.csproj" />
     <Project Path="src/Tedd.Defrag.Update/Tedd.Defrag.Update.csproj" />
     <Project Path="src/Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
     <Project Path="src/Tedd.Defrag.Windows/Tedd.Defrag.Windows.csproj" />

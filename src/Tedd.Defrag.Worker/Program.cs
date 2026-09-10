@@ -1,10 +1,10 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO.Pipes;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Engine;
 using Tedd.Defrag.Persistence;
-using Tedd.Defrag.Scheduling;
 using Tedd.Defrag.Windows;
 
 namespace Tedd.Defrag.Worker;
@@ -43,7 +43,7 @@ internal static class Program
         if (!owns) return 0;
         using var cancellation = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
-        var broker = new Broker(store);
+        var broker = new Broker(store, cancellation.Cancel);
         var server = broker.Listen(cancellation.Token);
         await broker.Pump(cancellation.Token);
         await server; return 0;
@@ -57,11 +57,13 @@ internal sealed class Broker
     private readonly Queue<JobRequest> _queue = new();
     private readonly Dictionary<Guid, Process> _active = [];
     private readonly Dictionary<Guid, string[]> _resources = [];
-    private readonly ResourceScheduler _scheduler = new();
+    private readonly ResourceArbiter _arbiter = new();
+    private readonly Action _requestStop;
     private bool _stopping;
-    public Broker(JobStore store)
+    public Broker(JobStore store, Action requestStop)
     {
         _store = store;
+        _requestStop = requestStop;
         foreach (var snapshot in store.List().Where(s => !s.IsTerminal))
         {
             if (snapshot.State == JobState.Queued)
@@ -71,9 +73,6 @@ internal sealed class Broker
             }
             else store.Save(snapshot with { State = JobState.Interrupted, Message = "Worker restarted. Reanalyze before resubmitting; saved cluster addresses are never replayed.", UpdatedAt = DateTimeOffset.UtcNow });
         }
-        var schedules = store.Schedules;
-        if (schedules.Any(s => s.Enabled && s.Template.LegacySimulation))
-            store.SaveSchedules(schedules.Select(s => s.Template.LegacySimulation ? s with { Enabled = false } : s).ToArray());
     }
     public async Task Listen(CancellationToken token)
     {
@@ -104,9 +103,9 @@ internal sealed class Broker
     }
     private BrokerReply Handle(BrokerCommand command)
     {
-        if (_stopping && command.Action is not ("ping" or "list" or "get" or "schedules" or "stop"))
+        if (_stopping && command.Action is not ("ping" or "list" or "get" or "stop" or "shutdown"))
             throw new InvalidOperationException("The worker is stopping. Retry after it has restarted.");
-        if (command.Action is "submit" or "schedule-add" && command.ClientBuild != null && command.ClientBuild != BrokerProtocol.BuildVersion)
+        if (command.Action == "submit" && command.ClientBuild != null && command.ClientBuild != BrokerProtocol.BuildVersion)
             throw new InvalidOperationException($"Worker build {BrokerProtocol.BuildVersion} differs from client build {command.ClientBuild}. Reconnect to the matching worker before submitting work.");
         switch (command.Action)
         {
@@ -126,18 +125,14 @@ internal sealed class Broker
                     _store.SaveSettings(command.Settings);
                 }
                 return new(true, Settings: _store.Settings);
-            case "schedules": return new(true, Schedules: _store.Schedules);
-            case "schedule-add":
-                var schedule = command.Schedule ?? throw new ArgumentException("Missing schedule."); schedule.Template.Validate();
-                if (schedule.Template.Operation == Operation.ZeroFreeSpace) throw new NotSupportedException("Virtual-disk pre-zeroing is a manual workflow and cannot be scheduled.");
-                if (schedule.Days.Length == 0 || string.IsNullOrWhiteSpace(schedule.Name)) throw new ArgumentException("Schedule name and days are required.");
-                _store.SaveSchedules([.. _store.Schedules.Where(s => s.Name != schedule.Name), schedule]); return new(true);
-            case "schedule-remove": _store.SaveSchedules(_store.Schedules.Where(s => s.Name != command.Name).ToArray()); return new(true);
             case "stop":
                 if (_active.Count != 0 || _queue.Count != 0) throw new InvalidOperationException("Cancel or finish active and queued jobs before stopping the worker.");
                 if (_stopping) return new(true);
                 _stopping = true;
-                _ = Task.Run(async () => { await Task.Delay(500); Environment.Exit(0); }); return new(true);
+                _ = Task.Run(async () => { await Task.Delay(500); _requestStop(); }); return new(true);
+            case "shutdown":
+                if (_stopping) return new(true);
+                BeginShutdown(); return new(true);
             default: throw new ArgumentException("Unknown broker command.");
         }
     }
@@ -159,7 +154,7 @@ internal sealed class Broker
                     if (!process.HasExited) continue;
                     var snapshot = _store.ReadSnapshot(id);
                     if (snapshot != null && !snapshot.IsTerminal) _store.Save(snapshot with { State = JobState.Interrupted, Message = $"Execution process exited ({process.ExitCode}); reanalysis required.", UpdatedAt = DateTimeOffset.UtcNow });
-                    process.Dispose(); _active.Remove(id); _scheduler.Release(id); _resources.Remove(id);
+                    process.Dispose(); _active.Remove(id); _arbiter.Release(id); _resources.Remove(id);
                 }
                 var settings = _store.Settings;
                 int queued = _queue.Count;
@@ -167,7 +162,7 @@ internal sealed class Broker
                 {
                     var job = _queue.Dequeue();
                     if (_store.ReadControl(job.Id) == "cancel")
-                    { _store.Save(_store.ReadSnapshot(job.Id)! with { State = JobState.Cancelled, Message = "Cancelled before execution" }); _scheduler.Release(job.Id); continue; }
+                    { _store.Save(_store.ReadSnapshot(job.Id)! with { State = JobState.Cancelled, Message = "Cancelled before execution" }); _arbiter.Release(job.Id); continue; }
                     if (!_resources.TryGetValue(job.Id, out var resources))
                     {
                         try
@@ -178,7 +173,7 @@ internal sealed class Broker
                         }
                         catch (Exception e) { _store.Save(_store.ReadSnapshot(job.Id)! with { State = JobState.Failed, Message = e.Message }); continue; }
                     }
-                    if (!_scheduler.TryAcquire(job.Id, job.Volume, resources, settings)) { _queue.Enqueue(job); continue; }
+                    if (!_arbiter.TryAcquire(job.Id, job.Volume, resources, settings)) { _queue.Enqueue(job); continue; }
                     try
                     {
                         bool elevate = !VolumeDiscovery.IsElevated;
@@ -192,19 +187,74 @@ internal sealed class Broker
                         }
                         _active.Add(job.Id, Process.Start(info) ?? throw new IOException("Unable to launch isolated worker."));
                     }
-                    catch (Exception e) { _scheduler.Release(job.Id); _store.Save(_store.ReadSnapshot(job.Id)! with { State = JobState.Failed, Message = e.Message }); }
+                    catch (Exception e) { _arbiter.Release(job.Id); _store.Save(_store.ReadSnapshot(job.Id)! with { State = JobState.Failed, Message = e.Message }); }
                 }
-                var schedules = _store.Schedules; bool changed = false;
-                for (int i = 0; i < schedules.Length; i++)
-                {
-                    var s = schedules[i];
-                    if (!ScheduleClock.IsDue(s, DateTime.Now)) continue;
-                    if (_queue.Any(j => j.Volume == s.Template.Volume) || _active.Keys.Any(id => _store.ReadSnapshot(id)?.Volume == s.Template.Volume)) continue;
-                    Submit(s.Template with { Id = Guid.NewGuid() }); schedules[i] = s with { LastRun = DateOnly.FromDateTime(DateTime.Now) }; changed = true;
-                }
-                if (changed) _store.SaveSchedules(schedules);
             }
             try { await Task.Delay(500, token); } catch (OperationCanceledException) { break; }
         }
+    }
+
+    private void BeginShutdown()
+    {
+        _stopping = true;
+        while (_queue.TryDequeue(out var job))
+        {
+            var snapshot = _store.ReadSnapshot(job.Id);
+            if (snapshot is { IsTerminal: false })
+            {
+                try { _store.Save(snapshot with { State = JobState.Cancelled, Message = "Cancelled because the application closed.", UpdatedAt = DateTimeOffset.UtcNow }); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            _arbiter.Release(job.Id);
+            _resources.Remove(job.Id);
+        }
+        var active = _active.ToArray();
+        foreach (var (id, _) in active)
+        {
+            try { _store.Control(id, "cancel"); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+        _ = Task.Run(() => StopActiveJobs(active));
+    }
+
+    private async Task StopActiveJobs(KeyValuePair<Guid, Process>[] active)
+    {
+        try
+        {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+            while (active.Any(item => !HasExited(item.Value)) && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+            foreach (var (_, process) in active)
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { }
+            }
+            deadline = DateTime.UtcNow.AddSeconds(2);
+            while (active.Any(item => !HasExited(item.Value)) && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+            lock (_sync)
+            {
+                foreach (var (id, process) in active)
+                {
+                    var snapshot = _store.ReadSnapshot(id);
+                    if (snapshot is { IsTerminal: false })
+                    {
+                        try { _store.Save(snapshot with { State = JobState.Cancelled, Message = "Cancelled because the application closed.", UpdatedAt = DateTimeOffset.UtcNow }); }
+                        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                    }
+                    process.Dispose();
+                    _active.Remove(id);
+                    _arbiter.Release(id);
+                    _resources.Remove(id);
+                }
+            }
+        }
+        finally { _requestStop(); }
+    }
+
+    private static bool HasExited(Process process)
+    {
+        try { return process.HasExited; }
+        catch (Exception e) when (e is InvalidOperationException or Win32Exception) { return true; }
     }
 }

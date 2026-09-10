@@ -71,6 +71,12 @@ public partial class App : Application
             Resources[key] = Color.FromArgb(value);
     }
 
-    protected override Window CreateWindow(IActivationState? activationState) => new(new MainPage())
-    { Title = "Tedd Defrag · Advanced Defrag, Open Source, Free", Width = 1440, Height = 960, MinimumWidth = 1160, MinimumHeight = 760 };
+    protected override Window CreateWindow(IActivationState? activationState)
+    {
+        var page = new MainPage();
+        var window = new Window(page)
+        { Title = "Tedd Defrag · Advanced Defrag, Open Source, Free", Width = 1440, Height = 960, MinimumWidth = 1160, MinimumHeight = 760 };
+        window.Destroying += (_, _) => page.Shutdown();
+        return window;
+    }
 }

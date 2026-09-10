@@ -59,6 +59,19 @@ public partial class MainPage : ContentPage
         Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await CheckForUpdate(); };
         Unloaded += (_, _) => _timer.Stop();
     }
+    internal void Shutdown()
+    {
+        _timer.Stop();
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            Task.Run(() => _client.ShutdownWorker(timeout.Token)).GetAwaiter().GetResult();
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or TimeoutException or IOException)
+        {
+            System.Diagnostics.Debug.WriteLine(exception);
+        }
+    }
     private async Task CheckForUpdate()
     {
         try
@@ -198,11 +211,11 @@ public partial class MainPage : ContentPage
                     details += "\n\nThis is SSD or unknown media. Custom relocation adds writes and may provide no performance benefit.";
                 if (!await DisplayAlertAsync("Review disk operation", details, "Start job", "Cancel")) return;
             }
-            OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the persistent worker…";
+            OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the worker…";
             var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS volume first.");
             session.JobId = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
             session.AwaitingReport = session.JobId;
-            _map.Reset(); FooterStatus.Text = "●  Job submitted · closing this view does not stop it"; await Poll();
+            _map.Reset(); FooterStatus.Text = "●  Job submitted · closing the application stops it"; await Poll();
         }
         catch (Exception e) { await DisplayAlertAsync("Job could not start", e.Message, "Close"); FooterStatus.Text = e.Message; }
         finally { _submitting = false; UpdateVolumeActions(); }
@@ -258,7 +271,7 @@ public partial class MainPage : ContentPage
         PauseButton.IsEnabled = CancelButton.IsEnabled = !snapshot.IsTerminal && session.JobId != Guid.Empty; PauseButton.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
         FileList.ItemsSource = session.Files;
         WarningsText.Text = string.Join("\n", snapshot.Warnings ?? []);
-        FooterStatus.Text = $"●  {snapshot.Volume} · {snapshot.State} · worker-owned job";
+        FooterStatus.Text = $"●  {snapshot.Volume} · {snapshot.State} · application worker";
         UpdateVolumeActions();
     }
     private void PresentCompletionIfNeeded(VolumeSession session)
@@ -418,29 +431,6 @@ public partial class MainPage : ContentPage
             }
         }
         catch (Exception ex) { await DisplayAlertAsync("Activity", ex.Message, "Close"); }
-    }
-    private async void OnSchedules(object? sender, EventArgs e)
-    {
-        try
-        {
-            var schedules = (await _client.Send(new("schedules"))).Schedules ?? [];
-            string? action = await DisplayActionSheetAsync("Schedules · broker must be running", "Close", null, ["Add weekly schedule", .. schedules.Select(s => $"Remove: {s.Name} ({s.Time:HH:mm})")]);
-            if (action == "Add weekly schedule")
-            {
-                string? name = await DisplayPromptAsync("Weekly schedule", "Schedule name", initialValue: "Weekly maintenance"); if (string.IsNullOrWhiteSpace(name)) return;
-                string? day = await DisplayActionSheetAsync("Day", "Cancel", null, Enum.GetNames<DayOfWeek>()); if (!Enum.TryParse<DayOfWeek>(day, out var weekday)) return;
-                string? at = await DisplayPromptAsync("Local start time", "24-hour time (HH:mm)", initialValue: "02:00"); if (!TimeOnly.TryParse(at, out var time)) return;
-                var request = Request(_selectedPolicy.Operation, false);
-                if (!await DisplayAlertAsync("Save execution schedule", $"Run {request.Operation} on {request.Volume} every {weekday} at {time:HH:mm}? Resource limits and exclusions are copied from this view.", "Save schedule", "Cancel")) return;
-                await _client.Send(new("schedule-add", Schedule: new(name, request, [weekday], time)), startBroker: true);
-                await DisplayAlertAsync("Schedule saved", "The persistent broker runs this schedule. Use Install-ScheduledWorker.ps1 to start it automatically at logon.", "Close");
-            }
-            else if (action?.StartsWith("Remove: ") == true)
-            {
-                var target = schedules.First(s => action == $"Remove: {s.Name} ({s.Time:HH:mm})"); await _client.Send(new("schedule-remove", Name: target.Name));
-            }
-        }
-        catch (Exception ex) { await DisplayAlertAsync("Schedules", ex.Message, "Close"); }
     }
     private static int ParseInt(string? text, string name, int defaultValue = 0)
     {

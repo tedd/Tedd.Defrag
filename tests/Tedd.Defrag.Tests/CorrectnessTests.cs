@@ -3,7 +3,6 @@ using Tedd.Defrag.Core;
 using Tedd.Defrag.Engine;
 using Tedd.Defrag.Ntfs;
 using Tedd.Defrag.Planning;
-using Tedd.Defrag.Scheduling;
 using Tedd.Defrag.Visualization;
 using Tedd.Defrag.TestFixtures;
 using Xunit;
@@ -161,29 +160,22 @@ public class CorrectnessTests
         MapAggregator.Build(layout, cells, 51, 7921); Assert.Equal(7921, cells.Sum(c => c.Clusters)); Assert.Equal(BitmapOperations.CountRange(layout.Bitmap, 51, 7921), cells.Sum(c => c.Allocated));
     }
     [Fact]
-    public void SchedulerQueuesConflictingDevicesButAllowsIndependentWork()
+    public void ArbiterQueuesConflictingDevicesButAllowsIndependentWork()
     {
-        var scheduler = new ResourceScheduler(); var settings = new SchedulerSettings { MaxConcurrentVolumes = 4 };
+        var arbiter = new ResourceArbiter(); var settings = new ConcurrencySettings { MaxConcurrentVolumes = 4 };
         var a = Guid.NewGuid(); var b = Guid.NewGuid(); var c = Guid.NewGuid(); var d = Guid.NewGuid();
-        Assert.True(scheduler.TryAcquire(a, "C:", ["disk:0"], settings)); Assert.False(scheduler.TryAcquire(b, "D:", ["disk:0", "disk:1"], settings));
-        Assert.True(scheduler.TryAcquire(c, "E:", ["disk:2"], settings)); Assert.False(scheduler.TryAcquire(d, "F:", ["disk:1"], settings));
-        scheduler.Release(a); Assert.True(scheduler.TryAcquire(b, "D:", ["disk:0", "disk:1"], settings));
-        scheduler.Release(b); Assert.True(scheduler.TryAcquire(d, "F:", ["disk:1"], settings));
+        Assert.True(arbiter.TryAcquire(a, "C:", ["disk:0"], settings)); Assert.False(arbiter.TryAcquire(b, "D:", ["disk:0", "disk:1"], settings));
+        Assert.True(arbiter.TryAcquire(c, "E:", ["disk:2"], settings)); Assert.False(arbiter.TryAcquire(d, "F:", ["disk:1"], settings));
+        arbiter.Release(a); Assert.True(arbiter.TryAcquire(b, "D:", ["disk:0", "disk:1"], settings));
+        arbiter.Release(b); Assert.True(arbiter.TryAcquire(d, "F:", ["disk:1"], settings));
     }
     [Fact]
     public void SharedOverrideStillSerializesTheSameVolume()
     {
-        var s = new ResourceScheduler(); var settings = new SchedulerSettings { MaxConcurrentVolumes = 4, AllowParallelOnSharedStorage = true };
+        var s = new ResourceArbiter(); var settings = new ConcurrencySettings { MaxConcurrentVolumes = 4, AllowParallelOnSharedStorage = true };
         Assert.True(s.TryAcquire(Guid.NewGuid(), "C:", ["disk:0"], settings));
         Assert.True(s.TryAcquire(Guid.NewGuid(), "D:", ["disk:0"], settings));
         Assert.False(s.TryAcquire(Guid.NewGuid(), "C:", ["disk:0"], settings));
-    }
-    [Fact]
-    public void ScheduleCoalescesMissedRunsAndDoesNotDuplicateToday()
-    {
-        var schedule = new ScheduleDefinition("nightly", Request(Operation.MinimumWrite), [DayOfWeek.Sunday], new(2, 0));
-        var now = new DateTime(2026, 9, 13, 11, 0, 0);
-        Assert.True(ScheduleClock.IsDue(schedule, now)); Assert.False(ScheduleClock.IsDue(schedule with { LastRun = DateOnly.FromDateTime(now) }, now));
     }
     private static JobRequest Request(Operation op) => new() { Volume = "V:", Operation = op, MinimumFragments = 2, Resources = new() { AcOnly = false } };
     private static VolumeLayout Layout(byte[] bitmap, FileLayout[] files) => new(SyntheticVolume.Create().Volume, bitmap.Length * 8L, bitmap, files, DateTimeOffset.UtcNow, files.Length, 0, true, []);

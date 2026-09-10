@@ -23,7 +23,7 @@ public sealed class DefragClient
 
     public async Task<BrokerReply> Send(BrokerCommand command, bool startBroker = false, CancellationToken token = default)
     {
-        bool submitsWork = command.Action is "submit" or "schedule-add";
+        bool submitsWork = command.Action == "submit";
         if (startBroker || submitsWork)
         {
             await EnsureMatchingBroker(startBroker, token);
@@ -32,17 +32,29 @@ public sealed class DefragClient
             return await _connect(submitsWork ? command with { ClientBuild = BrokerProtocol.BuildVersion } : command, token);
         }
         try { return await _connect(command, token); }
-        catch (TimeoutException) when (!startBroker && command.Action is "list" or "get" or "schedules" || !startBroker && command.Action == "settings" && command.Settings == null)
+        catch (TimeoutException) when (!startBroker && command.Action is "list" or "get" || !startBroker && command.Action == "settings" && command.Settings == null)
         {
             var store = new JobStore();
             return command.Action switch
             {
                 "list" => new(true, Jobs: store.List().Select(s => s with { Map = null, Files = null }).ToArray()),
                 "get" => new(true, Snapshot: store.ReadSnapshot(command.Id)),
-                "schedules" => new(true, Schedules: store.Schedules),
                 _ => new(true, Settings: store.Settings)
             };
         }
+    }
+
+    public async Task ShutdownWorker(CancellationToken token = default)
+    {
+        try { await _connect(new("shutdown"), token); }
+        catch (TimeoutException) { return; }
+        for (int i = 0; i < 100; i++)
+        {
+            await _delay(100, token);
+            try { await _connect(new("ping"), token); }
+            catch (TimeoutException) { return; }
+        }
+        throw new TimeoutException("Worker did not stop after the application requested shutdown.");
     }
 
     private static bool Matches(BrokerReply reply) => reply.Worker is { Stopping: false } worker && worker.Build == BrokerProtocol.BuildVersion;

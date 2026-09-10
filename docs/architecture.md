@@ -8,25 +8,24 @@
 | Planning | Augmented address-indexed free intervals, pooled scratch storage, bounded placement plans |
 | Visualization | SIMD bitmap kernel, layered aggregation into caller-owned cells and shared palette |
 | Maintenance | OS-managed maintenance and filesystem-owned virtual-disk preparation |
-| Scheduling | Atomic resource-set arbitration with priority for older conflicting jobs; recurrence eligibility |
 | Persistence | Durable requests, atomic status replacement with reader/writer retries, append-only flushed move records |
 | Engine | Scan/plan/execute/reconcile state machine, cooperative control, budgets and verification |
-| Worker | Persistent per-user broker; separately capped execution processes |
+| Worker | Per-user broker with desktop-exit shutdown; separately capped execution processes |
 | Client | Framed current-user named-pipe protocol and worker discovery/launch |
 | Update | GitHub release discovery, SHA-256 verification, safe extraction, atomic directory replacement and rollback |
 | Desktop | Native MAUI controls and one map drawing surface; no filesystem mutation in the UI process |
 | Cli | Tedd.TUI NuGet terminal host, command parsing, structured outputs and stable exit codes |
 | Archive | Frozen scalar/linear baselines and the first planner/index implementation |
-| Tests | Randomized invariants, parser validation, scheduling and persistence concurrency; synthetic fixtures shared with benchmarks |
+| Tests | Randomized invariants, parser validation, resource arbitration and persistence concurrency; synthetic fixtures shared with benchmarks |
 | Benchmarks | BenchmarkDotNet comparisons; separate from application startup and production binaries |
 
-The GUI and terminal submit the same `JobRequest`. The broker records intent and acquires the volume's resource set, then launches one worker per job. The process installs its memory/CPU limits before scanning. Worker completion does not depend on an interface remaining open.
+The GUI and terminal submit the same `JobRequest`. The broker records intent and acquires the volume's resource set, then launches one worker per job. The process installs its memory/CPU limits before scanning. Closing the desktop application cancels its jobs, terminates execution processes that do not stop cooperatively, and then stops the broker. Terminal clients may detach while work continues.
 
-The client performs a build handshake before submitting jobs or schedules. A legacy or mismatched broker is retired only after a matching replacement executable has been located and the broker confirms it has no queued or active work. The client waits for the old pipe to disappear and verifies the replacement's build before submitting the command once. A stopping broker rejects new work and stops scheduling. Submission commands also carry the client build, so a broker replacement between handshake and submission cannot silently run a different build. Read-only status and job controls remain available without replacing a busy older broker. Ping replies identify the running build, PID, and executable; terminal reports record the executing worker build.
+The client performs a build handshake before submitting jobs. A legacy or mismatched broker is retired only after a matching replacement executable has been located and the broker confirms it has no queued or active work. The client waits for the old pipe to disappear and verifies the replacement's build before submitting the command once. A stopping broker rejects new work. Submission commands also carry the client build, so a broker replacement between handshake and submission cannot silently run a different build. Read-only status and job controls remain available without replacing a busy older broker. Ping replies identify the running build, PID, and executable; terminal reports record the executing worker build.
 
-Application startup discovers real volumes without starting analysis or optimization. The simulation execution path is removed; synthetic layouts are linked only into tests and benchmarks from `tests/Fixtures`. The legacy JSON `Demo` flag remains recognizable solely to reject old simulation requests before storage access. Queued legacy jobs fail validation, and legacy simulation schedules are disabled when the broker starts and are never considered due.
+Application startup discovers real volumes without starting analysis or optimization. The simulation execution path is removed; synthetic layouts are linked only into tests and benchmarks from `tests/Fixtures`. The legacy JSON `Demo` flag remains recognizable solely to reject old simulation requests before storage access. Queued legacy jobs fail validation.
 
-The current broker is a desktop-user agent with optional elevated logon startup. It is not hardened for arbitrary users submitting work to a SYSTEM identity. Current-user pipe restrictions, bounded frames, request validation and worker-side volume/path checks reduce exposure, but a formal threat model and adversarial local IPC/storage testing are still release requirements. Persistent files inherit the profile directory's access controls. Never change the service account to SYSTEM or share the job directory.
+The current broker is an elevated desktop-user agent. It is not hardened for arbitrary users submitting work to a SYSTEM identity. Current-user pipe restrictions, bounded frames, request validation and worker-side volume/path checks reduce exposure, but a formal threat model and adversarial local IPC/storage testing are still release requirements. Persistent files inherit the profile directory's access controls. Never change the service account to SYSTEM or share the job directory.
 
 ## Scanner
 

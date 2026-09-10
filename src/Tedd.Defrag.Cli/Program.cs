@@ -60,18 +60,6 @@ internal static class Program
                     MaxConcurrentJobsPerSharedResource = parsed.Int("per-device", current.MaxConcurrentJobsPerSharedResource) };
                 PrintJson((await client.Send(new("settings", Settings: next))).Settings); return 0;
             }
-            if (command == "schedule")
-            {
-                string action = parsed.Positionals.ElementAtOrDefault(1) ?? "list";
-                if (action == "list") { PrintJson((await client.Send(new("schedules"))).Schedules); return 0; }
-                string name = parsed.Get("name", "nightly");
-                if (action == "remove") { await client.Send(new("schedule-remove", Name: name)); return 0; }
-                var request = MakeRequest(parsed, "optimize", parsed.Get("volume", "C:"));
-                var days = parsed.Get("days", "Sunday").Split(',').Select(Enum.Parse<DayOfWeek>).ToArray();
-                var schedule = new ScheduleDefinition(name, request, days, TimeOnly.Parse(parsed.Get("at", "02:00"), CultureInfo.InvariantCulture));
-                await client.Send(new("schedule-add", Schedule: schedule), startBroker: true);
-                Console.WriteLine("Schedule saved. Install the logon task with scripts/Install-ScheduledWorker.ps1 to keep the broker available after sign-in."); return 0;
-            }
             if (command is "boot" or "registry" or "offline") throw new NotSupportedException("Early-boot execution and offline hive replacement are not implemented. Ordinary startup jobs remain online; this application does not modify BootExecute or registry hives.");
             string? selected = parsed.All("path").Concat(parsed.All("file")).Concat(parsed.All("folder")).FirstOrDefault();
             string defaultVolume = Path.GetPathRoot(Environment.SystemDirectory) ?? "C:\\";
@@ -215,9 +203,6 @@ internal static class Program
 
         jobs list|pause|resume|cancel|watch [id] [--json]
         settings --parallel 2 [--shared|--no-shared] [--per-device 2]
-        schedule add --name nightly --volume D: --days Sunday --at 02:00
-          --policy MinimumWrite --execute --idle-only
-        schedule list|remove [--name nightly]
         worker status | start | stop          Inspect, start/refresh, or stop an idle worker
 
         Exit codes: 0 complete; 1 failed; 2 arguments; 3 partial; 4 unsupported; 130 detached/cancelled.

@@ -1,6 +1,6 @@
 # Tedd Defrag
 
-A Windows-first .NET 11 NTFS optimizer with a native **.NET MAUI** dashboard, **Tedd.TUI** terminal interface, and persistent, isolated workers. Seventeen projects separate storage access, planning, visualization, scheduling, execution, updating, clients, and measurements.
+A Windows-first .NET 11 NTFS optimizer with a native **.NET MAUI** dashboard, **Tedd.TUI** terminal interface, and isolated execution workers. Sixteen projects separate storage access, planning, visualization, execution, updating, clients, and measurements.
 
 [Project site](https://tedd.github.io/Tedd.Defrag/) · [Download the latest release](https://github.com/tedd/Tedd.Defrag/releases/latest) · [Source code](https://github.com/tedd/Tedd.Defrag)
 
@@ -18,11 +18,11 @@ dotnet run --project src/Tedd.Defrag.Desktop
 dotnet run --project src/Tedd.Defrag.Cli -- tui C:
 ```
 
-The dashboard requests administrator access at startup, lists real volumes, and initially selects the system NTFS volume or the first available NTFS volume. Its map remains empty until you choose **Analyze** or **Preview**. Opening the application does not submit a job. If no supported volume is available, disk-operation controls remain disabled. Preview is the CLI default; actual changes require `--execute`. Closing either interface detaches it from the job.
+The dashboard requests administrator access when starting its worker, lists real volumes, and initially selects the system NTFS volume or the first available NTFS volume. Its map remains empty until you choose **Analyze** or **Preview**. Opening the application does not submit a job. If no supported volume is available, disk-operation controls remain disabled. Preview is the CLI default; actual changes require `--execute`. Closing the desktop application cancels its queued and running jobs and stops the worker. Closing the terminal interface detaches from a submitted job.
 
-Simulation mode and the `--demo` option have been removed. Legacy simulation requests are rejected and their schedules are disabled, so they cannot become real disk operations. Synthetic volume fixtures are compiled only into tests and benchmarks.
+Simulation mode and the `--demo` option have been removed. Legacy simulation requests are rejected, so they cannot become real disk operations. Synthetic volume fixtures are compiled only into tests and benchmarks.
 
-Before submitting work, the client checks the persistent worker's build. An idle worker from an older build is replaced automatically; active or queued jobs must finish or be cancelled first. Development worker discovery matches the client build and prefers its Debug/Release configuration. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them.
+Before submitting work, the client checks the worker's build. An idle worker from an older build is replaced automatically; active or queued jobs must finish or be cancelled first. Development worker discovery matches the client build and prefers its Debug/Release configuration. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them.
 
 Publish a versioned, self-contained Windows distribution. The Desktop, CLI, and isolated worker are each single-file ReadyToRun executables and are placed together in one ZIP:
 
@@ -44,8 +44,7 @@ Extract the ZIP and run either `Tedd.Defrag.Desktop.exe` or `Tedd.Defrag.Cli.exe
 | Maintenance | Windows ReTRIM, slab consolidation, automatic optimization; capability reporting; bounded virtual-disk pre-zeroing with delete-on-close files |
 | Metadata | Movable MFT data and directory-index targets through supported filesystem APIs; incomplete or unsupported streams remain constrained |
 | Visualization | Layered allocation/fragmentation/metadata/exclusion/activity counts; bounded drawing surface; zoom, cell inspection, live progress and JSON reports |
-| Jobs | Persistent queue/history, pause/resume/cancel, per-volume exclusion, shared-storage arbitration, conservative unknown topology, manual resource groups |
-| Scheduling | Weekly/day-of-week local-time schedules, same-day missed-run coalescing, overlap suppression, optional elevated per-user logon task |
+| Jobs | Queue and persistent history, pause/resume/cancel, per-volume exclusion, shared-storage arbitration, conservative unknown topology, manual resource groups |
 | Interfaces | MAUI dashboard, Tedd.TUI terminal, scriptable JSON/NDJSON CLI; optional out-of-process Explorer classic context menu |
 
 Ordering and packing are best-effort preferences using existing free space. They are not global optimality guarantees. `Partial` is a valid outcome when constraints, budgets, unsupported streams, or fragmentation remain. Directory locality is a placement preference, not a measured application speed claim.
@@ -57,7 +56,7 @@ The raw scanner does not recursively traverse directories. It deduplicates file 
 | Control | Semantics |
 |---|---|
 | Memory | Optional Windows job-object **committed-memory** limit for the worker and its descendants; `0` leaves memory unlimited. The scanner stops before exhausting a configured cap. |
-| CPU | Windows job-object hard rate limit; percentage of machine CPU scheduling capacity, subject to any enclosing job restrictions. |
+| CPU | Windows job-object hard rate limit; percentage of machine processor capacity, subject to any enclosing job restrictions. |
 | Affinity | Optional hexadecimal logical-processor mask, e.g. `0xF0`. Supported on a single processor group. No guarantee of L1/L2/L3 cache isolation or kernel-thread placement. |
 | Bandwidth | Optional cooperative average pacing of **custom relocation and zeroing payload**; `0` disables pacing and nonzero values have no application maximum. It does not cap raw scan reads, total physical traffic, Windows optimizer traffic, or SSD write amplification. |
 | Priority | Windows background processing mode in the isolated worker; the broker and interfaces retain normal responsiveness. |
@@ -81,7 +80,6 @@ Tedd.Defrag.Cli.exe jobs pause <id>
 Tedd.Defrag.Cli.exe jobs resume <id>
 Tedd.Defrag.Cli.exe jobs cancel <id>
 Tedd.Defrag.Cli.exe jobs watch <id> --events
-Tedd.Defrag.Cli.exe schedule add --name nightly --volume D: --days Sunday --at 02:00 --execute --idle-only
 Tedd.Defrag.Cli.exe settings --parallel 3 --shared --per-device 2
 ```
 
@@ -91,17 +89,15 @@ Write budget, time limit, process-memory cap, and relocation bandwidth default t
 
 Exit codes: **0** completed, **1** failed/interrupted, **2** arguments, **3** partial, **4** unsupported, **130** cancelled/detached. Ctrl+C while watching detaches; use `jobs cancel` to cancel the actual job.
 
-## Scheduling and Explorer
+## Explorer
 
-`scripts/Install-ScheduledWorker.ps1` registers a per-user elevated logon task. This is an interactive-session broker, **not a SYSTEM service** and not pre-logon or offline defragmentation. It must be running for its schedules to become eligible. There is no wake-from-sleep or missed-previous-day catch-up. Pre-zeroing cannot be scheduled.
-
-`scripts/Install-ExplorerMenu.ps1` registers single-selection **Analyze** and **Preview** commands without loading .NET into Explorer. On Windows 11 these appear under **Show more options**. It does not implement a modern `IExplorerCommand` shell extension or multi-selection. Both scripts have a `-Remove` option and are never run automatically.
+`scripts/Install-ExplorerMenu.ps1` registers single-selection **Analyze** and **Preview** commands without loading .NET into Explorer. On Windows 11 these appear under **Show more options**. It does not implement a modern `IExplorerCommand` shell extension or multi-selection. The script has a `-Remove` option and is never run automatically.
 
 Job data lives in `%LOCALAPPDATA%\Tedd.Defrag`. The named-pipe endpoint is restricted to the current user. The broker receives job intent, not caller-provided cluster addresses. Do not deploy it as a privileged multi-user service. Deployment and security limitations are described in [architecture](docs/architecture.md).
 
 ## Validation and performance
 
-The automated suite covers bitmap/SIMD parity, randomized interval reservations, relocation invariants, selection/exclusions, raw versus filesystem-restored MFT records, volume geometry, torn records, malformed runlists, map coverage, scheduling fairness, and concurrent snapshot publication.
+The automated suite covers bitmap/SIMD parity, randomized interval reservations, relocation invariants, selection/exclusions, raw versus filesystem-restored MFT records, volume geometry, torn records, malformed runlists, map coverage, resource-arbitration fairness, and concurrent snapshot publication.
 
 The MFT bootstrap correction was verified against both raw and `FSCTL_GET_NTFS_FILE_RECORD` representations of C:'s record 0. A subsequent read-only analysis processed 543,352 records and produced 348,029 stream layouts before returning `Partial` under the 1,024 MiB cap. Its allocation bitmap covers the entire volume; file coverage is explicitly limited. This validates analysis and cap handling on that volume, not relocation safety.
 

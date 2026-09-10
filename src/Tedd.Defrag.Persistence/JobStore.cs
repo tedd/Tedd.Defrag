@@ -65,14 +65,12 @@ public sealed class JobStore
         using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough);
         JsonSerializer.Serialize(stream, entry, Json); stream.WriteByte((byte)'\n'); stream.Flush(true);
     }
-    public SchedulerSettings Settings => Read<SchedulerSettings>(Path.Combine(Root, "settings.json")) ?? new();
-    public void SaveSettings(SchedulerSettings settings)
+    public ConcurrencySettings Settings => Read<ConcurrencySettings>(Path.Combine(Root, "settings.json")) ?? new();
+    public void SaveSettings(ConcurrencySettings settings)
     {
         if (settings.MaxConcurrentVolumes is < 1 or > 32 || settings.MaxConcurrentJobsPerSharedResource is < 1 or > 8) throw new ArgumentException("Invalid concurrency limits.");
         AtomicWrite(Path.Combine(Root, "settings.json"), settings);
     }
-    public ScheduleDefinition[] Schedules => Read<ScheduleDefinition[]>(Path.Combine(Root, "schedules.json")) ?? [];
-    public void SaveSchedules(ScheduleDefinition[] schedules) => AtomicWrite(Path.Combine(Root, "schedules.json"), schedules);
     public static T? Read<T>(string path)
     {
         try { using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete); return JsonSerializer.Deserialize<T>(stream, Json); }

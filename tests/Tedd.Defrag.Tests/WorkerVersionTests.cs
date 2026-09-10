@@ -82,17 +82,6 @@ public sealed class WorkerVersionTests
     }
 
     [Fact]
-    public async Task ScheduledWorkAlsoRequiresTheCurrentBroker()
-    {
-        var broker = new BrokerFixture(null);
-
-        await broker.Client.Send(new("schedule-add"), startBroker: true);
-
-        Assert.Equal(BrokerProtocol.BuildVersion, Assert.Single(broker.Submissions).ClientBuild);
-        Assert.Contains("start", broker.Events);
-    }
-
-    [Fact]
     public async Task WrongWorkerAfterLaunchCannotReceiveTheJob()
     {
         var broker = new BrokerFixture(null) { StartedBuild = "wrong" };
@@ -123,6 +112,17 @@ public sealed class WorkerVersionTests
         Assert.Equal(BrokerProtocol.BuildVersion, reply.Worker!.Build);
         Assert.Empty(broker.Submissions);
         Assert.Contains("start", broker.Events);
+    }
+
+    [Fact]
+    public async Task ApplicationShutdownStopsTheWorkerAndWaitsForItToExit()
+    {
+        var broker = new BrokerFixture(BrokerProtocol.BuildVersion);
+
+        await broker.Client.ShutdownWorker();
+
+        Assert.False(broker.Running);
+        Assert.Equal(["shutdown", "ping"], broker.Events);
     }
 
     [Fact]
@@ -184,7 +184,8 @@ public sealed class WorkerVersionTests
                 case "stop":
                     if (Busy) throw new InvalidOperationException("Finish active jobs before stopping the worker.");
                     Running = false; break;
-                case "submit": case "schedule-add":
+                case "shutdown": Running = false; break;
+                case "submit":
                     Submissions.Add(command);
                     if (FailSubmission) throw new TimeoutException("Submission response unavailable");
                     break;

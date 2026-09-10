@@ -91,7 +91,7 @@ public sealed record JobRequest
         if (SelectedPaths.Concat(Exclusions).Any(p => p.Length > 32760 || p.Contains('\0'))) throw new ArgumentException("Invalid path rule.");
     }
 }
-public sealed record SchedulerSettings
+public sealed record ConcurrencySettings
 {
     public int MaxConcurrentVolumes { get; init; } = 2;
     public bool AllowParallelOnSharedStorage { get; init; }
@@ -114,8 +114,6 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
 public readonly record struct MapCell(long Clusters, long Allocated, long Fragmented, long Metadata, long Excluded, long Moving, long Verified);
 public sealed record FileSummary(string Path, string Stream, int Extents, long Bytes, string Status);
 public sealed record MoveJournalEntry(DateTimeOffset At, string Phase, PlannedMove Move, string? Detail = null);
-public sealed record ScheduleDefinition(string Name, JobRequest Template, DayOfWeek[] Days, TimeOnly Time, bool Enabled = true, DateOnly? LastRun = null);
-
 public static class Format
 {
     public static string Bytes(long bytes)
