@@ -44,7 +44,10 @@
       <ScrollView x:Name="ActionContent" Grid.Column="2" Margin="0,30,0,18"><VerticalStackLayout Spacing="18">
         <Border Style="{StaticResource Card}" Stroke="{DynamicResource ActionLine}" Background="{DynamicResource ActionSurface}"><VerticalStackLayout Spacing="13">
           <Label Text="YOUR NEXT MOVE" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label Text="Intentional optimization." FontSize="20" FontFamily="OpenSansSemibold" /><Label Text="Analyze first, then preview or run the selected method. Use Choose method to change it." FontSize="12" TextColor="{DynamicResource NoticeText}" LineHeight="1.3" />
-          <Border Stroke="{DynamicResource ActionLine}" Background="{DynamicResource ActionInner}" StrokeShape="RoundRectangle 10" Padding="12"><Grid ColumnDefinitions="42,*" RowDefinitions="Auto,Auto" ColumnSpacing="10"><Label x:Name="SelectedMethodIcon" Text="↯" FontSize="25" TextColor="{DynamicResource Accent}" VerticalOptions="Center" Grid.RowSpan="2" /><Label x:Name="SelectedMethodName" Grid.Column="1" Text="Minimum-write defrag" FontFamily="OpenSansSemibold" /><Label x:Name="SelectedMethodDescription" Grid.Row="1" Grid.Column="1" Text="Consolidates only heavily fragmented files and preserves existing anchors where possible." FontSize="10" TextColor="{DynamicResource Muted}" LineHeight="1.25" /></Grid></Border>
+          <Border Stroke="{DynamicResource ActionLine}" Background="{DynamicResource ActionInner}" StrokeShape="RoundRectangle 10" Padding="12">
+            <Border.GestureRecognizers><TapGestureRecognizer Tapped="OnChooseMethod" /></Border.GestureRecognizers>
+            <Grid ColumnDefinitions="42,*" RowDefinitions="Auto,Auto" ColumnSpacing="10"><Label x:Name="SelectedMethodIcon" Text="↯" FontSize="25" TextColor="{DynamicResource Accent}" VerticalOptions="Center" Grid.RowSpan="2" /><Label x:Name="SelectedMethodName" Grid.Column="1" Text="Minimum-write defrag" FontFamily="OpenSansSemibold" /><Label x:Name="SelectedMethodDescription" Grid.Row="1" Grid.Column="1" Text="Consolidates only heavily fragmented files and preserves existing anchors where possible." FontSize="10" TextColor="{DynamicResource Muted}" LineHeight="1.25" /></Grid>
+          </Border>
           <Button Text="Choose method" Clicked="OnChooseMethod" BackgroundColor="{DynamicResource ActionButton}" />
           <Grid ColumnDefinitions="*,*" ColumnSpacing="8"><Button x:Name="AnalyzeButton" Text="Analyze" Clicked="OnAnalyze" IsEnabled="False" BackgroundColor="{DynamicResource ActionButton}" /><Button x:Name="PreviewButton" Grid.Column="1" Text="Preview selected method" Clicked="OnPreview" IsEnabled="False" BackgroundColor="{DynamicResource ActionButton}" /></Grid><Button x:Name="OptimizeButton" Text="Run selected method  →" Clicked="OnOptimize" IsEnabled="False" BackgroundColor="{DynamicResource Accent}" TextColor="{DynamicResource PrimaryText}" />
         </VerticalStackLayout></Border>
@@ -52,15 +55,15 @@
           <Grid ColumnDefinitions="*,Auto"><Label Text="RECOMMENDATION" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="RecommendationMedia" Grid.Column="1" Text="UNKNOWN MEDIA" Style="{StaticResource Caption}" /></Grid>
           <Label x:Name="RecommendationTitle" Text="Analyze this volume" FontSize="17" FontFamily="OpenSansSemibold" />
           <Label x:Name="RecommendationSummary" Text="A scan is required before Tedd Defrag can recommend maintenance." FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" />
-          <Grid ColumnDefinitions="112,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="7" ColumnSpacing="8">
+          <Grid ColumnDefinitions="112,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="7" ColumnSpacing="8">
             <Label Text="Fragmentation" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationFragmentation" Grid.Column="1" Text="Not measured" FontSize="10" HorizontalTextAlignment="End" />
             <Label Grid.Row="1" Text="File threshold" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationThreshold" Grid.Row="1" Grid.Column="1" Text="20 fragments" FontSize="10" HorizontalTextAlignment="End" />
             <Label Grid.Row="2" Text="Observed rate" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationPerformance" Grid.Row="2" Grid.Column="1" Text="Not measured" FontSize="10" HorizontalTextAlignment="End" />
             <Label Grid.Row="3" Text="Metadata" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationMetadata" Grid.Row="3" Grid.Column="1" Text="Not measured" FontSize="10" HorizontalTextAlignment="End" />
-            <Label Grid.Row="4" Text="Sequence" FontSize="10" TextColor="{DynamicResource Muted}" /><Label x:Name="RecommendationSequence" Grid.Row="4" Grid.Column="1" Text="Analyze" FontSize="10" HorizontalTextAlignment="End" />
           </Grid>
           <Label Text="Worst fragmented streams" FontSize="10" TextColor="{DynamicResource Muted}" />
           <Label x:Name="RecommendationCulprits" Text="Analyze to identify them." FontSize="10" LineHeight="1.3" LineBreakMode="TailTruncation" MaxLines="4" />
+          <Label x:Name="RecommendationStepsLabel" Text="Recommended operations · select one" FontSize="10" TextColor="{DynamicResource Muted}" IsVisible="False" />
           <VerticalStackLayout x:Name="RecommendationSteps" Spacing="6" IsVisible="False">
             <BindableLayout.ItemTemplate><DataTemplate><Button Text="{Binding Name}" CommandParameter="{Binding Operation}" Clicked="OnSelectRecommendedMethod" BackgroundColor="{DynamicResource ActionButton}" /></DataTemplate></BindableLayout.ItemTemplate>
           </VerticalStackLayout>

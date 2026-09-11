@@ -33,12 +33,11 @@ public partial class MainPage : ContentPage
     private ClusterHitRow? _selectedClusterHit;
     private readonly IDispatcherTimer _timer;
     private TaskCompletionSource<Operation?>? _policyChoice;
-    private Operation? _recommendedOperation;
     private Operation[] _recommendedOperations = [];
     private static readonly PolicyOption[] Policies =
     [
         new("↯", "Minimum-write defrag", "Prioritizes heavily fragmented files and preserves their first extent when possible. Honors file scope and exclusions.", Operation.MinimumWrite),
-        new("✦", "Windows automatic", "Lets Windows select the appropriate whole-volume action for the media, such as HDD defrag or SSD retrim.", Operation.Automatic),
+        new("✦", "Windows automatic", "Lets Windows select supported whole-volume maintenance for the detected media and current volume state.", Operation.Automatic),
         new("▰", "Defragment files", "Makes eligible fragmented files contiguous without trying to reorganize the whole volume.", Operation.FilesOnly),
         new("⇤", "Pack + defragment", "Moves eligible files toward lower addresses while consolidating their extents. Higher write volume.", Operation.PackAndDefrag),
         new("≪", "Pack toward beginning", "Consolidates free space by moving allocated extents toward the start of the volume.", Operation.Pack),
@@ -225,8 +224,7 @@ public partial class MainPage : ContentPage
         bool jobActive = HasActiveJob(session);
         AnalyzeButton.IsEnabled = PreviewButton.IsEnabled = OptimizeButton.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
         RecommendationSteps.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
-        RecommendationButton.IsEnabled = RecommendationSteps.IsEnabled &&
-            (CurrentSession?.LayoutSnapshot == null || _recommendedOperation.HasValue);
+        RecommendationButton.IsEnabled = RecommendationSteps.IsEnabled && CurrentSession?.LayoutSnapshot == null;
         foreach (var button in VolumesPanel.Children.OfType<Button>())
         {
             button.IsEnabled = !_submitting;
@@ -267,7 +265,7 @@ public partial class MainPage : ContentPage
                     "Pre-zeroing is for virtual-disk workflows that require it. It can expand thin storage and consume host capacity; it does not compact the disk itself." :
                     $"Run {_selectedPolicy.Name} on {request.Volume}, with {Limit(request.MaxMoveBytes, Format.Bytes, "no relocation limit")} and {Limit(request.MaxMinutes, n => $"{n}-minute limit", "no time limit")}?";
                 if (_volume?.SeekPenalty != true && operation is not (Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace))
-                    details += "\n\nThis is SSD or unknown media. Custom relocation adds writes and may provide no performance benefit.";
+                    details += "\n\nThis is SSD or unknown media. Relocation adds writes. Greater logical contiguity can reduce host I/O requests, but the device controls internal placement. Review the previewed write estimate.";
                 if (!await DisplayAlertAsync("Review disk operation", details, "Start job", "Cancel")) return;
             }
             OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the worker…";
@@ -405,7 +403,6 @@ public partial class MainPage : ContentPage
     private void RenderRecommendation(JobSnapshot? snapshot)
     {
         var volume = _volume;
-        _recommendedOperation = null;
         RecommendationMedia.Text = volume?.SeekPenalty switch
         {
             true when volume.TrimEnabled == true => "HDD · TRIM",
@@ -419,9 +416,9 @@ public partial class MainPage : ContentPage
         RecommendationThreshold.Text = $"{threshold:N0}+ fragments · not measured";
         RecommendationPerformance.Text = "Not measured";
         RecommendationMetadata.Text = "Not measured";
-        RecommendationSequence.Text = "Analyze";
         RecommendationCulprits.Text = "Analyze to identify them.";
         RecommendationButton.Text = "Analyze now";
+        RecommendationButton.IsVisible = true;
         if (volume == null)
         {
             SetRecommendedOperations([]);
@@ -455,6 +452,7 @@ public partial class MainPage : ContentPage
         var steps = MaintenanceRecommendation.SelectSteps(volume.SeekPenalty, volume.TrimEnabled,
             mftExtents, fragmentedIndexes, thresholdCount.Eligible);
         SetRecommendedOperations(steps);
+        RecommendationButton.IsVisible = false;
         if (volume.SeekPenalty == null)
         {
             RecommendationTitle.Text = "Use Windows automatic maintenance";
@@ -486,13 +484,11 @@ public partial class MainPage : ContentPage
             RecommendationTitle.Text = "No targeted maintenance identified";
             RecommendationSummary.Text = $"The scan reports no metadata fragmentation or eligible files with at least {threshold:N0} fragments.";
         }
-        RecommendationSequence.Text = steps.Length == 0 ? "None" : string.Join(" → ", steps.Select(operation => Policy(operation).Name));
-        RecommendationButton.Text = steps.Length > 1 ? "Select first step" : _recommendedOperation.HasValue ? $"Select {Policy(_recommendedOperation.Value).Name}" : "No operation recommended";
     }
     private void SetRecommendedOperations(Operation[] operations)
     {
-        _recommendedOperation = operations.Length == 0 ? null : operations[0];
-        RecommendationSteps.IsVisible = operations.Length > 1;
+        RecommendationSteps.IsVisible = operations.Length > 0;
+        RecommendationStepsLabel.IsVisible = operations.Length > 0;
         if (_recommendedOperations.SequenceEqual(operations)) return;
         _recommendedOperations = operations;
         BindableLayout.SetItemsSource(RecommendationSteps, operations.Select(Policy).ToArray());
@@ -543,10 +539,7 @@ public partial class MainPage : ContentPage
     private async void OnOptimize(object? sender, EventArgs e) => await Submit(_selectedPolicy.Operation, false);
     private async void OnUseRecommendation(object? sender, EventArgs e)
     {
-        if (CurrentSession?.LayoutSnapshot == null) { await Submit(Operation.Analyze, true); return; }
-        if (_recommendedOperation is not { } operation) return;
-        _selectedPolicy = Policy(operation); UpdateSelectedPolicy();
-        FooterStatus.Text = $"●  {Policy(operation).Name} selected from the disk recommendation";
+        if (CurrentSession?.LayoutSnapshot == null) await Submit(Operation.Analyze, true);
     }
     private void OnSelectRecommendedMethod(object? sender, EventArgs e)
     {
