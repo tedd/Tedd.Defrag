@@ -44,7 +44,7 @@ internal sealed class TerminalDashboard : UIElement
                 if (e.Key is ConsoleKey.A or ConsoleKey.D)
                 {
                     var request = new JobRequest { Volume = _volume, Operation = e.Key == ConsoleKey.A ? Operation.Analyze :
-                        FileSystemCapabilities.IsRefs(_volumeInfo.FileSystem) ? Operation.WindowsDefrag : Operation.MinimumWrite,
+                        FileSystemCapabilities.Get(_volumeInfo.FileSystem).DefaultDefrag,
                         Preview = true, Resources = ResourcePolicy.Performance };
                     _job = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
                 }

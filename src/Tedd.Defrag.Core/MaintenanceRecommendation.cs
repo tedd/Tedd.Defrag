@@ -6,7 +6,7 @@ public static class MaintenanceRecommendation
         int eligibleFilesAtThreshold, int observedFilesAtThreshold)
     {
         if (!FileSystemCapabilities.IsSupported(volume.FileSystem)) return [];
-        if (FileSystemCapabilities.IsNtfs(volume.FileSystem))
+        if (!FileSystemCapabilities.Get(volume.FileSystem).UsesDirectoryScan)
             return SelectSteps(volume.SeekPenalty, volume.TrimEnabled, mftExtents, fragmentedDirectoryIndexes, eligibleFilesAtThreshold);
         if (volume.SeekPenalty == null) return [Operation.Automatic];
         var steps = new List<Operation>();

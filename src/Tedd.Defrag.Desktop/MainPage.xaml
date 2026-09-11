@@ -128,7 +128,7 @@
         </VerticalStackLayout>
       </ScrollView>
 
-      <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="*,Auto" VerticalOptions="Center"><Label x:Name="FooterStatus" Text="●  Discovering available volumes…" FontSize="10" TextColor="{DynamicResource Accent}" /><Label Grid.Column="1" Text="NTFS + ReFS  /  .NET 11  /  TEDD" FontSize="9" CharacterSpacing="1" TextColor="{DynamicResource SubtleText}" /></Grid>
+      <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="*,Auto" VerticalOptions="Center"><Label x:Name="FooterStatus" Text="●  Discovering available volumes…" FontSize="10" TextColor="{DynamicResource Accent}" /><Label Grid.Column="1" Text="NTFS · ReFS · FAT  /  .NET 11  /  TEDD" FontSize="9" CharacterSpacing="1" TextColor="{DynamicResource SubtleText}" /></Grid>
     </Grid>
 
     <Grid x:Name="ClusterOverlay" IsVisible="False" BackgroundColor="{DynamicResource Overlay}" Padding="60" ZIndex="110">

@@ -17,9 +17,9 @@ public sealed class NativeFileQueryTests
             File.WriteAllBytes(path, contents);
             var volume = VolumeDiscovery.Get(Path.GetPathRoot(path)!);
             using var handle = NativeIo.Open(path);
-            var identity = NtfsVolume.Identity(handle);
-            Assert.Equal(path, identity.Path, ignoreCase: true);
-            var extents = RefsScanner.NormalizeExtents(NtfsVolume.RetrievalPointers(handle), volume.SizeBytes / volume.BytesPerCluster);
+            Assert.Equal(path, FileSystemQueries.FinalPath(handle), ignoreCase: true);
+            Assert.Equal(0u, FileSystemQueries.Attributes(handle) & (uint)(FileAttributes.Directory | FileAttributes.ReparsePoint));
+            var extents = FileSystemQueries.NormalizeExtents(FileSystemQueries.RetrievalPointers(handle), volume.SizeBytes / volume.BytesPerCluster);
             Assert.NotEmpty(extents);
             Assert.Equal(contents.Length, extents.Sum(extent => extent.Length) * volume.BytesPerCluster);
         }

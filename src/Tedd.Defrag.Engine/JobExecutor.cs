@@ -50,8 +50,8 @@ public sealed class JobExecutor
             FileSystemCapabilities.Validate(volume.Info.FileSystem, request.Operation);
             bool external = FileSystemCapabilities.IsWindowsMaintenance(request.Operation);
             string? maintenanceFlag = external ? WindowsMaintenance.Validate(request, volume.Info) : null;
-            if (!request.Preview && request.Operation != Operation.Analyze && FileSystemCapabilities.IsNtfs(volume.Info.FileSystem) && volume.IsDirty())
-                throw new IOException("The NTFS volume is dirty. Resolve filesystem errors before optimization.");
+            if (!request.Preview && request.Operation != Operation.Analyze && !volume.FileSystem.UsesDirectoryScan && volume.IsDirty())
+                throw new IOException($"The {volume.Info.FileSystem} volume is dirty. Resolve filesystem errors before optimization.");
             if (!request.Preview && request.Operation is not (Operation.Analyze or Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace)
                 && volume!.Info.SeekPenalty != true && !request.AllowSsdRelocation)
                 throw new InvalidOperationException("Defragmentation on SSD or unknown media requires explicit opt-in.");
@@ -163,7 +163,7 @@ public sealed class JobExecutor
                     progress = (double)completed / plan.Moves.Length;
                     executionWork = new("Relocating and verifying", completed, plan.Moves.Length, "batch moves", depth,
                         moveActivity.Active, moveActivity.Peak, moveActivity.Active, moveActivity.Peak, moved - bytesBeforeBatch, batchWatch.ElapsedMilliseconds,
-                        "NTFS filesystem I/O; scalar validation",
+                        $"{volume.Info.FileSystem} filesystem I/O; scalar validation",
                         $"{pending:N0} submitted requests pending (peak {peak:N0}); {verifiedMoves:N0} verified, {failedMoves:N0} failed. Per-file sequences stay serial; metadata queue depth is 1. Device scheduling remains under Windows control.");
                     Publish();
                 });
@@ -206,10 +206,10 @@ public sealed class JobExecutor
             VolumeLayout? ScanVolume()
             {
                 try { return volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p); }
-                catch (Exception e) when (external && FileSystemCapabilities.IsRefs(volume.Info.FileSystem) &&
+                catch (Exception e) when (external && volume.FileSystem.UsesDirectoryScan &&
                     e is IOException or Win32Exception or UnauthorizedAccessException)
                 {
-                    AddWarnings([$"ReFS allocation analysis unavailable: {e.Message}. Windows maintenance can run independently of the allocation scan."]);
+                    AddWarnings([$"{volume.Info.FileSystem} allocation analysis unavailable: {e.Message}. Windows maintenance can run independently of the allocation scan."]);
                     return null;
                 }
             }
@@ -257,7 +257,7 @@ public sealed class JobExecutor
             streamsAtThreshold = files?.Count(f => f.Fragmented && f.Extents.Length >= request.MinimumFragments) ?? 0;
             eligibleStreamsAtThreshold = files?.Count(f => f.Fragmented && f.Movable && f.Extents.Length >= request.MinimumFragments &&
                 (f.Flags & (StreamFlags.Metadata | StreamFlags.Directory)) == 0) ?? 0;
-            mftExtents = FileSystemCapabilities.IsNtfs(volumeInfo?.FileSystem ?? "")
+            mftExtents = FileSystemCapabilities.Supports(volumeInfo?.FileSystem ?? "", Operation.OptimizeMft)
                 ? files?.FirstOrDefault(f => (f.FileId & 0xFFFFFFFFFFFF) == 0 && f.StreamName.Length == 0)?.Extents.Length ?? 0 : 0;
             fragmentedDirectoryIndexes = files?.Count(f => f.Fragmented && f.StreamName.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal)) ?? 0;
             directoryIndexesAtThreshold = files?.Count(f => f.Extents.Length >= request.MinimumFragments && f.StreamName.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal)) ?? 0;

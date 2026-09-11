@@ -1,6 +1,6 @@
 # Tedd Defrag
 
-A Windows-first .NET 11 NTFS optimizer with ReFS analysis and Windows-managed maintenance, a native **.NET MAUI** dashboard, **Tedd.TUI** terminal interface, and isolated execution workers. Sixteen projects separate storage access, planning, visualization, execution, updating, clients, and measurements.
+A Windows-first .NET 11 NTFS optimizer with ReFS and FAT analysis and Windows-managed maintenance, a native **.NET MAUI** dashboard, **Tedd.TUI** terminal interface, and isolated execution workers. Sixteen projects separate storage access, planning, visualization, execution, updating, clients, and measurements.
 
 [Project site](https://tedd.github.io/Tedd.Defrag/) · [Download the latest release](https://github.com/tedd/Tedd.Defrag/releases/latest) · [Source code](https://github.com/tedd/Tedd.Defrag)
 
@@ -18,7 +18,7 @@ dotnet run --project src/Tedd.Defrag.Desktop
 dotnet run --project src/Tedd.Defrag.Cli -- tui C:
 ```
 
-The dashboard requests administrator access when starting its worker, lists real volumes, and initially selects the system volume or the first available supported volume. NTFS and ReFS are supported; the method selector offers operations for the selected filesystem. Its map remains empty until you choose **Analyze** or **Preview**. Opening the application does not submit a job. If no supported volume is available, disk-operation controls remain disabled. Preview is the CLI default; actual changes require `--execute`. Closing the desktop application cancels its queued and running jobs and stops the worker. Closing the terminal interface detaches from a submitted job.
+The dashboard requests administrator access when starting its worker, lists real volumes, and initially selects the system volume or the first available supported volume. NTFS, ReFS and FAT12/16/32 are supported; the method selector offers operations for the selected filesystem. exFAT is not supported. Its map remains empty until you choose **Analyze** or **Preview**. Opening the application does not submit a job. If no supported volume is available, disk-operation controls remain disabled. Preview is the CLI default; actual changes require `--execute`. Closing the desktop application cancels its queued and running jobs and stops the worker. Closing the terminal interface detaches from a submitted job.
 
 Synthetic volume fixtures are compiled only into tests and benchmarks.
 
@@ -46,9 +46,10 @@ Release builds check GitHub Releases for a newer stable version at startup. With
 |---|---|
 | NTFS scan | Bounded parallel raw MFT reads and record parsing; independent handles and 1 MiB buffers; ordered inventory assembly; validated update-sequence fixups, signed runlists, names and streams; allocation bitmap from Windows |
 | ReFS scan | Windows allocation bitmap and file extent queries; directory traversal of accessible unnamed streams; partial file coverage with explicit warnings |
+| FAT scan | FAT12/16/32 allocation bitmap and file extent queries through Windows; directory traversal of accessible file data; partial coverage of ownership |
 | NTFS placement | Minimum-write, files-only, pack, pack + defrag, alphabetical, size, creation/modification time, extension, directory locality, shrink boundary |
 | Constraints | Recursive path/glob exclusions, selected objects only, file size and fragment-count filters, optional relocation-byte/time budgets, no supporting moves of unrelated files |
-| Maintenance | Windows ReTRIM, slab consolidation, automatic optimization and whole-volume Windows defrag on NTFS/ReFS where supported; bounded NTFS virtual-disk pre-zeroing with delete-on-close files |
+| Maintenance | Windows ReTRIM, automatic optimization and whole-volume Windows defrag on NTFS/ReFS/FAT where supported; slab consolidation on NTFS/ReFS; bounded NTFS virtual-disk pre-zeroing with delete-on-close files |
 | Metadata | Movable MFT data and directory-index targets through supported filesystem APIs; incomplete or unsupported streams remain constrained |
 | Visualization | Layered allocation/fragmentation/metadata/exclusion/activity counts; bounded drawing surface; zoom, cell inspection, live progress and JSON reports |
 | Jobs | Queue and persistent history, pause/resume/cancel, per-volume exclusion, shared-storage arbitration, conservative unknown topology, manual resource groups |
@@ -58,9 +59,9 @@ Ordering and packing are best-effort preferences using existing free space. They
 
 The NTFS raw scanner does not recursively traverse directories. It deduplicates file records by identity, observes named streams, and marks unsupported/incomplete records explicitly. Ordinary files with extension attributes, sparse/compressed/encrypted streams, reparse points, hard-linked identities and unresolved paths are conservatively excluded from custom relocation. Their allocated clusters are still occupied in the bitmap. The MFT data stream's own extension mapping is assembled separately.
 
-ReFS analysis enumerates accessible unnamed file streams, queries their extents, and displays the volume allocation bitmap. Reparse targets, named streams and filesystem metadata are outside file coverage; analysis reports `Partial`, and fragmentation counts describe observed streams. ReFS scans run serially and honor cancellation and memory limits. Custom placement, selected-file defrag, MFT/index optimization, shrink preparation and pre-zeroing require NTFS.
+ReFS and FAT analysis enumerate accessible file data, query extents, and display the volume allocation bitmap. Directory allocation and filesystem metadata are outside file coverage; ReFS named streams and reparse targets are also outside coverage. Analysis reports `Partial`, and fragmentation counts describe observed streams. These scans run serially and honor cancellation and memory limits. Custom placement, selected-file defrag, MFT/index optimization, shrink preparation and pre-zeroing require NTFS.
 
-For ReFS, use **ReTRIM**, **Windows automatic**, **Slab consolidation**, or **Windows defrag**. [Windows defrag](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/defrag) determines availability for the filesystem version, media and volume state; an unsupported request is reported as a failure with Windows diagnostics. Maintenance can proceed when ReFS allocation scanning is unavailable. Windows defrag applies to the whole volume and cannot enforce selected paths, exclusions, custom fragment thresholds, file-size filters or relocation-byte budgets. Its preview identifies the command without estimating moves or submitting writes. A successful maintenance operation can still return `Partial` when the subsequent analysis has incomplete file coverage.
+For ReFS or FAT, use **ReTRIM**, **Windows automatic**, or **Windows defrag**. ReFS also offers **Slab consolidation**. [Windows defrag](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/defrag) determines availability for the filesystem version, media and volume state; an unsupported request is reported as a failure with Windows diagnostics. A device reporting TRIM support does not establish that Windows can retrim its filesystem. Maintenance can proceed when ReFS or FAT allocation scanning is unavailable. Windows defrag applies to the whole volume and cannot enforce selected paths, exclusions, custom fragment thresholds, file-size filters or relocation-byte budgets. Its preview identifies the command without estimating moves or submitting writes. A successful maintenance operation can still return `Partial` when the subsequent analysis has incomplete file coverage.
 
 ## Resource controls
 
@@ -104,7 +105,7 @@ Tedd.Defrag.Cli.exe settings --parallel 3 --shared --per-device 2
 
 Write budget, time limit, process-memory cap, and relocation bandwidth default to `0`, meaning unlimited. File defragmentation defaults to streams with at least 20 fragments; `--min-file-mib` and `--max-file-mib` optionally restrict file size.
 
-On ReFS, `defrag D:` defaults to whole-volume `WindowsDefrag`, and `optimize D:` defaults to `Automatic`. On NTFS, both default to `MinimumWrite`. Explicit `--policy` selections take precedence.
+On ReFS or FAT, `defrag D:` defaults to whole-volume `WindowsDefrag`, and `optimize D:` defaults to `Automatic`. On NTFS, both default to `MinimumWrite`. Explicit `--policy` selections take precedence.
 
 `--allow-ssd` explicitly permits custom relocation or Windows defrag on SSD/unknown media. TRIM support is probed independently of seek penalty. Windows maintenance refuses relocation exclusions it cannot enforce. Its progress text comes from Windows and is not parsed into invented percentages; the map is rescanned afterward. Windows output is saved in the job directory's `maintenance.log`. Pausing external optimization stops its process; submit a fresh job to continue.
 

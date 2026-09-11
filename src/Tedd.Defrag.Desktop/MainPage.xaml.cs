@@ -200,7 +200,7 @@ public partial class MainPage : ContentPage
         _overview.Cells = []; _overview.TotalClusters = _overview.StartCluster = _overview.ClusterCount = 0;
         ClearFileHighlight(); ClusterOverlay.IsVisible = false; DiagnosticsOverlay.IsVisible = false;
         _map.EmptyMessage = volume == null ? "Connect a volume and refresh to begin." :
-            FileSystemCapabilities.IsSupported(volume.FileSystem) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS or ReFS volume to analyze its allocation.";
+            FileSystemCapabilities.IsSupported(volume.FileSystem) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS, ReFS, FAT or FAT32 volume to analyze its allocation.";
         DiskMap.Invalidate();
         ModeBadge.Text = volume?.FileSystem.ToUpperInvariant() ?? "NO VOLUME";
         VolumeTitle.Text = volume == null ? "No volume selected" : $"{volume.Root[..2]}  {volume.Label}";
@@ -216,7 +216,7 @@ public partial class MainPage : ContentPage
         RenderRecommendation(null);
         FooterStatus.Text = volume == null ? "●  No available volumes · refresh to try again" : $"●  {volume.Root} selected · administrator access active";
         if (volume != null && !FileSystemCapabilities.IsSupported(volume.FileSystem))
-            JobMessage.Text = "Analysis and optimization require an NTFS or ReFS volume.";
+            JobMessage.Text = "Analysis and optimization require an NTFS, ReFS, FAT or FAT32 volume.";
         if (volume != null && _volumeSessions.TryGetValue(volume.Id, out var session) && session.Snapshot != null)
         {
             Render(session);
@@ -241,7 +241,7 @@ public partial class MainPage : ContentPage
     }
     private JobRequest Request(Operation operation, bool preview)
     {
-        var volume = _volume ?? throw new InvalidOperationException("Select an available NTFS or ReFS volume first.");
+        var volume = _volume ?? throw new InvalidOperationException("Select an available NTFS, ReFS, FAT or FAT32 volume first.");
         FileSystemCapabilities.Validate(volume.FileSystem, operation);
         var request = new JobRequest { Volume = volume.Root, Operation = operation, Preview = preview,
             SelectedPaths = string.IsNullOrWhiteSpace(SelectedPath.Text) ? [] : [SelectedPath.Text.Trim()],
@@ -277,7 +277,7 @@ public partial class MainPage : ContentPage
                 if (!await DisplayAlertAsync("Review disk operation", details, "Start job", "Cancel")) return;
             }
             OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the worker…";
-            var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS or ReFS volume first.");
+            var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS, ReFS, FAT or FAT32 volume first.");
             session.JobId = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
             session.AttachedExistingJob = false;
             session.AwaitingReport = session.JobId;
@@ -433,7 +433,7 @@ public partial class MainPage : ContentPage
         {
             SetRecommendedOperations([]);
             RecommendationTitle.Text = "Select a volume";
-            RecommendationSummary.Text = "Select an NTFS or ReFS volume before requesting an analysis.";
+            RecommendationSummary.Text = "Select an NTFS, ReFS, FAT or FAT32 volume before requesting an analysis.";
             RecommendationFragmentation.Text = "Not measured";
             return;
         }
@@ -463,12 +463,12 @@ public partial class MainPage : ContentPage
             mftExtents, fragmentedIndexes, thresholdCount.Eligible, thresholdCount.Total);
         SetRecommendedOperations(steps);
         RecommendationButton.IsVisible = false;
-        if (FileSystemCapabilities.IsRefs(volume.FileSystem))
+        if (FileSystemCapabilities.Find(volume.FileSystem) is { UsesDirectoryScan: true } support)
         {
-            RecommendationTitle.Text = "ReFS maintenance through Windows";
-            RecommendationMetadata.Text = "ReFS metadata and named streams are outside file coverage";
+            RecommendationTitle.Text = $"{volume.FileSystem} maintenance through Windows";
+            RecommendationMetadata.Text = "Filesystem metadata is outside file coverage";
             RecommendationThreshold.Text = $"{threshold:N0}+ fragments · {thresholdCount.Total:N0} observed streams";
-            RecommendationSummary.Text = "File fragmentation describes accessible unnamed streams. Windows determines which whole-volume operations are supported; custom placement and file filters require NTFS.";
+            RecommendationSummary.Text = support.CoverageDescription + " Windows determines which whole-volume operations are supported; custom placement and file filters require NTFS.";
         }
         else if (volume.SeekPenalty == null)
         {
@@ -665,11 +665,11 @@ public partial class MainPage : ContentPage
         if (full) ApplyBaseMapWithoutRefresh(session, total);
         try
         {
-            // ReFS explorer keys belong to one snapshot; track paths across rescans.
-            bool refs = FileSystemCapabilities.IsRefs(_volume?.FileSystem ?? "");
+            // Directory scanners use snapshot-local keys; track paths across rescans.
+            bool trackPath = FileSystemCapabilities.Find(_volume?.FileSystem ?? "")?.UsesDirectoryScan == true;
             var reply = await _client.Send(new("explore", Id: session.JobId, StartCluster: start, ClusterCount: length,
-                MapCells: full ? 0 : Math.Max(256, session.Cells.Length), FileId: refs ? null : _selectedMapFileId,
-                Path: refs ? _selectedMapPath : null, Stream: _selectedMapStream));
+                MapCells: full ? 0 : Math.Max(256, session.Cells.Length), FileId: trackPath ? null : _selectedMapFileId,
+                Path: trackPath ? _selectedMapPath : null, Stream: _selectedMapStream));
             if (request != _regionRequest || !ReferenceEquals(session, CurrentSession) || reply.Region == null) return;
             var region = reply.Region;
             if (!full) _map.SetRegion(region.StartCluster, region.ClusterCount, region.TotalClusters, region.Cells);

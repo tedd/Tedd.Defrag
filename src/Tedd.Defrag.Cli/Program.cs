@@ -129,8 +129,8 @@ internal static class Program
     }
     private static JobRequest MakeRequest(Arguments args, string command, string volume, string fileSystem)
     {
-        bool refs = FileSystemCapabilities.IsRefs(fileSystem);
-        string policy = args.Get("policy", refs ? command == "defrag" ? "WindowsDefrag" : "Automatic" : "MinimumWrite");
+        var support = FileSystemCapabilities.Get(fileSystem);
+        string policy = args.Get("policy", (command == "defrag" ? support.DefaultDefrag : support.DefaultOptimization).ToString());
         if (!Enum.TryParse<Operation>(policy.Replace("-", ""), true, out var operation)) throw new ArgumentException("Unknown layout policy.");
         operation = command switch { "analyze" => Operation.Analyze, "trim" => Operation.ReTrim, "zero" => Operation.ZeroFreeSpace, _ => operation };
         ResourcePolicy resources = args.Get("preset", "performance").ToLowerInvariant() switch { "quiet" => ResourcePolicy.Quiet, "performance" => ResourcePolicy.Performance, "balanced" => ResourcePolicy.Balanced, _ => throw new ArgumentException("Unknown resource preset.") };
@@ -211,7 +211,8 @@ internal static class Program
         OptimizeMft, DirectoryIndexes, Automatic, ReTrim, SlabConsolidate, WindowsDefrag
 
         ReFS: analyze, trim, WindowsDefrag, Automatic and SlabConsolidate.
-        On ReFS, defrag defaults to whole-volume WindowsDefrag; optimize defaults to Automatic.
+        FAT12/16/32: analyze, trim, WindowsDefrag and Automatic. exFAT is not supported.
+        On ReFS/FAT, defrag defaults to whole-volume WindowsDefrag; optimize defaults to Automatic.
         Windows decides maintenance availability. Custom placement/file filters require NTFS.
 
         jobs list|pause|resume|cancel|watch [id] [--json]
