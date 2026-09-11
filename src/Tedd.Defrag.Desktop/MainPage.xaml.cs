@@ -72,7 +72,7 @@ public partial class MainPage : ContentPage
         _settingTheme = false;
         ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · responsive", "Performance · full speed" }; ResourcePreset.SelectedIndex = 2;
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
-        Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await CheckForUpdate(); };
+        Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await AttachActiveJobs(); await CheckForUpdate(); };
         Unloaded += (_, _) => _timer.Stop();
     }
     internal void Shutdown()
@@ -148,6 +148,38 @@ public partial class MainPage : ContentPage
         }
         catch (Exception e) { FooterStatus.Text = e.Message; }
         finally { _refreshing = false; }
+    }
+    private async Task AttachActiveJobs()
+    {
+        try
+        {
+            var jobs = await _client.GetActiveJobs();
+            VolumeInfo? focus = null;
+            foreach (var snapshot in jobs
+                .GroupBy(job => VolumeKey(job.Volume), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderBy(job => job.State == JobState.Queued).ThenByDescending(job => job.UpdatedAt).First())
+                .OrderBy(job => job.State == JobState.Queued).ThenByDescending(job => job.UpdatedAt))
+            {
+                var volume = _volumes.FirstOrDefault(candidate =>
+                    VolumeKey(candidate.Root).Equals(VolumeKey(snapshot.Volume), StringComparison.OrdinalIgnoreCase));
+                if (volume == null) continue;
+                var session = SessionFor(volume);
+                session.JobId = snapshot.Id;
+                session.AttachedExistingJob = true;
+                Apply(snapshot, session);
+                focus ??= volume;
+            }
+            if (focus != null) SelectVolume(focus);
+        }
+        catch (TimeoutException)
+        {
+            // No broker is running, so persisted nonterminal snapshots are stale
+            // until a worker explicitly resumes or terminates them.
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            FooterStatus.Text = $"Active-job synchronization unavailable · {exception.Message}";
+        }
     }
     private void AddVolume(VolumeInfo volume)
     {
@@ -241,6 +273,7 @@ public partial class MainPage : ContentPage
             OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the worker…";
             var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS volume first.");
             session.JobId = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
+            session.AttachedExistingJob = false;
             session.AwaitingReport = session.JobId;
             DiagnosticsTitle.Text = "Waiting for worker"; DiagnosticsCount.Text = "Queued";
             DiagnosticsElapsed.Text = "00:00:00"; DiagnosticsProgress.Progress = 0;
@@ -313,7 +346,7 @@ public partial class MainPage : ContentPage
         PauseButton.IsEnabled = CancelButton.IsEnabled = !snapshot.IsTerminal && session.JobId != Guid.Empty; PauseButton.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
         FileList.ItemsSource = session.Files;
         WarningsText.Text = string.Join("\n", snapshot.Warnings ?? []);
-        FooterStatus.Text = $"●  {snapshot.Volume} · {snapshot.State} · application worker";
+        FooterStatus.Text = $"●  {snapshot.Volume} · {snapshot.State} · {(session.AttachedExistingJob ? "attached worker job" : "application worker")}";
         RenderDiagnostics(snapshot);
         RenderRecommendation(layout);
         UpdateVolumeActions();
@@ -882,6 +915,7 @@ public partial class MainPage : ContentPage
                     return;
                 }
                 session.JobId = job.Id;
+                session.AttachedExistingJob = true;
                 if (session.Snapshot?.Id != session.JobId) session.Snapshot = null;
                 SelectVolume(volume);
             }
@@ -916,6 +950,7 @@ public partial class MainPage : ContentPage
     {
         public Guid JobId { get; set; }
         public Guid AwaitingReport { get; set; }
+        public bool AttachedExistingJob { get; set; }
         public JobSnapshot? Snapshot { get; set; }
         public JobSnapshot? LayoutSnapshot { get; set; }
         public MapCell[] Cells { get; set; } = [];

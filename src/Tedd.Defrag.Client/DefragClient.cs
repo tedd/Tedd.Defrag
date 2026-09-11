@@ -46,6 +46,25 @@ public sealed class DefragClient
         }
     }
 
+    public async Task<JobSnapshot[]> GetActiveJobs(CancellationToken token = default)
+    {
+        // A persisted nonterminal snapshot is not sufficient evidence that its
+        // execution process still exists. Require a live broker before exposing
+        // jobs for an interface to reattach to.
+        await Send(new("ping"), token: token);
+        var summaries = (await Send(new("list"), token: token)).Jobs ?? [];
+        var active = new List<JobSnapshot>();
+        foreach (var summary in summaries.Where(snapshot => !snapshot.IsTerminal).OrderByDescending(snapshot => snapshot.UpdatedAt))
+        {
+            // List intentionally omits the allocation map and file summaries.
+            // Rehydrate each job so a newly started interface receives the same
+            // state as the interface that originally submitted it.
+            var snapshot = (await Send(new("get", Id: summary.Id), token: token)).Snapshot ?? summary;
+            if (!snapshot.IsTerminal) active.Add(snapshot);
+        }
+        return active.ToArray();
+    }
+
     public async Task ShutdownWorker(CancellationToken token = default)
     {
         try { await _connect(new("shutdown"), token); }

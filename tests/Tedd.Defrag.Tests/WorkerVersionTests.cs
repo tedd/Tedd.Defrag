@@ -71,6 +71,29 @@ public sealed class WorkerVersionTests
     }
 
     [Fact]
+    public async Task ActiveJobsAreRehydratedWithTheirAllocationMaps()
+    {
+        var broker = new BrokerFixture(BrokerProtocol.BuildVersion);
+        var activeId = Guid.NewGuid();
+        var completedId = Guid.NewGuid();
+        broker.Jobs =
+        [
+            new(activeId, "V:\\", Operation.Pack, JobState.Running, "Relocating", .5, 4096, 100, 3, 20,
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, [new(128, 64, 8, 2, 0, 4, 4)]),
+            new(completedId, "W:\\", Operation.Analyze, JobState.Completed, "Complete", 1, 0, 100, 0, 20,
+                DateTimeOffset.UtcNow)
+        ];
+
+        var jobs = await broker.Client.GetActiveJobs();
+
+        var job = Assert.Single(jobs);
+        Assert.Equal(activeId, job.Id);
+        Assert.NotNull(job.Map);
+        Assert.Equal(128, Assert.Single(job.Map!).Clusters);
+        Assert.Equal(["ping", "list", "get"], broker.Events);
+    }
+
+    [Fact]
     public async Task SubmissionWithoutStartupPermissionRejectsStaleWorker()
     {
         var broker = new BrokerFixture(null);
@@ -190,6 +213,7 @@ public sealed class WorkerVersionTests
         public bool ReplacementAvailable { get; init; } = true;
         public bool FailSubmission { get; init; }
         public string StartedBuild { get; init; } = BrokerProtocol.BuildVersion;
+        public JobSnapshot[] Jobs { get; set; } = [];
         public List<string> Events { get; } = [];
         public List<BrokerCommand> Submissions { get; } = [];
         public DefragClient Client { get; }
@@ -206,6 +230,8 @@ public sealed class WorkerVersionTests
             switch (command.Action)
             {
                 case "ping": return Task.FromResult(new BrokerReply(true, Worker: _build == null ? null : new(_build, 123, "worker.exe")));
+                case "list": return Task.FromResult(new BrokerReply(true, Jobs: Jobs.Select(job => job with { Map = null, Files = null }).ToArray()));
+                case "get": return Task.FromResult(new BrokerReply(true, Snapshot: Jobs.FirstOrDefault(job => job.Id == command.Id)));
                 case "stop":
                     if (Busy) throw new InvalidOperationException("Finish active jobs before stopping the worker.");
                     Running = false; break;
