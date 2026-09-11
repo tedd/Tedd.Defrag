@@ -160,6 +160,22 @@ public class CorrectnessTests
         MapAggregator.Build(layout, cells, 51, 7921); Assert.Equal(7921, cells.Sum(c => c.Clusters)); Assert.Equal(BitmapOperations.CountRange(layout.Bitmap, 51, 7921), cells.Sum(c => c.Allocated));
     }
     [Fact]
+    public void MapShowsTheFullVolumeOutsideTheOccupiedRange()
+    {
+        byte[] bitmap = new byte[128];
+        BitmapOperations.SetRange(bitmap, 320, 64, true);
+        var cells = new MapCell[16];
+
+        MapAggregator.Build(Layout(bitmap, []), cells);
+
+        Assert.Equal(1024, cells.Sum(cell => cell.Clusters));
+        Assert.Equal(0, cells[0].Allocated);
+        Assert.Equal(0xFF455B6Bu, MapAggregator.Color(cells[0]));
+        Assert.Equal(0, cells[^1].Allocated);
+        Assert.Equal(0xFF455B6Bu, MapAggregator.Color(cells[^1]));
+        Assert.Contains(cells, cell => cell.Allocated > 0);
+    }
+    [Fact]
     public void ArbiterQueuesConflictingDevicesButAllowsIndependentWork()
     {
         var arbiter = new ResourceArbiter(); var settings = new ConcurrencySettings { MaxConcurrentVolumes = 4 };

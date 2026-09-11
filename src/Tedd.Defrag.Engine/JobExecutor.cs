@@ -216,7 +216,7 @@ public sealed class JobExecutor
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,
                 initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics,
                 request.MinimumFragments, streamsAtThreshold, eligibleStreamsAtThreshold, mftExtents, fragmentedDirectoryIndexes,
-                directoryIndexesAtThreshold));
+                directoryIndexesAtThreshold, layout?.TotalClusters ?? 0));
             lastPublish = clock.ElapsedMilliseconds;
         }
         void UpdateConditionMetrics()

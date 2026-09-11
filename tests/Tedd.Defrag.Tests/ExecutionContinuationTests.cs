@@ -132,6 +132,7 @@ public sealed class ExecutionContinuationTests
         Assert.Equal(3, result.MftExtents);
         Assert.Equal(1, result.FragmentedDirectoryIndexes);
         Assert.Equal(0, result.DirectoryIndexesAtOrAboveThreshold);
+        Assert.Equal(volume.Layout.TotalClusters, result.TotalClusters);
     }
 
     [Fact]

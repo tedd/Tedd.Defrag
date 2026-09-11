@@ -113,7 +113,8 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     int FilesConsidered = 0, int FilesBlocked = 0, int InitialFragmentedFiles = 0, long ElapsedMilliseconds = 0,
     string? WorkerBuild = null, JobDiagnostics? Diagnostics = null, int FragmentationThreshold = 20,
     int StreamsAtOrAboveThreshold = 0, int EligibleStreamsAtOrAboveThreshold = 0,
-    int MftExtents = 0, int FragmentedDirectoryIndexes = 0, int DirectoryIndexesAtOrAboveThreshold = 0)
+    int MftExtents = 0, int FragmentedDirectoryIndexes = 0, int DirectoryIndexesAtOrAboveThreshold = 0,
+    long TotalClusters = 0)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
     public JobSnapshot Transition(JobState state, string message)

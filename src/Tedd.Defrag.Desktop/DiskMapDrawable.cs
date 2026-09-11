@@ -23,7 +23,7 @@ public sealed class DiskMapDrawable : IDrawable
         {
             var c = new MapCell(256, i, 0, 0, 0, 0, 0); Add(MapAggregator.Color(c));
         }
-        foreach (uint c in new uint[] { 0xFF172531, 0xFF223646, 0xFFFFFFFF, 0xFF70C94A, 0xFF37C3DB, 0xFFF3BF3E, 0xFF8295A3 }) Add(c);
+        foreach (uint c in new uint[] { 0xFF172531, 0xFF455B6B, 0xFFFFFFFF, 0xFF70C94A, 0xFF37C3DB, 0xFFF3BF3E, 0xFF8295A3 }) Add(c);
         void Add(uint c) => _colors.TryAdd(c, Color.FromUint(c));
     }
     public void SetRegion(long start, long count, long total, MapCell[] cells)

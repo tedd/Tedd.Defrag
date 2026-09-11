@@ -316,7 +316,9 @@ public partial class MainPage : ContentPage
     {
         var snapshot = session.Snapshot ?? throw new InvalidOperationException("The volume session has no snapshot.");
         var layout = session.LayoutSnapshot;
-        long totalClusters = session.Cells.Sum(cell => cell.Clusters);
+        // The sampled cells describe allocation, but the worker's NTFS geometry defines
+        // the display bounds. This preserves leading and trailing free volume space.
+        long totalClusters = layout?.TotalClusters > 0 ? layout.TotalClusters : session.Cells.Sum(cell => cell.Clusters);
         _overview.Cells = session.Cells; _overview.TotalClusters = totalClusters;
         if (totalClusters > 0 && (_map.TotalClusters != totalClusters || _map.ClusterCount == 0 || _map.ClusterCount == _map.TotalClusters))
             ApplyBaseMap(session, totalClusters);
@@ -606,7 +608,9 @@ public partial class MainPage : ContentPage
     private void ResetMapView()
     {
         if (CurrentSession is not { } session) return;
-        long total = session.Cells.Sum(cell => cell.Clusters);
+        long total = session.LayoutSnapshot?.TotalClusters > 0
+            ? session.LayoutSnapshot.TotalClusters
+            : session.Cells.Sum(cell => cell.Clusters);
         if (total > 0) ApplyBaseMap(session, total);
     }
     private void ApplyBaseMap(VolumeSession session, long total)

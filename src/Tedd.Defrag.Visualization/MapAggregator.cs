@@ -62,7 +62,9 @@ public static class MapAggregator
         if (c.Metadata > c.Clusters / 8) return 0xFF37C3DB;
         if (c.Fragmented > c.Clusters / 8) return 0xFFF3BF3E;
         if (c.Excluded > c.Clusters / 3) return 0xFF8295A3;
-        if (c.Allocated == 0) return 0xFF223646;
+        // Keep unallocated cells visibly distinct from the map canvas so free
+        // space before and after the occupied range remains part of the bitmap.
+        if (c.Allocated == 0) return 0xFF455B6B;
         float fill = (float)c.Allocated / c.Clusters;
         return 0xFF000000 | (uint)(27 + 2 * fill) << 16 | (uint)(72 + 67 * fill) << 8 | (uint)(105 + 130 * fill);
     }
