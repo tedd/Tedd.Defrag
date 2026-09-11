@@ -28,6 +28,7 @@ public partial class MainPage : ContentPage
     private long _mapGestureViewportStart, _pendingPanStart;
     private WinUIElement? _mapPlatformView;
     private ulong? _selectedMapFileId;
+    private string? _selectedMapPath;
     private string _selectedMapStream = "";
     private MapFileSelection? _selectedMapFile;
     private ClusterHitRow? _selectedClusterHit;
@@ -38,6 +39,7 @@ public partial class MainPage : ContentPage
     [
         new("↯", "Minimum-write defrag", "Prioritizes heavily fragmented files and preserves their first extent when possible. Honors file scope and exclusions.", Operation.MinimumWrite),
         new("✦", "Windows automatic", "Lets Windows select supported whole-volume maintenance for the detected media and current volume state.", Operation.Automatic),
+        new("↻", "Windows defrag", "Asks Windows to defragment the whole volume where supported. File scope, exclusions, custom fragment thresholds and write budgets are unsupported.", Operation.WindowsDefrag),
         new("▰", "Defragment files", "Makes eligible fragmented files contiguous without trying to reorganize the whole volume.", Operation.FilesOnly),
         new("⇤", "Pack + defragment", "Moves eligible files toward lower addresses while consolidating their extents. Higher write volume.", Operation.PackAndDefrag),
         new("≪", "Pack toward beginning", "Consolidates free space by moving allocated extents toward the start of the volume.", Operation.Pack),
@@ -134,8 +136,8 @@ public partial class MainPage : ContentPage
             else
             {
                 string? systemRoot = Path.GetPathRoot(Environment.SystemDirectory);
-                SelectVolume(volumes.FirstOrDefault(v => v.Root.Equals(systemRoot, StringComparison.OrdinalIgnoreCase) && v.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
-                    ?? volumes.FirstOrDefault(v => v.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase)) ?? volumes.FirstOrDefault());
+                SelectVolume(volumes.FirstOrDefault(v => v.Root.Equals(systemRoot, StringComparison.OrdinalIgnoreCase) && FileSystemCapabilities.IsSupported(v.FileSystem))
+                    ?? volumes.FirstOrDefault(v => FileSystemCapabilities.IsSupported(v.FileSystem)) ?? volumes.FirstOrDefault());
             }
             if (volumes.Length == 0)
             {
@@ -190,10 +192,15 @@ public partial class MainPage : ContentPage
     private void SelectVolume(VolumeInfo? volume)
     {
         _volume = volume; _map.SetRegion(0, 0, 0, []);
+        PolicyList.ItemsSource = Policies.Where(p => volume != null && FileSystemCapabilities.Supports(volume.FileSystem, p.Operation)).ToArray();
+        if (volume != null && !FileSystemCapabilities.Supports(volume.FileSystem, _selectedPolicy.Operation))
+        {
+            _selectedPolicy = Policy(Operation.Automatic); UpdateSelectedPolicy();
+        }
         _overview.Cells = []; _overview.TotalClusters = _overview.StartCluster = _overview.ClusterCount = 0;
         ClearFileHighlight(); ClusterOverlay.IsVisible = false; DiagnosticsOverlay.IsVisible = false;
         _map.EmptyMessage = volume == null ? "Connect a volume and refresh to begin." :
-            volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS volume to analyze its allocation.";
+            FileSystemCapabilities.IsSupported(volume.FileSystem) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS or ReFS volume to analyze its allocation.";
         DiskMap.Invalidate();
         ModeBadge.Text = volume?.FileSystem.ToUpperInvariant() ?? "NO VOLUME";
         VolumeTitle.Text = volume == null ? "No volume selected" : $"{volume.Root[..2]}  {volume.Label}";
@@ -208,8 +215,8 @@ public partial class MainPage : ContentPage
         CellDetail.Text = "Hover to inspect a cluster range. Click for files; drag to pan."; UpdateRange();
         RenderRecommendation(null);
         FooterStatus.Text = volume == null ? "●  No available volumes · refresh to try again" : $"●  {volume.Root} selected · administrator access active";
-        if (volume != null && !volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
-            JobMessage.Text = "Analysis and optimization require an NTFS volume.";
+        if (volume != null && !FileSystemCapabilities.IsSupported(volume.FileSystem))
+            JobMessage.Text = "Analysis and optimization require an NTFS or ReFS volume.";
         if (volume != null && _volumeSessions.TryGetValue(volume.Id, out var session) && session.Snapshot != null)
         {
             Render(session);
@@ -222,8 +229,9 @@ public partial class MainPage : ContentPage
     {
         var session = CurrentSession;
         bool jobActive = HasActiveJob(session);
-        AnalyzeButton.IsEnabled = PreviewButton.IsEnabled = OptimizeButton.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
-        RecommendationSteps.IsEnabled = !_submitting && !jobActive && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true;
+        AnalyzeButton.IsEnabled = !_submitting && !jobActive && _volume != null && FileSystemCapabilities.IsSupported(_volume.FileSystem);
+        PreviewButton.IsEnabled = OptimizeButton.IsEnabled = AnalyzeButton.IsEnabled && FileSystemCapabilities.Supports(_volume!.FileSystem, _selectedPolicy.Operation);
+        RecommendationSteps.IsEnabled = AnalyzeButton.IsEnabled;
         RecommendationButton.IsEnabled = RecommendationSteps.IsEnabled && CurrentSession?.LayoutSnapshot == null;
         foreach (var button in VolumesPanel.Children.OfType<Button>())
         {
@@ -233,8 +241,8 @@ public partial class MainPage : ContentPage
     }
     private JobRequest Request(Operation operation, bool preview)
     {
-        var volume = _volume ?? throw new InvalidOperationException("Select an available NTFS volume first.");
-        if (!volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase)) throw new NotSupportedException("Select an NTFS volume.");
+        var volume = _volume ?? throw new InvalidOperationException("Select an available NTFS or ReFS volume first.");
+        FileSystemCapabilities.Validate(volume.FileSystem, operation);
         var request = new JobRequest { Volume = volume.Root, Operation = operation, Preview = preview,
             SelectedPaths = string.IsNullOrWhiteSpace(SelectedPath.Text) ? [] : [SelectedPath.Text.Trim()],
             Exclusions = (ExclusionEntry.Text ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
@@ -269,7 +277,7 @@ public partial class MainPage : ContentPage
                 if (!await DisplayAlertAsync("Review disk operation", details, "Start job", "Cancel")) return;
             }
             OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the worker…";
-            var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS volume first.");
+            var session = CurrentSession ?? throw new InvalidOperationException("Select an available NTFS or ReFS volume first.");
             session.JobId = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
             session.AttachedExistingJob = false;
             session.AwaitingReport = session.JobId;
@@ -316,7 +324,7 @@ public partial class MainPage : ContentPage
     {
         var snapshot = session.Snapshot ?? throw new InvalidOperationException("The volume session has no snapshot.");
         var layout = session.LayoutSnapshot;
-        // The sampled cells describe allocation, but the worker's NTFS geometry defines
+        // The sampled cells describe allocation, but the worker's volume geometry defines
         // the display bounds. This preserves leading and trailing free volume space.
         long totalClusters = layout?.TotalClusters > 0 ? layout.TotalClusters : session.Cells.Sum(cell => cell.Clusters);
         _overview.Cells = session.Cells; _overview.TotalClusters = totalClusters;
@@ -425,7 +433,7 @@ public partial class MainPage : ContentPage
         {
             SetRecommendedOperations([]);
             RecommendationTitle.Text = "Select a volume";
-            RecommendationSummary.Text = "Select an NTFS volume before requesting an analysis.";
+            RecommendationSummary.Text = "Select an NTFS or ReFS volume before requesting an analysis.";
             RecommendationFragmentation.Text = "Not measured";
             return;
         }
@@ -451,11 +459,18 @@ public partial class MainPage : ContentPage
         RecommendationMetadata.Text = $"{mft} · {fragmentedIndexes:N0} fragmented directory indexes";
         RecommendationCulprits.Text = Culprits(snapshot.Files);
 
-        var steps = MaintenanceRecommendation.SelectSteps(volume.SeekPenalty, volume.TrimEnabled,
-            mftExtents, fragmentedIndexes, thresholdCount.Eligible);
+        var steps = MaintenanceRecommendation.SelectSteps(volume,
+            mftExtents, fragmentedIndexes, thresholdCount.Eligible, thresholdCount.Total);
         SetRecommendedOperations(steps);
         RecommendationButton.IsVisible = false;
-        if (volume.SeekPenalty == null)
+        if (FileSystemCapabilities.IsRefs(volume.FileSystem))
+        {
+            RecommendationTitle.Text = "ReFS maintenance through Windows";
+            RecommendationMetadata.Text = "ReFS metadata and named streams are outside file coverage";
+            RecommendationThreshold.Text = $"{threshold:N0}+ fragments · {thresholdCount.Total:N0} observed streams";
+            RecommendationSummary.Text = "File fragmentation describes accessible unnamed streams. Windows determines which whole-volume operations are supported; custom placement and file filters require NTFS.";
+        }
+        else if (volume.SeekPenalty == null)
         {
             RecommendationTitle.Text = "Use Windows automatic maintenance";
             RecommendationSummary.Text = "The storage device type is unknown. Windows selects maintenance for the detected media.";
@@ -650,8 +665,11 @@ public partial class MainPage : ContentPage
         if (full) ApplyBaseMapWithoutRefresh(session, total);
         try
         {
+            // ReFS explorer keys belong to one snapshot; track paths across rescans.
+            bool refs = FileSystemCapabilities.IsRefs(_volume?.FileSystem ?? "");
             var reply = await _client.Send(new("explore", Id: session.JobId, StartCluster: start, ClusterCount: length,
-                MapCells: full ? 0 : Math.Max(256, session.Cells.Length), FileId: _selectedMapFileId, Stream: _selectedMapStream));
+                MapCells: full ? 0 : Math.Max(256, session.Cells.Length), FileId: refs ? null : _selectedMapFileId,
+                Path: refs ? _selectedMapPath : null, Stream: _selectedMapStream));
             if (request != _regionRequest || !ReferenceEquals(session, CurrentSession) || reply.Region == null) return;
             var region = reply.Region;
             if (!full) _map.SetRegion(region.StartCluster, region.ClusterCount, region.TotalClusters, region.Cells);
@@ -801,7 +819,7 @@ public partial class MainPage : ContentPage
     private async void OnHighlightClusterFile(object? sender, EventArgs e)
     {
         if (_selectedClusterHit == null) return;
-        _selectedMapFileId = _selectedClusterHit.File.FileId; _selectedMapStream = _selectedClusterHit.File.Stream;
+        _selectedMapFileId = _selectedClusterHit.File.FileId; _selectedMapPath = _selectedClusterHit.File.Path; _selectedMapStream = _selectedClusterHit.File.Stream;
         ClusterOverlay.IsVisible = false; await LoadRegion(_map.StartCluster, _map.ClusterCount);
     }
     private void OnCloseClusterFiles(object? sender, EventArgs e) => ClusterOverlay.IsVisible = false;
@@ -825,7 +843,7 @@ public partial class MainPage : ContentPage
                 await DisplayAlertAsync("File not found in map", "The selected file is not present in this volume's analyzed layout. Analyze again if it was created after the current observation.", "Close");
                 return;
             }
-            _selectedMapFileId = selection.FileId; _selectedMapStream = selection.Stream; ApplyFileSelection(selection);
+            _selectedMapFileId = selection.FileId; _selectedMapPath = selection.Path; _selectedMapStream = selection.Stream; ApplyFileSelection(selection);
             if (!selection.Ranges.Any(range => RangesOverlap(range.Start, range.End, _map.StartCluster, _map.StartCluster + _map.ClusterCount)))
             {
                 var first = selection.Ranges.FirstOrDefault(range => range.Length > 0);
@@ -852,7 +870,7 @@ public partial class MainPage : ContentPage
     private void ClearFileHighlight()
     {
         _regionRequest++;
-        _selectedMapFileId = null; _selectedMapStream = ""; _selectedMapFile = null;
+        _selectedMapFileId = null; _selectedMapPath = null; _selectedMapStream = ""; _selectedMapFile = null;
         _map.SetHighlight([]); HighlightedFile.IsVisible = false; DiskMap.Invalidate();
     }
     private static bool RangesOverlap(long a, long b, long c, long d) => a < d && c < b;

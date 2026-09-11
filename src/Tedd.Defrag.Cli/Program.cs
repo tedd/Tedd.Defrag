@@ -71,7 +71,9 @@ internal static class Program
                 TerminalDashboard.Run(volume); return 0;
             }
             if (command is not ("analyze" or "optimize" or "defrag" or "trim" or "zero")) throw new ArgumentException("Unknown command. Use help.");
-            var jobRequest = MakeRequest(parsed, command, volume);
+            var volumeInfo = VolumeDiscovery.Get(volume);
+            var jobRequest = MakeRequest(parsed, command, volume, volumeInfo.FileSystem);
+            FileSystemCapabilities.Validate(volumeInfo.FileSystem, jobRequest.Operation);
             var submitted = await client.Send(new("submit", Job: jobRequest), startBroker: true);
             if (parsed.Has("wait") || command == "analyze") return await Watch(client, submitted.Id, json, parsed.Has("events"));
             if (json) PrintJson(new { jobId = submitted.Id }); else Console.WriteLine(submitted.Id);
@@ -125,9 +127,10 @@ internal static class Program
             return false;
         }
     }
-    private static JobRequest MakeRequest(Arguments args, string command, string volume)
+    private static JobRequest MakeRequest(Arguments args, string command, string volume, string fileSystem)
     {
-        string policy = args.Get("policy", "MinimumWrite");
+        bool refs = FileSystemCapabilities.IsRefs(fileSystem);
+        string policy = args.Get("policy", refs ? command == "defrag" ? "WindowsDefrag" : "Automatic" : "MinimumWrite");
         if (!Enum.TryParse<Operation>(policy.Replace("-", ""), true, out var operation)) throw new ArgumentException("Unknown layout policy.");
         operation = command switch { "analyze" => Operation.Analyze, "trim" => Operation.ReTrim, "zero" => Operation.ZeroFreeSpace, _ => operation };
         ResourcePolicy resources = args.Get("preset", "performance").ToLowerInvariant() switch { "quiet" => ResourcePolicy.Quiet, "performance" => ResourcePolicy.Performance, "balanced" => ResourcePolicy.Balanced, _ => throw new ArgumentException("Unknown resource preset.") };
@@ -205,7 +208,11 @@ internal static class Program
 
         Policies: MinimumWrite, FilesOnly, Pack, PackAndDefrag, Alphabetical,
         Size, Created, Modified, Extension, DirectoryLocality, PrepareShrink,
-        OptimizeMft, DirectoryIndexes, Automatic, ReTrim, SlabConsolidate
+        OptimizeMft, DirectoryIndexes, Automatic, ReTrim, SlabConsolidate, WindowsDefrag
+
+        ReFS: analyze, trim, WindowsDefrag, Automatic and SlabConsolidate.
+        On ReFS, defrag defaults to whole-volume WindowsDefrag; optimize defaults to Automatic.
+        Windows decides maintenance availability. Custom placement/file filters require NTFS.
 
         jobs list|pause|resume|cancel|watch [id] [--json]
         settings --parallel 2 [--shared|--no-shared] [--per-device 2]

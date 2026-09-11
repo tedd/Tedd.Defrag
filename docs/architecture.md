@@ -33,7 +33,11 @@ The current broker is an elevated desktop-user agent. It is not hardened for arb
 
 `FSCTL_GET_VOLUME_BITMAP` provides allocation independently of ownership. Volume geometry is decoded through CsWin32's `NTFS_VOLUME_DATA_BUFFER`; extent bounds use `TotalClusters`, including allocated clusters. The scanner bootstraps the MFT through `FSCTL_GET_NTFS_FILE_RECORD`, resolves resident or nonresident MFT attribute-list references, validates complete MFT data runs, and reads mapped records in 1 MiB batches. Filesystem-returned records have already had their update-sequence trailers restored and use a separate read-only parser entry point. Raw records validate all trailers before restoring any bytes, using NTFS's fixed 512-byte stride regardless of the volume sector size. Failed raw validation never falls back to filesystem-record parsing. Invalid/torn records and unresolved stream extensions remain unavailable for custom movement.
 
+ReFS uses directory enumeration and `FSCTL_GET_RETRIEVAL_POINTERS` for accessible unnamed data streams. The allocation bitmap header defines its cluster address range. It does not parse ReFS disk structures or query NTFS geometry. ReFS file coverage is explicitly partial because metadata, named streams and reparse targets are not enumerated. Snapshot-local file keys serve the explorer only; they are never used as native file IDs, which are 128-bit on ReFS. Every observed ReFS stream is marked `AnalysisOnly` and cannot enter custom relocation.
+
 The scanner is neither a filesystem driver nor an alternative write implementation. Raw NTFS access is **read only**. Active-volume metadata can change while scanning, so every candidate is treated as provisional.
+
+ReFS maintenance delegates to `defrag.exe`: `/L` for ReTRIM, `/O` for automatic optimization, `/K` for slab consolidation and `/D` for explicit whole-volume defragmentation. Windows checks health and operation availability. Preview validates scope and constraints before returning the proposed command; execution retains Windows output in `maintenance.log`. Allocation-scan failures do not prevent ReFS maintenance, and a failed or incomplete post-scan is reported separately from maintenance completion. NTFS custom placement and zeroing never run on ReFS.
 
 ## Planner
 

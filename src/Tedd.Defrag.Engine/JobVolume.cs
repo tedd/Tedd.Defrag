@@ -17,6 +17,30 @@ internal interface IJobVolume : IDisposable
     void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules);
 }
 
+internal static class JobVolume
+{
+    public static IJobVolume Open(JobRequest request)
+    {
+        var info = VolumeDiscovery.Get(request.Volume);
+        FileSystemCapabilities.Validate(info.FileSystem, request.Operation);
+        return FileSystemCapabilities.IsRefs(info.FileSystem) ? new RefsJobVolume(info) : new NativeJobVolume(request);
+    }
+}
+
+internal sealed class RefsJobVolume(VolumeInfo info) : IJobVolume
+{
+    public VolumeInfo Info => info;
+    // Windows maintenance checks volume health itself; no NTFS dirty-state query.
+    public bool IsDirty() => throw new NotSupportedException("ReFS health is checked by Windows maintenance.");
+    public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null)
+        => new RefsScanner().Scan(VolumeDiscovery.Get(info.Root), request, progress, checkpoint, token, diagnostics);
+    public byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token)
+        => throw new NotSupportedException("ReFS custom relocation is unavailable.");
+    public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules)
+        => throw new NotSupportedException("ReFS custom relocation is unavailable. Use WindowsDefrag.");
+    public void Dispose() { }
+}
+
 internal sealed class NativeJobVolume(JobRequest request) : IJobVolume
 {
     private readonly NtfsVolume _volume = new(request.Volume, !request.Preview && request.Operation != Operation.Analyze);

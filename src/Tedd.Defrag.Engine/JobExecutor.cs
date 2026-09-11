@@ -13,12 +13,15 @@ public sealed class JobExecutor
 {
     private readonly JobStore store;
     private readonly Func<JobRequest, IJobVolume> openVolume;
+    private readonly Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken> runMaintenance;
 
-    public JobExecutor(JobStore store) : this(store, request => new NativeJobVolume(request)) { }
-    internal JobExecutor(JobStore store, Func<JobRequest, IJobVolume> openVolume)
+    public JobExecutor(JobStore store) : this(store, JobVolume.Open) { }
+    internal JobExecutor(JobStore store, Func<JobRequest, IJobVolume> openVolume,
+        Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken>? runMaintenance = null)
     {
         this.store = store;
         this.openVolume = openVolume;
+        this.runMaintenance = runMaintenance ?? WindowsMaintenance.Run;
     }
 
     public void Run(JobRequest request, CancellationToken token)
@@ -27,6 +30,7 @@ public sealed class JobExecutor
         var clock = Stopwatch.StartNew(); long moved = 0, plannedBytes = 0, lastPublish = -1000;
         long pacedBytes = 0; var pacing = Stopwatch.StartNew();
         VolumeLayout? layout = null; MapCell[] map = new MapCell[request.Resources.MapCells];
+        VolumeInfo? volumeInfo = null;
         var warnings = new List<string>();
         JobState state = JobState.Scanning; double progress = 0; string message = "Preparing analysis";
         int plannedMoves = 0, attemptedMoves = 0, verifiedMoves = 0, failedMoves = 0;
@@ -42,34 +46,51 @@ public sealed class JobExecutor
         {
             Checkpoint();
             using var volume = openVolume(request);
-            if (!request.Preview && request.Operation != Operation.Analyze && volume.IsDirty()) throw new IOException("The NTFS volume is dirty. Resolve filesystem errors before optimization.");
+            volumeInfo = volume.Info;
+            FileSystemCapabilities.Validate(volume.Info.FileSystem, request.Operation);
+            bool external = FileSystemCapabilities.IsWindowsMaintenance(request.Operation);
+            string? maintenanceFlag = external ? WindowsMaintenance.Validate(request, volume.Info) : null;
+            if (!request.Preview && request.Operation != Operation.Analyze && FileSystemCapabilities.IsNtfs(volume.Info.FileSystem) && volume.IsDirty())
+                throw new IOException("The NTFS volume is dirty. Resolve filesystem errors before optimization.");
             if (!request.Preview && request.Operation is not (Operation.Analyze or Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace)
                 && volume!.Info.SeekPenalty != true && !request.AllowSsdRelocation)
-                throw new InvalidOperationException("Custom relocation on SSD or unknown media requires explicit opt-in.");
-            layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
+                throw new InvalidOperationException("Defragmentation on SSD or unknown media requires explicit opt-in.");
+            layout = ScanVolume();
             UpdateConditionMetrics();
             layoutIndexDirty = true;
-            warnings.AddRange(layout.Warnings);
-            initialFragmentedFiles = layout.Files.Count(f => f.Fragmented);
-            MapAggregator.Build(layout, map); SaveLayoutIndex(); Publish(true);
-            if (request.Operation == Operation.Analyze) { state = layout.Complete ? JobState.Completed : JobState.Partial; message = "Analysis complete"; progress = 1; return; }
-            if (request.Operation is Operation.Automatic or Operation.ReTrim or Operation.SlabConsolidate or Operation.ZeroFreeSpace)
+            if (layout != null)
             {
-                if (request.Exclusions.Length != 0 && request.Operation is Operation.Automatic or Operation.SlabConsolidate)
-                    throw new NotSupportedException("Volume-wide Windows optimization does not support file exclusions.");
-                if (request.Preview) { state = JobState.Completed; progress = 1; message = "Maintenance preview ready; no storage changes submitted"; return; }
+                warnings.AddRange(layout.Warnings);
+                initialFragmentedFiles = layout.Files.Count(f => f.Fragmented);
+                MapAggregator.Build(layout, map); SaveLayoutIndex();
+            }
+            Publish(true);
+            if (request.Operation == Operation.Analyze) { state = layout!.Complete ? JobState.Completed : JobState.Partial; message = layout.Complete ? "Analysis complete" : "Analysis complete; file coverage is partial"; progress = 1; return; }
+            if (external || request.Operation == Operation.ZeroFreeSpace)
+            {
+                if (request.Preview) { state = JobState.Completed; progress = 1; message = external
+                    ? $"Maintenance preview: defrag.exe {volume.Info.Root[..2]} {maintenanceFlag} /U /V. Whole volume; availability is determined by Windows at execution. No storage changes submitted."
+                    : "Maintenance preview ready; no storage changes submitted"; return; }
                 state = JobState.Running; progress = 0; message = "Windows maintenance; progress is indeterminate"; Publish(true);
                 if (request.Operation == Operation.ZeroFreeSpace)
                     moved = VirtualDiskPreparation.Zero(request, volume!.Info, b => { Pace(b - moved); moved = b; Publish(); }, Checkpoint, token);
-                else WindowsMaintenance.Run(request, volume!.Info, line => { message = line; Publish(); }, ExternalCheckpoint, token);
+                else runMaintenance(request, volume!.Info, line =>
+                {
+                    File.AppendAllText(Path.Combine(store.JobDirectory(request.Id), "maintenance.log"), line + Environment.NewLine);
+                    message = line; Publish();
+                }, ExternalCheckpoint, token);
                 state = JobState.Scanning; progress = 0; scanWork = null;
                 ReleaseLayoutForRescan();
-                layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
+                layout = ScanVolume();
                 UpdateConditionMetrics();
                 layoutIndexDirty = true;
-                AddWarnings(layout.Warnings);
-                MapAggregator.Build(layout, map); state = JobState.Completed; progress = 1; message = "Maintenance completed; allocation map refreshed"; return;
+                if (layout != null) { AddWarnings(layout.Warnings); MapAggregator.Build(layout, map); }
+                state = layout?.Complete == true ? JobState.Completed : JobState.Partial; progress = 1;
+                message = layout == null ? "Windows maintenance completed; allocation map unavailable (see warnings)"
+                    : layout.Complete ? "Maintenance completed; allocation map refreshed" : "Windows maintenance completed; allocation map refreshed, file coverage is partial";
+                return;
             }
+            if (layout == null) throw new IOException("The allocation layout is unavailable.");
             var rules = new PathRules(request.SelectedPaths, request.Exclusions);
             bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
             var session = new PlanningSession();
@@ -181,6 +202,17 @@ public sealed class JobExecutor
                 : $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. "
                     + (failedMoves > 0 ? $"{failedMoves:N0} moves failed across {session.BlockedFiles.Count:N0} files; other eligible files were processed. " : "")
                     + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete.");
+
+            VolumeLayout? ScanVolume()
+            {
+                try { return volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p); }
+                catch (Exception e) when (external && FileSystemCapabilities.IsRefs(volume.Info.FileSystem) &&
+                    e is IOException or Win32Exception or UnauthorizedAccessException)
+                {
+                    AddWarnings([$"ReFS allocation analysis unavailable: {e.Message}. Windows maintenance can run independently of the allocation scan."]);
+                    return null;
+                }
+            }
         }
         catch (OperationCanceledException e) { state = JobState.Cancelled; message = string.IsNullOrEmpty(e.Message) ? "Cancelled at a safe boundary" : e.Message; }
         catch (TimeoutException) { state = JobState.Partial; message = "Execution time budget reached"; }
@@ -211,7 +243,7 @@ public sealed class JobExecutor
                 state == JobState.Scanning ? scannedRecords : layout?.RecordsScanned ?? scannedRecords, files?.Count(f => f.Fragmented) ?? 0, files?.Length ?? 0, DateTimeOffset.UtcNow,
                 layout?.ObservedAt, layout == null ? null : map, files?.Where(f => f.Fragmented).OrderByDescending(f => f.Extents.Length).Take(100)
                     .Select(f => new FileSummary(f.Path, f.StreamName, f.Extents.Length, f.Size, f.Movable ? "Eligible" : f.Flags.ToString())).ToArray(),
-                warnings.ToArray(), plannedBytes, layout?.Volume.SizeBytes ?? 0, layout?.Volume.FreeBytes ?? 0,
+                warnings.ToArray(), plannedBytes, layout?.Volume.SizeBytes ?? volumeInfo?.SizeBytes ?? 0, layout?.Volume.FreeBytes ?? volumeInfo?.FreeBytes ?? 0,
                 request.Resources.CpuPercent, request.Resources.MemoryMiB, request.Resources.IoMiBPerSecond,
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,
                 initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics,
@@ -225,7 +257,8 @@ public sealed class JobExecutor
             streamsAtThreshold = files?.Count(f => f.Fragmented && f.Extents.Length >= request.MinimumFragments) ?? 0;
             eligibleStreamsAtThreshold = files?.Count(f => f.Fragmented && f.Movable && f.Extents.Length >= request.MinimumFragments &&
                 (f.Flags & (StreamFlags.Metadata | StreamFlags.Directory)) == 0) ?? 0;
-            mftExtents = files?.FirstOrDefault(f => (f.FileId & 0xFFFFFFFFFFFF) == 0 && f.StreamName.Length == 0)?.Extents.Length ?? 0;
+            mftExtents = FileSystemCapabilities.IsNtfs(volumeInfo?.FileSystem ?? "")
+                ? files?.FirstOrDefault(f => (f.FileId & 0xFFFFFFFFFFFF) == 0 && f.StreamName.Length == 0)?.Extents.Length ?? 0 : 0;
             fragmentedDirectoryIndexes = files?.Count(f => f.Fragmented && f.StreamName.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal)) ?? 0;
             directoryIndexesAtThreshold = files?.Count(f => f.Extents.Length >= request.MinimumFragments && f.StreamName.EndsWith(":$INDEX_ALLOCATION", StringComparison.Ordinal)) ?? 0;
         }

@@ -45,27 +45,7 @@ public sealed unsafe class NtfsVolume : IDisposable
         return (BinaryPrimitives.ReadUInt32LittleEndian(output) & 1) != 0;
     }
     public byte[] ReadBitmap(int memoryMiB, Action<double>? progress, CancellationToken token)
-    {
-        long bytes = (TotalClusters + 7) / 8;
-        if ((memoryMiB > 0 && bytes > memoryMiB * 1024L * 1024 / 4) || bytes > Array.MaxLength) throw new IOException("Allocation bitmap exceeds the configured memory cap or runtime array limit.");
-        byte[] bitmap = new byte[(int)bytes], buffer = new byte[1024 * 1024 + 16];
-        Span<byte> input = stackalloc byte[8]; long next = 0;
-        while (next < TotalClusters)
-        {
-            token.ThrowIfCancellationRequested();
-            BinaryPrimitives.WriteInt64LittleEndian(input, next);
-            int n = NativeIo.Control(Handle, PInvoke.FSCTL_GET_VOLUME_BITMAP, input, buffer, out int error);
-            if (error != 0 && error != 234) throw new Win32Exception(error);
-            if (n <= 16) throw new IOException("Volume bitmap query did not advance.");
-            long start = BinaryPrimitives.ReadInt64LittleEndian(buffer), available = BinaryPrimitives.ReadInt64LittleEndian(buffer.AsSpan(8));
-            long bits = Math.Min((n - 16L) * 8, available);
-            if (start < 0 || (start & 7) != 0 || start > next || start + bits <= next) throw new IOException("Invalid bitmap offset.");
-            int copy = (int)Math.Min(n - 16L, bitmap.LongLength - start / 8);
-            buffer.AsSpan(16, copy).CopyTo(bitmap.AsSpan((int)(start / 8)));
-            next = Math.Min(TotalClusters, start + bits); progress?.Invoke((double)next / TotalClusters);
-        }
-        return bitmap;
-    }
+        => VolumeBitmap.Read(Handle, TotalClusters, memoryMiB, progress, token);
     /// <summary>Read a filesystem-restored record. Use TryParseFileSystemRecord, never raw-record fixups.</summary>
     public byte[] ReadRecord(long number)
     {
@@ -86,12 +66,13 @@ public sealed unsafe class NtfsVolume : IDisposable
         if (file.IsInvalid) { int error = Marshal.GetLastWin32Error(); file.Dispose(); throw new Win32Exception(error); }
         return file;
     }
-    public static Extent[] RetrievalPointers(SafeFileHandle file)
+    public static Extent[] RetrievalPointers(SafeFileHandle file, CancellationToken token = default, Action? checkpoint = null)
     {
         byte[] buffer = new byte[65536]; Span<byte> input = stackalloc byte[8]; long vcn = 0;
         var extents = new List<Extent>();
         while (true)
         {
+            token.ThrowIfCancellationRequested(); checkpoint?.Invoke();
             BinaryPrimitives.WriteInt64LittleEndian(input, vcn);
             int n = NativeIo.Control(file, PInvoke.FSCTL_GET_RETRIEVAL_POINTERS, input, buffer, out int error);
             if (error == 38) return extents.ToArray(); // Resident or empty.

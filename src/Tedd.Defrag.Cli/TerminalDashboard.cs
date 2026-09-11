@@ -25,7 +25,7 @@ internal sealed class TerminalDashboard : UIElement
     public static void Run(string volume)
     {
         var info = VolumeDiscovery.Get(volume);
-        if (!info.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase)) throw new NotSupportedException("Select an NTFS volume.");
+        FileSystemCapabilities.Validate(info.FileSystem, Operation.Analyze);
         var dashboard = new TerminalDashboard(info);
         var window = new TuiWindow { Content = dashboard };
         var app = new TuiApp(window, new WindowsTerminalPlatform()); dashboard._app = app;
@@ -43,7 +43,8 @@ internal sealed class TerminalDashboard : UIElement
             {
                 if (e.Key is ConsoleKey.A or ConsoleKey.D)
                 {
-                    var request = new JobRequest { Volume = _volume, Operation = e.Key == ConsoleKey.A ? Operation.Analyze : Operation.MinimumWrite,
+                    var request = new JobRequest { Volume = _volume, Operation = e.Key == ConsoleKey.A ? Operation.Analyze :
+                        FileSystemCapabilities.IsRefs(_volumeInfo.FileSystem) ? Operation.WindowsDefrag : Operation.MinimumWrite,
                         Preview = true, Resources = ResourcePolicy.Performance };
                     _job = (await _client.Send(new("submit", Job: request), startBroker: true)).Id;
                 }
@@ -73,7 +74,7 @@ internal sealed class TerminalDashboard : UIElement
     {
         int w = buffer.Width, h = buffer.Height; var snapshot = Volatile.Read(ref _snapshot);
         buffer.FillRect(0, 0, w, h, ' ', White, BackgroundColor);
-        Text(3, 1, "▦  TEDD / DEFRAG", Accent); Text(Math.Max(25, w - 31), 1, ".NET 11 / NTFS", Muted);
+        Text(3, 1, "▦  TEDD / DEFRAG", Accent); Text(Math.Max(25, w - 31), 1, $".NET 11 / {_volumeInfo.FileSystem}", Muted);
         Text(3, 3, "Storage, in perspective.", White);
         Text(3, 5, $"{_volume}   {snapshot?.State.ToString() ?? "Ready"}   {snapshot?.Message ?? "Press A to analyze this volume"}", Muted);
         Text(3, 7, snapshot?.ObservedAt == null ? $"Awaiting analysis     {Format.Bytes(_volumeInfo.FreeBytes)} free of {Format.Bytes(_volumeInfo.SizeBytes)}" :

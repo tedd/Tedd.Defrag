@@ -3,12 +3,12 @@ using System.Text.Json.Serialization;
 namespace Tedd.Defrag.Core;
 
 [JsonConverter(typeof(JsonStringEnumConverter<Operation>))]
-public enum Operation { Analyze, MinimumWrite, FilesOnly, Pack, PackAndDefrag, Alphabetical, Size, Created, Modified, Extension, DirectoryLocality, PrepareShrink, ReTrim, SlabConsolidate, Automatic, OptimizeMft, DirectoryIndexes, ZeroFreeSpace }
+public enum Operation { Analyze, MinimumWrite, FilesOnly, Pack, PackAndDefrag, Alphabetical, Size, Created, Modified, Extension, DirectoryLocality, PrepareShrink, ReTrim, SlabConsolidate, Automatic, OptimizeMft, DirectoryIndexes, ZeroFreeSpace, WindowsDefrag }
 [JsonConverter(typeof(JsonStringEnumConverter<JobState>))]
 public enum JobState { Queued, Scanning, Planning, Running, Paused, WaitingForIdle, Completed, Partial, Cancelled, Failed, Interrupted }
 
 [Flags]
-public enum StreamFlags { None = 0, Directory = 1, Metadata = 2, Sparse = 4, Compressed = 8, Encrypted = 16, ReparsePoint = 32, Incomplete = 64, HardLinked = 128, Excluded = 256, Resident = 512 }
+public enum StreamFlags { None = 0, Directory = 1, Metadata = 2, Sparse = 4, Compressed = 8, Encrypted = 16, ReparsePoint = 32, Incomplete = 64, HardLinked = 128, Excluded = 256, Resident = 512, AnalysisOnly = 1024 }
 
 public readonly record struct ClusterRange(long Start, long Length)
 {
@@ -25,7 +25,7 @@ public sealed record FileLayout(ulong FileId, string Path, string StreamName, St
 {
     public bool Fragmented => Extents.Length > 1;
     public bool Movable => Extents.Length > 0 && (Flags & (StreamFlags.Sparse | StreamFlags.Compressed | StreamFlags.Encrypted |
-        StreamFlags.ReparsePoint | StreamFlags.Incomplete | StreamFlags.HardLinked | StreamFlags.Excluded | StreamFlags.Resident)) == 0;
+        StreamFlags.ReparsePoint | StreamFlags.Incomplete | StreamFlags.HardLinked | StreamFlags.Excluded | StreamFlags.Resident | StreamFlags.AnalysisOnly)) == 0;
 }
 public sealed record VolumeInfo(string Id, string Root, string Label, string FileSystem, long SizeBytes, long FreeBytes,
     int BytesPerCluster, bool? SeekPenalty, bool? TrimEnabled, string[] Resources, string TopologyConfidence);
