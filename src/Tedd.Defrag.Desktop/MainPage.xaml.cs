@@ -23,6 +23,8 @@ public partial class MainPage : ContentPage
     private readonly ObservableCollection<RuleEditorItem> _fileRules = [];
     private readonly ObservableCollection<RuleEditorItem> _exclusionRules = [];
     private readonly ObservableCollection<CompressionEditorItem> _compressionRules = [];
+    private RuleEditorItem? _editingFileRule, _editingExclusionRule;
+    private CompressionEditorItem? _editingCompressionRule;
     private VolumeInfo[] _volumes = [];
     private VolumeInfo? _volume;
     private bool _polling, _refreshing, _submitting;
@@ -76,7 +78,7 @@ public partial class MainPage : ContentPage
         };
         _settingTheme = false;
         ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · responsive", "Performance · full speed" }; ResourcePreset.SelectedIndex = 2;
-        FileRuleKind.ItemsSource = ExclusionRuleKind.ItemsSource = CompressionRuleKind.ItemsSource = new[] { "Path", "Wildcard", "Glob", "Regular expression" };
+        FileRuleKind.ItemsSource = ExclusionRuleKind.ItemsSource = CompressionRuleKind.ItemsSource = new[] { "File", "Folder", "Wildcard", "Glob", "Regular expression" };
         FileRuleKind.SelectedIndex = ExclusionRuleKind.SelectedIndex = CompressionRuleKind.SelectedIndex = 0;
         CompressionModePicker.ItemsSource = CompressionModes.Supported.Select(CompressionModes.DisplayName).ToArray();
         CompressionModePicker.SelectedIndex = 1;
@@ -810,8 +812,12 @@ public partial class MainPage : ContentPage
         RenderRecommendation(CurrentSession?.LayoutSnapshot);
         UpdateVolumeActions();
     }
-    private async void OnAddFileRule(object? sender, EventArgs e) => await AddRule(_fileRules, FileRulesList, FileRulePattern, FileRuleKind, "Files to include");
-    private async void OnAddExclusionRule(object? sender, EventArgs e) => await AddRule(_exclusionRules, ExclusionRulesList, ExclusionRulePattern, ExclusionRuleKind, "Exclusions");
+    private async void OnAddFileRule(object? sender, EventArgs e) => await AddRule(_fileRules, FileRulesList,
+        FileRulePattern, FileRuleKind, FileRuleCommitButton, FileRuleCancelButton, _editingFileRule,
+        value => _editingFileRule = value, false, "Files to include");
+    private async void OnAddExclusionRule(object? sender, EventArgs e) => await AddRule(_exclusionRules, ExclusionRulesList,
+        ExclusionRulePattern, ExclusionRuleKind, ExclusionRuleCommitButton, ExclusionRuleCancelButton, _editingExclusionRule,
+        value => _editingExclusionRule = value, true, "Exclusions");
     private async void OnAddCompressionRule(object? sender, EventArgs e)
     {
         try
@@ -821,37 +827,125 @@ public partial class MainPage : ContentPage
                     : $"Compression targets require NTFS; {_volume.Root} uses {_volume.FileSystem}.");
             var rule = new PathRule(CompressionRulePattern.Text?.Trim() ?? "", RuleKind(CompressionRuleKind));
             PathRules.Validate(rule);
+            ValidatePathSelection(rule, CompressionRuleKind);
             int index = CompressionModePicker.SelectedIndex;
             if (index < 0 || index >= CompressionModes.Supported.Count) throw new ArgumentException("Select a compression type.");
             var target = new CompressionTarget(rule, CompressionModes.Supported[index]);
-            if (!_compressionRules.Any(item => item.Target == target)) _compressionRules.Add(new(target));
-            CompressionRulePattern.Text = "";
+            if (_compressionRules.Any(item => !ReferenceEquals(item, _editingCompressionRule) && item.Target.Rule == rule))
+                throw new ArgumentException("An identical compression rule already exists.");
+            var replacement = new CompressionEditorItem(target, IsDirectorySelection(CompressionRuleKind));
+            int editIndex = _editingCompressionRule == null ? -1 : _compressionRules.IndexOf(_editingCompressionRule);
+            if (editIndex >= 0) _compressionRules[editIndex] = replacement;
+            else _compressionRules.Add(replacement);
+            EndCompressionRuleEdit();
             RenderCompressionRuleList();
             RefreshScopeSummary();
         }
         catch (Exception exception) { await DisplayAlertAsync("Compression", exception.Message, "Close"); }
     }
-    private async Task AddRule(ObservableCollection<RuleEditorItem> rules, VerticalStackLayout list, Entry patternEntry, Picker kindPicker, string title)
+    private async Task AddRule(ObservableCollection<RuleEditorItem> rules, VerticalStackLayout list, Entry patternEntry,
+        Picker kindPicker, Button commitButton, Button cancelButton, RuleEditorItem? editing,
+        Action<RuleEditorItem?> setEditing, bool exclusions, string title)
     {
         try
         {
             var rule = new PathRule(patternEntry.Text?.Trim() ?? "", RuleKind(kindPicker));
             PathRules.Validate(rule);
-            if (!rules.Any(item => item.Rule == rule)) rules.Add(new(rule));
-            patternEntry.Text = "";
-            RenderRuleList(list, rules);
+            ValidatePathSelection(rule, kindPicker);
+            if (rules.Any(item => !ReferenceEquals(item, editing) && item.Rule == rule))
+                throw new ArgumentException("An identical rule already exists.");
+            var replacement = new RuleEditorItem(rule, IsDirectorySelection(kindPicker));
+            int editIndex = editing == null ? -1 : rules.IndexOf(editing);
+            if (editIndex >= 0) rules[editIndex] = replacement;
+            else rules.Add(replacement);
+            EndRuleEdit(patternEntry, commitButton, cancelButton, setEditing);
+            RenderRuleList(list, rules, exclusions);
             RefreshScopeSummary();
         }
         catch (Exception exception) { await DisplayAlertAsync(title, exception.Message, "Close"); }
     }
     private static PathRuleKind RuleKind(Picker picker) => picker.SelectedIndex switch
     {
-        1 => PathRuleKind.Wildcard,
-        2 => PathRuleKind.Glob,
-        3 => PathRuleKind.Regex,
+        2 => PathRuleKind.Wildcard,
+        3 => PathRuleKind.Glob,
+        4 => PathRuleKind.Regex,
         _ => PathRuleKind.Path
     };
-    private void RenderRuleList(VerticalStackLayout list, ObservableCollection<RuleEditorItem> rules)
+    private static bool IsDirectorySelection(Picker picker) => picker.SelectedIndex == 1;
+    private static void ValidatePathSelection(PathRule rule, Picker picker)
+    {
+        if (rule.Kind != PathRuleKind.Path) return;
+        if (IsDirectorySelection(picker) && File.Exists(rule.Pattern))
+            throw new ArgumentException("The selected path is a file. Select the File match type.");
+        if (!IsDirectorySelection(picker) && Directory.Exists(rule.Pattern))
+            throw new ArgumentException("The selected path is a folder. Select the Folder match type.");
+    }
+    private static int RulePickerIndex(PathRuleKind kind, bool directory) => kind switch
+    {
+        PathRuleKind.Path => directory ? 1 : 0,
+        PathRuleKind.Wildcard => 2,
+        PathRuleKind.Glob => 3,
+        PathRuleKind.Regex => 4,
+        _ => 0
+    };
+    private void OnRuleKindChanged(object? sender, EventArgs e)
+    {
+        if (ReferenceEquals(sender, FileRuleKind)) UpdateRuleEditor(FileRuleKind, FileRulePattern, FileRuleBrowseButton);
+        else if (ReferenceEquals(sender, ExclusionRuleKind)) UpdateRuleEditor(ExclusionRuleKind, ExclusionRulePattern, ExclusionRuleBrowseButton);
+        else if (ReferenceEquals(sender, CompressionRuleKind)) UpdateRuleEditor(CompressionRuleKind, CompressionRulePattern, CompressionRuleBrowseButton);
+    }
+    private static void UpdateRuleEditor(Picker picker, Entry entry, Button browse)
+    {
+        browse.IsVisible = picker.SelectedIndex is 0 or 1;
+        browse.Text = picker.SelectedIndex == 1 ? "Choose folder" : "Choose file";
+        entry.Placeholder = picker.SelectedIndex switch
+        {
+            0 => "Select or enter a file",
+            1 => "Select or enter a folder",
+            2 => "Enter a full-path wildcard",
+            3 => "Enter a full-path glob",
+            4 => "Enter a full-path regular expression",
+            _ => "Enter a file rule"
+        };
+    }
+    private async void OnBrowseFileRule(object? sender, EventArgs e) => await BrowseRule(FileRuleKind, FileRulePattern, "Files to include");
+    private async void OnBrowseExclusionRule(object? sender, EventArgs e) => await BrowseRule(ExclusionRuleKind, ExclusionRulePattern, "Exclusions");
+    private async void OnBrowseCompressionRule(object? sender, EventArgs e) => await BrowseRule(CompressionRuleKind, CompressionRulePattern, "Compression");
+    private async Task BrowseRule(Picker picker, Entry entry, string title)
+    {
+        try
+        {
+            string? path = IsDirectorySelection(picker)
+                ? WindowsFilePicker.PickFolder(Window?.Handler?.PlatformView as WinUIWindow, $"Choose a folder for {title}")
+                : WindowsFilePicker.Pick(Window?.Handler?.PlatformView as WinUIWindow, $"Choose a file for {title}");
+            if (path != null) entry.Text = path;
+        }
+        catch (Exception exception) { await DisplayAlertAsync(title, exception.Message, "Close"); }
+    }
+    private void OnCancelFileRuleEdit(object? sender, EventArgs e) => CancelRuleEdit(false);
+    private void OnCancelExclusionRuleEdit(object? sender, EventArgs e) => CancelRuleEdit(true);
+    private void OnCancelCompressionRuleEdit(object? sender, EventArgs e) => EndCompressionRuleEdit();
+    private void CancelRuleEdit(bool exclusions)
+    {
+        if (exclusions) EndRuleEdit(ExclusionRulePattern, ExclusionRuleCommitButton, ExclusionRuleCancelButton, value => _editingExclusionRule = value);
+        else EndRuleEdit(FileRulePattern, FileRuleCommitButton, FileRuleCancelButton, value => _editingFileRule = value);
+    }
+    private static void EndRuleEdit(Entry entry, Button commit, Button cancel, Action<RuleEditorItem?> setEditing)
+    {
+        setEditing(null); entry.Text = ""; commit.Text = "Add"; cancel.IsVisible = false;
+    }
+    private void BeginRuleEdit(RuleEditorItem item, bool exclusions)
+    {
+        Picker picker = exclusions ? ExclusionRuleKind : FileRuleKind;
+        Entry entry = exclusions ? ExclusionRulePattern : FileRulePattern;
+        Button commit = exclusions ? ExclusionRuleCommitButton : FileRuleCommitButton;
+        Button cancel = exclusions ? ExclusionRuleCancelButton : FileRuleCancelButton;
+        if (exclusions) _editingExclusionRule = item;
+        else _editingFileRule = item;
+        picker.SelectedIndex = RulePickerIndex(item.Rule.Kind, item.Directory);
+        entry.Text = item.Rule.Pattern; commit.Text = "Save"; cancel.IsVisible = true; entry.Focus();
+    }
+    private void RenderRuleList(VerticalStackLayout list, ObservableCollection<RuleEditorItem> rules, bool exclusions)
     {
         list.Children.Clear();
         foreach (var item in rules)
@@ -860,21 +954,44 @@ public partial class MainPage : ContentPage
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = 118 });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Star });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.Add(new Label { Text = RuleKindLabel(item.Rule.Kind), FontSize = 10, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center }, 0);
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.Add(new Label { Text = RuleKindLabel(item.Rule.Kind, item.Directory), FontSize = 10, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center }, 0);
             row.Add(new Label { Text = item.Rule.Pattern, FontSize = 11, LineBreakMode = LineBreakMode.MiddleTruncation, VerticalOptions = LayoutOptions.Center }, 1);
+            var edit = new Button { Text = "Edit", Padding = new Thickness(10, 5) };
+            edit.Clicked += (_, _) => BeginRuleEdit(item, exclusions);
+            row.Add(edit, 2);
             var remove = new Button { Text = "Remove", Padding = new Thickness(10, 5) };
-            remove.Clicked += (_, _) => { rules.Remove(item); RenderRuleList(list, rules); RefreshScopeSummary(); };
-            row.Add(remove, 2);
+            remove.Clicked += (_, _) =>
+            {
+                RuleEditorItem? editing = exclusions ? _editingExclusionRule : _editingFileRule;
+                if (ReferenceEquals(editing, item)) CancelRuleEdit(exclusions);
+                rules.Remove(item); RenderRuleList(list, rules, exclusions); RefreshScopeSummary();
+            };
+            row.Add(remove, 3);
             list.Children.Add(row);
         }
     }
-    private static string RuleKindLabel(PathRuleKind kind) => kind switch
+    private static string RuleKindLabel(PathRuleKind kind, bool directory) => kind switch
     {
         PathRuleKind.Wildcard => "Wildcard",
         PathRuleKind.Glob => "Glob",
         PathRuleKind.Regex => "Regular expression",
-        _ => "Path"
+        _ => directory ? "Folder" : "File"
     };
+    private void BeginCompressionRuleEdit(CompressionEditorItem item)
+    {
+        _editingCompressionRule = item;
+        CompressionRuleKind.SelectedIndex = RulePickerIndex(item.Target.Rule.Kind, item.Directory);
+        CompressionRulePattern.Text = item.Target.Rule.Pattern;
+        CompressionModePicker.SelectedIndex = CompressionModes.Supported.Select((mode, index) => (mode, index))
+            .First(pair => pair.mode == item.Target.Mode).index;
+        CompressionRuleCommitButton.Text = "Save"; CompressionRuleCancelButton.IsVisible = true; CompressionRulePattern.Focus();
+    }
+    private void EndCompressionRuleEdit()
+    {
+        _editingCompressionRule = null; CompressionRulePattern.Text = "";
+        CompressionRuleCommitButton.Text = "Add"; CompressionRuleCancelButton.IsVisible = false;
+    }
     private void RenderCompressionRuleList()
     {
         CompressionRulesList.Children.Clear();
@@ -885,12 +1002,20 @@ public partial class MainPage : ContentPage
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Star });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = 170 });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.Add(new Label { Text = RuleKindLabel(item.Target.Rule.Kind), FontSize = 10, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center }, 0);
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.Add(new Label { Text = RuleKindLabel(item.Target.Rule.Kind, item.Directory), FontSize = 10, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center }, 0);
             row.Add(new Label { Text = item.Target.Rule.Pattern, FontSize = 11, LineBreakMode = LineBreakMode.MiddleTruncation, VerticalOptions = LayoutOptions.Center }, 1);
             row.Add(new Label { Text = CompressionModes.DisplayName(item.Target.Mode), FontSize = 10, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center }, 2);
+            var edit = new Button { Text = "Edit", Padding = new Thickness(10, 5) };
+            edit.Clicked += (_, _) => BeginCompressionRuleEdit(item);
+            row.Add(edit, 3);
             var remove = new Button { Text = "Remove", Padding = new Thickness(10, 5) };
-            remove.Clicked += (_, _) => { _compressionRules.Remove(item); RenderCompressionRuleList(); RefreshScopeSummary(); };
-            row.Add(remove, 3);
+            remove.Clicked += (_, _) =>
+            {
+                if (ReferenceEquals(_editingCompressionRule, item)) EndCompressionRuleEdit();
+                _compressionRules.Remove(item); RenderCompressionRuleList(); RefreshScopeSummary();
+            };
+            row.Add(remove, 4);
             CompressionRulesList.Children.Add(row);
         }
     }
@@ -900,8 +1025,8 @@ public partial class MainPage : ContentPage
         var rule = new PathRule(row.Path);
         if (!_fileRules.Any(item => item.Rule == rule))
         {
-            _fileRules.Add(new(rule));
-            RenderRuleList(FileRulesList, _fileRules);
+            _fileRules.Add(new(rule, false));
+            RenderRuleList(FileRulesList, _fileRules, false);
             RefreshScopeSummary();
         }
         CellDetail.Text = row.Path;
@@ -1087,8 +1212,8 @@ public partial class MainPage : ContentPage
         public FileRow[]? Files { get; set; }
     }
     private sealed record FileRow(string Path, int Extents, string BytesLabel, string Status);
-    private sealed record RuleEditorItem(PathRule Rule);
-    private sealed record CompressionEditorItem(CompressionTarget Target);
+    private sealed record RuleEditorItem(PathRule Rule, bool Directory);
+    private sealed record CompressionEditorItem(CompressionTarget Target, bool Directory);
     private sealed record ClusterHitRow(ClusterFile File)
     {
         public string DisplayPath => File.Path + File.Stream;

@@ -13,6 +13,10 @@ internal static class WindowsFilePicker
     private const uint NoChangeDirectory = 0x00000008;
     private const uint Explorer = 0x00080000;
     private const uint DoNotAddToRecent = 0x02000000;
+    private const uint ReturnOnlyFileSystemDirectories = 0x00000001;
+    private const uint EditBox = 0x00000010;
+    private const uint Validate = 0x00000020;
+    private const uint NewDialogStyle = 0x00000040;
 
     public static string? Pick(Microsoft.UI.Xaml.Window? owner, string title)
     {
@@ -34,12 +38,45 @@ internal static class WindowsFilePicker
         throw new Win32Exception(error, $"The file dialog failed (0x{error:X4}).");
     }
 
+    public static string? PickFolder(Microsoft.UI.Xaml.Window? owner, string title)
+    {
+        IntPtr displayName = Marshal.AllocHGlobal(MaxPathBuffer * sizeof(char));
+        try
+        {
+            var dialog = new BrowseInfo
+            {
+                Owner = owner == null ? IntPtr.Zero : WinRT.Interop.WindowNative.GetWindowHandle(owner),
+                DisplayName = displayName,
+                Title = title,
+                Flags = ReturnOnlyFileSystemDirectories | EditBox | Validate | NewDialogStyle
+            };
+            IntPtr item = SHBrowseForFolder(ref dialog);
+            if (item == IntPtr.Zero) return null;
+            try
+            {
+                var path = new StringBuilder(MaxPathBuffer);
+                if (!SHGetPathFromIDListEx(item, path, (uint)path.Capacity, 0))
+                    throw new InvalidOperationException("The selected folder has no filesystem path.");
+                return path.ToString();
+            }
+            finally { Marshal.FreeCoTaskMem(item); }
+        }
+        finally { Marshal.FreeHGlobal(displayName); }
+    }
+
     [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetOpenFileName(ref OpenFileName dialog);
 
     [DllImport("comdlg32.dll")]
     private static extern int CommDlgExtendedError();
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SHBrowseForFolder(ref BrowseInfo browseInfo);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SHGetPathFromIDListEx(IntPtr item, StringBuilder path, uint pathLength, uint flags);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct OpenFileName
@@ -67,5 +104,18 @@ internal static class WindowsFilePicker
         public IntPtr Reserved;
         public int ReservedSize;
         public uint ExtendedFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct BrowseInfo
+    {
+        public IntPtr Owner;
+        public IntPtr Root;
+        public IntPtr DisplayName;
+        public string? Title;
+        public uint Flags;
+        public IntPtr Callback;
+        public IntPtr CallbackData;
+        public int Image;
     }
 }
