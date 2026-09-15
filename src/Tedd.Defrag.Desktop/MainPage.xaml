@@ -196,8 +196,22 @@
             <ProgressBar x:Name="DiagnosticsProgress" ProgressColor="{DynamicResource Accent}" BackgroundColor="{DynamicResource Track}" />
             <Label x:Name="DiagnosticsCount" FontSize="12" TextColor="{DynamicResource Muted}" />
           </VerticalStackLayout>
-          <ScrollView Grid.Row="1"><Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="14">
-            <Border Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+          <ScrollView Grid.Row="1"><Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="14">
+            <Border Grid.ColumnSpan="2" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+              <Label Text="COMPRESSION" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
+              <Grid ColumnDefinitions="130,*,130,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
+                <Label Text="Status" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailStatus" Grid.Column="1" Grid.ColumnSpan="3" Text="Not configured" FontSize="11" />
+                <Label Grid.Row="1" Text="Current file" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailCurrent" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" Text="—" FontSize="11" LineBreakMode="MiddleTruncation" />
+                <Label Grid.Row="2" Text="Waiting" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailWaiting" Grid.Row="2" Grid.Column="1" Text="0 files · 0 B" FontSize="11" />
+                <Label Grid.Row="2" Grid.Column="2" Text="Processed" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailProcessed" Grid.Row="2" Grid.Column="3" Text="0 / 0 files" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="3" Text="Queued input" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailQueuedBytes" Grid.Row="3" Grid.Column="1" Text="0 B" FontSize="11" />
+                <Label Grid.Row="3" Grid.Column="2" Text="Processed input" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailProcessedBytes" Grid.Row="3" Grid.Column="3" Text="0 B" FontSize="11" HorizontalTextAlignment="End" />
+                <Label Grid.Row="4" Text="Changed" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailChanged" Grid.Row="4" Grid.Column="1" Text="0 files" FontSize="11" />
+                <Label Grid.Row="4" Grid.Column="2" Text="Skipped / failed" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailSkippedFailed" Grid.Row="4" Grid.Column="3" Text="0 / 0 files" FontSize="11" HorizontalTextAlignment="End" />
+              </Grid>
+              <Grid ColumnDefinitions="130,*" ColumnSpacing="12"><Label Text="Storage change" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="CompressionDetailSaved" Grid.Column="1" Text="0 B saved" FontSize="11" /></Grid>
+            </VerticalStackLayout></Border>
+            <Border Grid.Row="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
               <Label Text="PROCESS" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
               <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
                 <Label Text="Logical processors" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsProcessors" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
@@ -206,7 +220,7 @@
                 <Label Grid.Row="3" Text="Memory in use" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsMemory" Grid.Row="3" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
               </Grid>
             </VerticalStackLayout></Border>
-            <Border Grid.Column="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+            <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
               <Label Text="JOB TOTALS" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
               <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
                 <Label Text="Moves planned" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsPlanned" Grid.Column="1" Text="0" FontSize="11" HorizontalTextAlignment="End" />
@@ -215,7 +229,7 @@
                 <Label Grid.Row="3" Text="Data relocated" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="DiagnosticsRelocated" Grid.Row="3" Grid.Column="1" Text="0 B" FontSize="11" HorizontalTextAlignment="End" />
               </Grid>
             </VerticalStackLayout></Border>
-            <Border Grid.Row="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
               <Label Text="FILESYSTEM SCAN" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
               <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
                 <Label Text="Status" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ScanStatus" Grid.Column="1" Text="Not started" FontSize="11" HorizontalTextAlignment="End" />
@@ -225,7 +239,7 @@
                 <Label Grid.Row="4" Text="Requests" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ScanRequests" Grid.Row="4" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
               </Grid>
             </VerticalStackLayout></Border>
-            <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+            <Border Grid.Row="2" Grid.Column="1" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
               <Label Text="EXECUTION PLAN" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
               <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
                 <Label Text="Status" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="PlanningStatus" Grid.Column="1" Text="Not started" FontSize="11" HorizontalTextAlignment="End" />
@@ -235,7 +249,7 @@
                 <Label Grid.Row="4" Text="Requests" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="PlanningRequests" Grid.Row="4" Grid.Column="1" Text="—" FontSize="11" HorizontalTextAlignment="End" />
               </Grid>
             </VerticalStackLayout></Border>
-            <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
+            <Border Grid.Row="3" Grid.ColumnSpan="2" Style="{StaticResource Card}" Padding="14"><VerticalStackLayout Spacing="9">
               <Label Text="RELOCATION" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" />
               <Grid ColumnDefinitions="130,*,130,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
                 <Label Text="Status" FontSize="11" TextColor="{DynamicResource Muted}" /><Label x:Name="ExecutionStatus" Grid.Column="1" Text="Not started" FontSize="11" />

@@ -43,6 +43,8 @@ public sealed class JobExecutor
         int filesConsidered = 0, filesBlocked = 0, initialFragmentedFiles = 0;
         int streamsAtThreshold = 0, eligibleStreamsAtThreshold = 0, mftExtents = 0, fragmentedDirectoryIndexes = 0, directoryIndexesAtThreshold = 0;
         CompressionResult compression = CompressionResult.Empty;
+        CompressionProgress compressionProgress = new(request.CompressionTargets.Length == 0 ? "Not configured" : "Waiting to start",
+            null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         CompressionInventoryResult compressionInventory = CompressionInventoryResult.Empty;
         bool noMovesPlanned = false;
         bool layoutIndexDirty = false;
@@ -70,11 +72,25 @@ public sealed class JobExecutor
                 Publish(true);
                 compression = runCompression(request, volume.Info, item =>
                 {
-                    message = request.Preview
-                        ? $"Inspecting compression target · {item.Path}"
-                        : $"Compressing · {item.Path}";
-                    Publish();
+                    compressionProgress = item;
+                    message = item.Path == null ? item.Status : $"{item.Status} · {item.Path}";
+                    Publish(item.Path != null && item.Status != "Finding compression candidates");
                 }, Checkpoint, token);
+                compressionProgress = compressionProgress with
+                {
+                    Status = compression.FilesMatched == 0 ? "No matching compression targets" :
+                        request.Preview ? "Compression preview complete" : "Compression complete",
+                    Path = null,
+                    FilesTotal = compression.FilesMatched,
+                    FilesProcessed = compression.FilesMatched,
+                    FilesWaiting = 0,
+                    FilesChanged = compression.FilesChanged,
+                    FilesSkipped = compression.FilesSkipped,
+                    FilesFailed = compression.FilesFailed,
+                    BytesProcessed = compressionProgress.BytesTotal,
+                    BytesWaiting = 0,
+                    BytesSaved = compression.BytesSaved
+                };
                 AddWarnings(compression.Warnings);
                 string summary = request.Preview
                     ? $"Compression preview matched {compression.FilesMatched:N0} files; no compression changes were made."
@@ -302,9 +318,12 @@ public sealed class JobExecutor
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,
                 initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics,
                 request.MinimumFragments, streamsAtThreshold, eligibleStreamsAtThreshold, mftExtents, fragmentedDirectoryIndexes,
-                directoryIndexesAtThreshold, layout?.TotalClusters ?? 0, compression.FilesMatched, compression.FilesChanged,
-                compression.FilesSkipped, compression.FilesFailed, compression.BytesSaved, compressionInventory.Files,
-                compressionInventory.TotalFiles, compressionInventory.TotalSize, compressionInventory.BytesSaved));
+                directoryIndexesAtThreshold, layout?.TotalClusters ?? 0, compressionProgress.FilesTotal, compressionProgress.FilesChanged,
+                compressionProgress.FilesSkipped, compressionProgress.FilesFailed, compressionProgress.BytesSaved, compressionInventory.Files,
+                compressionInventory.TotalFiles, compressionInventory.TotalSize, compressionInventory.BytesSaved,
+                compressionProgress.FilesProcessed, compressionProgress.FilesWaiting, compressionProgress.BytesTotal,
+                compressionProgress.BytesProcessed, compressionProgress.BytesWaiting, compressionProgress.Status,
+                compressionProgress.Path));
             lastPublish = clock.ElapsedMilliseconds;
         }
         void UpdateConditionMetrics()

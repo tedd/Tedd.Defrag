@@ -137,12 +137,13 @@ public sealed class CompressionTests
     public void SmallestTestsEveryAlgorithmAndReappliesTheWinner()
     {
         var platform = new FakePlatform(100);
+        var statuses = new List<string>();
         platform.Sizes[CompressionMode.Xpress4K] = 70;
         platform.Sizes[CompressionMode.Xpress8K] = 45;
         platform.Sizes[CompressionMode.Xpress16K] = 55;
         platform.Sizes[CompressionMode.Lzx] = 50;
 
-        var result = CompressionFileProcessor.Apply("file", CompressionMode.Smallest, platform);
+        var result = CompressionFileProcessor.Apply("file", CompressionMode.Smallest, platform, statuses.Add);
 
         Assert.True(result.Changed);
         Assert.Equal(55, result.BytesSaved);
@@ -151,6 +152,13 @@ public sealed class CompressionTests
             platform.Applied);
         Assert.Equal(4, platform.Decompressions);
         Assert.Equal(CompressionMode.Xpress8K, platform.Current);
+        Assert.Equal([
+            "Finding best compression · testing XPRESS 4K",
+            "Finding best compression · testing XPRESS 8K",
+            "Finding best compression · testing XPRESS 16K",
+            "Finding best compression · testing LZX",
+            "Applying smallest result · XPRESS 8K"
+        ], statuses);
     }
 
     [Fact]

@@ -429,6 +429,18 @@ public partial class MainPage : ContentPage
         DiagnosticsVerified.Text = snapshot.VerifiedMoves.ToString("N0");
         DiagnosticsFailed.Text = snapshot.FailedMoves.ToString("N0");
         DiagnosticsRelocated.Text = Format.Bytes(snapshot.BytesMoved);
+        CompressionDetailStatus.Text = string.IsNullOrWhiteSpace(snapshot.CompressionStatus) ? "Not configured" : snapshot.CompressionStatus;
+        CompressionDetailCurrent.Text = string.IsNullOrWhiteSpace(snapshot.CompressionCurrentPath) ? "—" : snapshot.CompressionCurrentPath;
+        CompressionDetailWaiting.Text = $"{snapshot.CompressionFilesWaiting:N0} files · {Format.Bytes(snapshot.CompressionBytesWaiting)}";
+        CompressionDetailProcessed.Text = $"{snapshot.CompressionFilesProcessed:N0} / {snapshot.CompressionFilesMatched:N0} files";
+        CompressionDetailQueuedBytes.Text = Format.Bytes(snapshot.CompressionBytesTotal);
+        CompressionDetailProcessedBytes.Text = Format.Bytes(snapshot.CompressionBytesProcessed);
+        CompressionDetailChanged.Text = $"{snapshot.CompressionFilesChanged:N0} files";
+        CompressionDetailSkippedFailed.Text = $"{snapshot.CompressionFilesSkipped:N0} / {snapshot.CompressionFilesFailed:N0} files";
+        string compressionRatio = snapshot.CompressionBytesProcessed > 0
+            ? $" · {Math.Clamp(Math.Abs((double)snapshot.CompressionBytesSaved / snapshot.CompressionBytesProcessed), 0, 1):P1} of processed input"
+            : "";
+        CompressionDetailSaved.Text = Format.StorageDelta(snapshot.CompressionBytesSaved) + compressionRatio;
         RenderPhase(d?.Scan, ScanStatus, ScanProgress, ScanRate, ScanWorkers, ScanRequests);
         RenderPhase(d?.Planning, PlanningStatus, PlanningProgress, PlanningRate, PlanningWorkers, PlanningRequests);
         RenderPhase(d?.Execution, ExecutionStatus, ExecutionProgress, ExecutionRate, ExecutionWorkers, ExecutionRequests, ExecutionBytes);

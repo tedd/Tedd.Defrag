@@ -9,7 +9,9 @@ using Windows.Win32.System.Power;
 
 namespace Tedd.Defrag.Windows;
 
-public readonly record struct CompressionProgress(string Path, int FilesExamined, int FilesChanged, long BytesSaved);
+public readonly record struct CompressionProgress(string Status, string? Path, int FilesTotal, int FilesProcessed,
+    int FilesWaiting, int FilesChanged, int FilesSkipped, int FilesFailed, long BytesTotal, long BytesProcessed,
+    long BytesWaiting, long BytesSaved);
 public sealed record CompressionResult(int FilesMatched, int FilesChanged, int FilesSkipped, int FilesFailed,
     long BytesSaved, string[] Warnings)
 {
@@ -35,18 +37,39 @@ public static class NtfsCompression
         string[] excludedExtensions = request.CompressionExcludedExtensions.Select(CompressionFileTypes.Normalize)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         int matched = 0, changed = 0, skipped = 0, failed = 0;
-        long bytesSaved = 0;
+        long bytesTotal = 0, bytesProcessed = 0, bytesSaved = 0;
         using var awake = request.Preview ? null : new ExecutionStateScope();
+        var candidates = new List<(string Path, CompressionMode Mode, long Size)>();
+        Report("Finding compression candidates", null);
         foreach (var candidate in Enumerate(request.CompressionTargets, volume.Root, warnings, checkpoint, token))
         {
             if (IsFileTypeExcluded(candidate.Path, excludedExtensions)) continue;
-            token.ThrowIfCancellationRequested(); checkpoint(); matched++;
+            long size = 0;
+            try { size = Math.Max(0, new FileInfo(candidate.Path).Length); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                if (warnings.Count < 50) warnings.Add($"{candidate.Path}: logical size is unavailable: {error.Message}");
+            }
+            candidates.Add((candidate.Path, candidate.Mode, size));
+            bytesTotal = checked(bytesTotal + size);
+            Report("Finding compression candidates", candidate.Path);
+        }
+        matched = candidates.Count;
+        Report(request.Preview ? "Compression preview ready" : "Compression queue ready", null);
+        foreach (var candidate in candidates)
+        {
+            token.ThrowIfCancellationRequested(); checkpoint();
             try
             {
-                if (request.Preview) skipped++;
+                if (request.Preview)
+                {
+                    Report("Inspecting compression target", candidate.Path, candidate.Size);
+                    skipped++;
+                }
                 else
                 {
-                    var outcome = CompressionFileProcessor.Apply(candidate.Path, candidate.Mode, platform);
+                    var outcome = CompressionFileProcessor.Apply(candidate.Path, candidate.Mode, platform,
+                        status => Report(status, candidate.Path, candidate.Size));
                     if (outcome.Changed) { changed++; bytesSaved += outcome.BytesSaved; }
                     else skipped++;
                 }
@@ -56,9 +79,22 @@ public static class NtfsCompression
                 failed++;
                 if (warnings.Count < 50) warnings.Add($"{candidate.Path}: {error.Message}");
             }
-            progress(new(candidate.Path, matched, changed, bytesSaved));
+            bytesProcessed = checked(bytesProcessed + candidate.Size);
+            Report(request.Preview ? "Compression target inspected" : "Compression target processed", null);
         }
+        Report(candidates.Count == 0 ? "No matching compression targets" :
+            request.Preview ? "Compression preview complete" : "Compression complete", null);
         return new(matched, changed, skipped, failed, bytesSaved, warnings.ToArray());
+
+        void Report(string status, string? path, long activeBytes = 0)
+        {
+            int filesProcessed = changed + skipped + failed;
+            bool active = path != null && status is not "Finding compression candidates";
+            int waiting = Math.Max(0, candidates.Count - filesProcessed - (active ? 1 : 0));
+            long waitingBytes = Math.Max(0, bytesTotal - bytesProcessed - (active ? activeBytes : 0));
+            progress(new(status, path, candidates.Count, filesProcessed, waiting, changed, skipped, failed,
+                bytesTotal, bytesProcessed, waitingBytes, bytesSaved));
+        }
     }
 
     internal static bool IsFileTypeExcluded(string path, IEnumerable<string> extensions) =>
@@ -297,31 +333,35 @@ internal static class CompressionFileProcessor
     private static readonly CompressionMode[] Algorithms =
         [CompressionMode.Xpress4K, CompressionMode.Xpress8K, CompressionMode.Xpress16K, CompressionMode.Lzx];
 
-    public static CompressionFileOutcome Apply(string path, CompressionMode target, ICompressionPlatform platform)
+    public static CompressionFileOutcome Apply(string path, CompressionMode target, ICompressionPlatform platform,
+        Action<string>? progress = null)
     {
         var state = platform.GetState(path);
         long before = platform.GetAllocatedSize(path);
         if (target == CompressionMode.Smallest)
         {
             if (state.IsCompressed) return new(false, 0);
-            return TryAll(path, before, platform);
+            return TryAll(path, before, platform, progress);
         }
         if (target == CompressionMode.None)
         {
             if (!state.IsCompressed) return new(false, 0);
+            progress?.Invoke("Removing compression");
             platform.Decompress(path, state);
             return new(true, before - platform.GetAllocatedSize(path));
         }
 
         uint algorithm = NativeCompressionPlatform.Algorithm(target);
         if (state.IsFileProvider && state.Algorithm == algorithm && !state.IsNtfsCompressed) return new(false, 0);
+        progress?.Invoke($"Compressing with {CompressionModes.DisplayName(target)}");
         if (state.IsCompressed) platform.Decompress(path, state);
         if (!platform.ApplyWof(path, target)) return new(false, 0);
         Verify(path, target, platform);
         return new(true, before - platform.GetAllocatedSize(path));
     }
 
-    private static CompressionFileOutcome TryAll(string path, long before, ICompressionPlatform platform)
+    private static CompressionFileOutcome TryAll(string path, long before, ICompressionPlatform platform,
+        Action<string>? progress)
     {
         CompressionMode best = CompressionMode.None;
         long bestSize = before;
@@ -330,6 +370,7 @@ internal static class CompressionFileProcessor
         {
             foreach (var algorithm in Algorithms)
             {
+                progress?.Invoke($"Finding best compression · testing {CompressionModes.DisplayName(algorithm)}");
                 if (current != CompressionMode.None)
                 {
                     platform.Decompress(path, platform.GetState(path));
@@ -346,6 +387,7 @@ internal static class CompressionFileProcessor
                 if (current != CompressionMode.None) platform.Decompress(path, platform.GetState(path));
                 if (best != CompressionMode.None)
                 {
+                    progress?.Invoke($"Applying smallest result · {CompressionModes.DisplayName(best)}");
                     if (!platform.ApplyWof(path, best)) throw new IOException($"{CompressionModes.DisplayName(best)} was no longer beneficial when reapplied.");
                     Verify(path, best, platform);
                 }

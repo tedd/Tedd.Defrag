@@ -351,19 +351,29 @@ public sealed class ExecutionContinuationTests
         {
             var store = new JobStore(root);
             store.SaveRequest(request);
-            new JobExecutor(store, _ => volume, runCompression: (_, _, _, _, _) =>
+            new JobExecutor(store, _ => volume, runCompression: (_, _, reportProgress, _, _) =>
             {
                 Assert.Equal(0, volume.Scans);
                 compressionRan = true;
-                return new(1, 1, 0, 0, 4096, []);
+                reportProgress(new("Finding best compression · testing LZX", @"V:\Data\compressed.bin",
+                    2, 0, 1, 0, 0, 0, 16384, 0, 8192, 0));
+                var active = Assert.IsType<JobSnapshot>(store.ReadSnapshot(request.Id));
+                Assert.Equal("Finding best compression · testing LZX", active.CompressionStatus);
+                Assert.Equal(1, active.CompressionFilesWaiting);
+                Assert.Equal(8192, active.CompressionBytesWaiting);
+                Assert.Equal(@"V:\Data\compressed.bin", active.CompressionCurrentPath);
+                return new(2, 1, 1, 0, 4096, []);
             }, readCompressionInventory: (_, _, _) => new(
                 [new(@"V:\Data\compressed.bin", "XPRESS 4K", 8192, 4096)], 1, 8192, 4096, [])).Run(request, default);
 
             Assert.True(compressionRan);
             Assert.Equal(1, volume.Scans);
             var report = Assert.IsType<JobSnapshot>(store.ReadReport(request.Id));
+            Assert.Equal(2, report.CompressionFilesProcessed);
+            Assert.Equal(0, report.CompressionFilesWaiting);
             Assert.Equal(1, report.CompressionFilesChanged);
             Assert.Equal(4096, report.CompressionBytesSaved);
+            Assert.Equal("Compression complete", report.CompressionStatus);
             Assert.Equal(1, report.CompressedFileCount);
             Assert.Equal(4096, report.CompressedBytesSaved);
             Assert.Equal("XPRESS 4K", Assert.Single(report.CompressedFiles!).CompressionType);
