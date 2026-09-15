@@ -356,13 +356,17 @@ public sealed class ExecutionContinuationTests
                 Assert.Equal(0, volume.Scans);
                 compressionRan = true;
                 return new(1, 1, 0, 0, 4096, []);
-            }).Run(request, default);
+            }, readCompressionInventory: (_, _, _) => new(
+                [new(@"V:\Data\compressed.bin", "XPRESS 4K", 8192, 4096)], 1, 8192, 4096, [])).Run(request, default);
 
             Assert.True(compressionRan);
             Assert.Equal(1, volume.Scans);
             var report = Assert.IsType<JobSnapshot>(store.ReadReport(request.Id));
             Assert.Equal(1, report.CompressionFilesChanged);
             Assert.Equal(4096, report.CompressionBytesSaved);
+            Assert.Equal(1, report.CompressedFileCount);
+            Assert.Equal(4096, report.CompressedBytesSaved);
+            Assert.Equal("XPRESS 4K", Assert.Single(report.CompressedFiles!).CompressionType);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

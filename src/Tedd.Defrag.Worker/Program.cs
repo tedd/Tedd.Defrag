@@ -128,7 +128,7 @@ internal sealed class Broker
                 job.Validate();
                 job = job with { Volume = VolumeDiscovery.Root(job.Volume) };
                 Submit(job); return new(true, Id: job.Id);
-            case "list": return new(true, Jobs: _store.List().Take(200).Select(j => j with { Map = null, Files = null }).ToArray());
+            case "list": return new(true, Jobs: _store.List().Take(200).Select(j => j with { Map = null, Files = null, CompressedFiles = null }).ToArray());
             case "get": return new(true, Snapshot: _store.ReadSnapshot(command.Id));
             case "explore":
                 var region = new LayoutExplorerStore(_store).Explore(command.Id, command.StartCluster, command.ClusterCount,

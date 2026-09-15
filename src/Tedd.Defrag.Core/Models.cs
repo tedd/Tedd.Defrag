@@ -33,6 +33,31 @@ public static class CompressionModes
     };
 }
 
+public static class CompressionFileTypes
+{
+    public static IReadOnlyList<string> DefaultExcludedExtensions { get; } = Array.AsReadOnly(new[]
+    {
+        ".7z", ".aac", ".avif", ".bz2", ".cab", ".docx", ".epub", ".flac", ".gif", ".gz", ".heic",
+        ".jpeg", ".jpg", ".jxl", ".m4a", ".m4v", ".mkv", ".mov", ".mp3", ".mp4", ".mpeg", ".mpg",
+        ".odp", ".ods", ".odt", ".ogg", ".opus", ".pdf", ".png", ".pptx", ".rar", ".webm", ".webp",
+        ".wma", ".wmv", ".woff", ".woff2", ".xlsx", ".xz", ".zip", ".zst"
+    });
+
+    public static string Normalize(string extension)
+    {
+        string value = extension.Trim();
+        if (value.StartsWith("*.", StringComparison.Ordinal)) value = value[1..];
+        else if (!value.StartsWith(".", StringComparison.Ordinal)) value = "." + value;
+        if (value.Length is < 2 or > 64 || value.Any(char.IsWhiteSpace) || value.IndexOfAny(['\\', '/', ':', '*', '?', '"', '<', '>', '|', '\0']) >= 0)
+            throw new ArgumentException($"Invalid compression file type '{extension}'.");
+        return value.ToLowerInvariant();
+    }
+
+    public static string[] ParseList(string value) => value.Split([',', ';', ' ', '\t', '\r', '\n'],
+        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(Normalize)
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+}
+
 [Flags]
 public enum StreamFlags { None = 0, Directory = 1, Metadata = 2, Sparse = 4, Compressed = 8, Encrypted = 16, ReparsePoint = 32, Incomplete = 64, HardLinked = 128, Excluded = 256, Resident = 512, AnalysisOnly = 1024 }
 
@@ -94,6 +119,7 @@ public sealed record JobRequest
     public PathRule[] SelectedPaths { get; init; } = [];
     public PathRule[] Exclusions { get; init; } = [];
     public CompressionTarget[] CompressionTargets { get; init; } = [];
+    public string[] CompressionExcludedExtensions { get; init; } = [.. CompressionFileTypes.DefaultExcludedExtensions];
     public ResourcePolicy Resources { get; init; } = ResourcePolicy.Performance;
     public long MaxMoveBytes { get; init; }
     public int MaxMinutes { get; init; }
@@ -114,7 +140,8 @@ public sealed record JobRequest
         Resources.Validate();
         if (string.IsNullOrWhiteSpace(Volume) || Id == Guid.Empty || !Enum.IsDefined(Operation) || MaxMoveBytes < 0 || MaxMinutes < 0 ||
             MinimumFragments < 2 || MinimumFileBytes < 0 || MaximumFileBytes < 0 || (MaximumFileBytes > 0 && MaximumFileBytes < MinimumFileBytes) ||
-            SelectedPaths.Length > 10000 || Exclusions.Length > 10000 || CompressionTargets.Length > 10000 || FreeSpaceReserveBytes < 256L * 1024 * 1024)
+            SelectedPaths.Length > 10000 || Exclusions.Length > 10000 || CompressionTargets.Length > 10000 ||
+            CompressionExcludedExtensions.Length > 1000 || FreeSpaceReserveBytes < 256L * 1024 * 1024)
             throw new ArgumentException("Invalid job parameters.");
         if (Operation == Operation.PrepareShrink && ShrinkBoundaryBytes <= 0) throw new ArgumentException("Supply a positive shrink boundary.");
         if (Operation == Operation.ZeroFreeSpace && !Preview && !ConfirmVirtualDiskZeroing)
@@ -125,6 +152,7 @@ public sealed record JobRequest
             if (target is null || target.Rule is null || !Enum.IsDefined(target.Mode)) throw new ArgumentException("Invalid compression target.");
             PathRules.Validate(target.Rule);
         }
+        foreach (string extension in CompressionExcludedExtensions) _ = CompressionFileTypes.Normalize(extension);
     }
 }
 public sealed record ConcurrencySettings
@@ -147,7 +175,9 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     int StreamsAtOrAboveThreshold = 0, int EligibleStreamsAtOrAboveThreshold = 0,
     int MftExtents = 0, int FragmentedDirectoryIndexes = 0, int DirectoryIndexesAtOrAboveThreshold = 0,
     long TotalClusters = 0, int CompressionFilesMatched = 0, int CompressionFilesChanged = 0,
-    int CompressionFilesSkipped = 0, int CompressionFilesFailed = 0, long CompressionBytesSaved = 0)
+    int CompressionFilesSkipped = 0, int CompressionFilesFailed = 0, long CompressionBytesSaved = 0,
+    CompressedFileSummary[]? CompressedFiles = null, int CompressedFileCount = 0,
+    long CompressedLogicalBytes = 0, long CompressedBytesSaved = 0)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
     public JobSnapshot Transition(JobState state, string message)
@@ -158,6 +188,7 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
 }
 public readonly record struct MapCell(long Clusters, long Allocated, long Fragmented, long Metadata, long Excluded, long Moving, long Verified);
 public sealed record FileSummary(string Path, string Stream, int Extents, long Bytes, string Status);
+public sealed record CompressedFileSummary(string Path, string CompressionType, long Size, long BytesSaved);
 public sealed record ClusterFile(ulong FileId, string Path, string Stream, long Bytes, long Clusters,
     long ClustersInRegion, int Extents, string Status);
 public sealed record MapFileSelection(ulong FileId, string Path, string Stream, long Bytes, long Clusters,

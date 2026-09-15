@@ -15,6 +15,11 @@ public sealed record CompressionResult(int FilesMatched, int FilesChanged, int F
 {
     public static CompressionResult Empty { get; } = new(0, 0, 0, 0, 0, []);
 }
+public sealed record CompressionInventoryResult(CompressedFileSummary[] Files, int TotalFiles, long TotalSize,
+    long BytesSaved, string[] Warnings)
+{
+    public static CompressionInventoryResult Empty { get; } = new([], 0, 0, 0, []);
+}
 
 public static class NtfsCompression
 {
@@ -27,11 +32,14 @@ public static class NtfsCompression
 
         var warnings = new List<string>();
         var platform = new NativeCompressionPlatform(volume.Root);
+        string[] excludedExtensions = request.CompressionExcludedExtensions.Select(CompressionFileTypes.Normalize)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         int matched = 0, changed = 0, skipped = 0, failed = 0;
         long bytesSaved = 0;
         using var awake = request.Preview ? null : new ExecutionStateScope();
         foreach (var candidate in Enumerate(request.CompressionTargets, volume.Root, warnings, checkpoint, token))
         {
+            if (IsFileTypeExcluded(candidate.Path, excludedExtensions)) continue;
             token.ThrowIfCancellationRequested(); checkpoint(); matched++;
             try
             {
@@ -52,6 +60,9 @@ public static class NtfsCompression
         }
         return new(matched, changed, skipped, failed, bytesSaved, warnings.ToArray());
     }
+
+    internal static bool IsFileTypeExcluded(string path, IEnumerable<string> extensions) =>
+        extensions.Any(extension => path.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
 
     private static IEnumerable<(string Path, CompressionMode Mode)> Enumerate(CompressionTarget[] targets, string root,
         List<string> warnings, Action checkpoint, CancellationToken token)
@@ -196,6 +207,75 @@ public static class NtfsCompression
     }
 }
 
+public static class CompressionInventory
+{
+    internal const int MaximumFiles = 500;
+
+    public static CompressionInventoryResult Read(VolumeLayout layout, Action checkpoint, CancellationToken token)
+    {
+        if (!layout.Volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) || !layout.Files.Any(IsCandidate))
+            return CompressionInventoryResult.Empty;
+        var platform = new NativeCompressionPlatform(layout.Volume.Root);
+        return Read(layout, platform.InspectState, platform.GetAllocatedSize, checkpoint, token);
+    }
+
+    internal static CompressionInventoryResult Read(VolumeLayout layout, Func<string, CompressionFileState> getState,
+        Func<string, long> getAllocatedSize, Action checkpoint, CancellationToken token)
+    {
+        var files = new List<CompressedFileSummary>();
+        var warnings = new List<string>();
+        long totalSize = 0, totalSaved = 0;
+        foreach (var file in layout.Files.Where(IsCandidate).DistinctBy(file => file.FileId))
+        {
+            token.ThrowIfCancellationRequested(); checkpoint();
+            try
+            {
+                CompressionFileState state = getState(file.Path);
+                if (!state.IsCompressed) continue;
+                long allocated = getAllocatedSize(file.Path);
+                long saved = Math.Max(0, file.Size - allocated);
+                files.Add(new(file.Path, TypeName(state), file.Size, saved));
+                totalSize = checked(totalSize + file.Size);
+                totalSaved = checked(totalSaved + saved);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception or COMException or NotSupportedException)
+            {
+                if (warnings.Count < 50) warnings.Add($"{file.Path}: compressed-size inspection failed: {error.Message}");
+            }
+        }
+        return new(files.OrderByDescending(file => file.BytesSaved).ThenBy(file => file.Path, StringComparer.OrdinalIgnoreCase)
+            .Take(MaximumFiles).ToArray(), files.Count, totalSize, totalSaved, warnings.ToArray());
+    }
+
+    private static bool IsCandidate(FileLayout file) => file.StreamName.Length == 0 &&
+        (file.Flags & (StreamFlags.Compressed | StreamFlags.ReparsePoint)) != 0 &&
+        (file.Flags & (StreamFlags.Directory | StreamFlags.Incomplete)) == 0 &&
+        !file.Path.Contains("<unresolved>", StringComparison.Ordinal);
+
+    private static string TypeName(CompressionFileState state)
+    {
+        var types = new List<string>(2);
+        if (state.IsExternal)
+        {
+            types.Add(state.Provider switch
+            {
+                NativeCompressionPlatform.WofProviderFile => state.Algorithm switch
+                {
+                    0 => "XPRESS 4K",
+                    1 => "LZX",
+                    2 => "XPRESS 8K",
+                    3 => "XPRESS 16K",
+                    _ => $"WOF algorithm {state.Algorithm}"
+                },
+                NativeCompressionPlatform.WofProviderWim => "WIM",
+                _ => $"WOF provider {state.Provider}"
+            });
+        }
+        if (state.IsNtfsCompressed) types.Add("NTFS");
+        return string.Join(" + ", types);
+    }
+}
+
 internal readonly record struct CompressionFileState(bool IsExternal, uint Provider, uint Algorithm, bool IsNtfsCompressed)
 {
     public bool IsCompressed => IsExternal || IsNtfsCompressed;
@@ -294,6 +374,7 @@ internal static class CompressionFileProcessor
 
 internal sealed unsafe class NativeCompressionPlatform : ICompressionPlatform
 {
+    internal const uint WofProviderWim = 1;
     internal const uint WofProviderFile = 2;
     private const int CompressionNotBeneficialHResult = unchecked((int)0x80070158);
     private readonly long _clusterSize;
@@ -308,6 +389,20 @@ internal sealed unsafe class NativeCompressionPlatform : ICompressionPlatform
 
     public CompressionFileState GetState(string path)
     {
+        var (state, attributes) = QueryState(path);
+        bool isExternal = state.IsExternal;
+        uint provider = state.Provider;
+        if ((attributes & (FileAttributes.Directory | FileAttributes.Encrypted | FileAttributes.SparseFile)) != 0)
+            throw new NotSupportedException("Directories, encrypted files, and sparse files cannot use this compression target.");
+        if ((attributes & FileAttributes.ReparsePoint) != 0 && (!isExternal || provider != WofProviderFile))
+            throw new NotSupportedException("Non-WOF reparse points are not compressed.");
+        return state;
+    }
+
+    internal CompressionFileState InspectState(string path) => QueryState(path).State;
+
+    private static (CompressionFileState State, FileAttributes Attributes) QueryState(string path)
+    {
         FileAttributes attributes = File.GetAttributes(path);
         WofCompressionInfo info = default;
         uint length = (uint)sizeof(WofCompressionInfo);
@@ -318,12 +413,7 @@ internal sealed unsafe class NativeCompressionPlatform : ICompressionPlatform
             result = PInvoke.WofIsExternalFile(shortPath, out external, out provider, &info, ref length);
         }
         result.ThrowOnFailure();
-        bool isExternal = external;
-        if ((attributes & (FileAttributes.Directory | FileAttributes.Encrypted | FileAttributes.SparseFile)) != 0)
-            throw new NotSupportedException("Directories, encrypted files, and sparse files cannot use this compression target.");
-        if ((attributes & FileAttributes.ReparsePoint) != 0 && (!isExternal || provider != WofProviderFile))
-            throw new NotSupportedException("Non-WOF reparse points are not compressed.");
-        return new(isExternal, provider, info.Algorithm, (attributes & FileAttributes.Compressed) != 0);
+        return (new(external, provider, info.Algorithm, (attributes & FileAttributes.Compressed) != 0), attributes);
     }
 
     public long GetAllocatedSize(string path)

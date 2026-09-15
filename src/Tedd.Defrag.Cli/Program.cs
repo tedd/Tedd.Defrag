@@ -139,6 +139,7 @@ internal static class Program
             MoveQueueDepth = args.Int("move-queue", resources.MoveQueueDepth),
             IoMiBPerSecond = args.Int("io", resources.IoMiBPerSecond), AffinityMask = Convert.ToUInt64(args.Get("affinity", "0").Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
             IdleOnly = args.Has("idle-only") || resources.IdleOnly, AcOnly = !args.Has("allow-battery") && resources.AcOnly, Background = !args.Has("foreground") && resources.Background };
+        string[] extensionArguments = args.All("compress-exclude-ext").SelectMany(CompressionFileTypes.ParseList).ToArray();
         return new() { Volume = volume, Operation = operation, Preview = !args.Has("execute"), Resources = resources,
             SelectedPaths = [.. args.All("path").Concat(args.All("file")).Concat(args.All("folder")).Select(pattern => new PathRule(pattern)),
                 .. args.All("wildcard").Select(pattern => new PathRule(pattern, PathRuleKind.Wildcard)),
@@ -152,6 +153,8 @@ internal static class Program
                 .. ParseCompression(args.All("compress-wildcard"), PathRuleKind.Wildcard),
                 .. ParseCompression(args.All("compress-glob"), PathRuleKind.Glob),
                 .. ParseCompression(args.All("compress-regex"), PathRuleKind.Regex)],
+            CompressionExcludedExtensions = extensionArguments.Length == 0 ? [.. CompressionFileTypes.DefaultExcludedExtensions]
+                : extensionArguments.Select(CompressionFileTypes.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             MaxMoveBytes = checked(args.Long("budget-mib", 0) * 1024 * 1024), MaxMinutes = args.Int("minutes", 0),
             MinimumFragments = args.Int("min-fragments", 20),
             MinimumFileBytes = checked(args.Long("min-file-mib", 0) * 1024 * 1024), MaximumFileBytes = checked(args.Long("max-file-mib", 0) * 1024 * 1024),
@@ -238,8 +241,9 @@ internal static class Program
         --compress-wildcard <type>=<pattern>  Full-path compression wildcard
         --compress-glob <type>=<pattern>      Full-path compression glob
         --compress-regex <type>=<expression>  Full-path compression regex
+        --compress-exclude-ext <list>         Replace default skipped extensions; comma or space separated
         Compression types: none, xpress4k, xpress8k, xpress16k, lzx, smallest.
-        Compression runs before the MFT scan. Smallest tests only uncompressed files.
+        Compression runs before the MFT scan. Smallest tests only uncompressed files. Common compressed formats are excluded by default.
         --preset quiet|balanced|performance       Default: performance
         --cpu 100 --memory 0 --io 0       CPU %, process commit MiB, relocation MiB/s; 0 means unlimited
         --affinity 0xF0        Advanced logical CPU mask (single processor group)

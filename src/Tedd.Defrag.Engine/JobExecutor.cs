@@ -15,16 +15,19 @@ public sealed class JobExecutor
     private readonly Func<JobRequest, IJobVolume> openVolume;
     private readonly Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken> runMaintenance;
     private readonly Func<JobRequest, VolumeInfo, Action<CompressionProgress>, Action, CancellationToken, CompressionResult> runCompression;
+    private readonly Func<VolumeLayout, Action, CancellationToken, CompressionInventoryResult> readCompressionInventory;
 
     public JobExecutor(JobStore store) : this(store, JobVolume.Open) { }
     internal JobExecutor(JobStore store, Func<JobRequest, IJobVolume> openVolume,
         Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken>? runMaintenance = null,
-        Func<JobRequest, VolumeInfo, Action<CompressionProgress>, Action, CancellationToken, CompressionResult>? runCompression = null)
+        Func<JobRequest, VolumeInfo, Action<CompressionProgress>, Action, CancellationToken, CompressionResult>? runCompression = null,
+        Func<VolumeLayout, Action, CancellationToken, CompressionInventoryResult>? readCompressionInventory = null)
     {
         this.store = store;
         this.openVolume = openVolume;
         this.runMaintenance = runMaintenance ?? WindowsMaintenance.Run;
         this.runCompression = runCompression ?? NtfsCompression.Run;
+        this.readCompressionInventory = readCompressionInventory ?? CompressionInventory.Read;
     }
 
     public void Run(JobRequest request, CancellationToken token)
@@ -40,6 +43,7 @@ public sealed class JobExecutor
         int filesConsidered = 0, filesBlocked = 0, initialFragmentedFiles = 0;
         int streamsAtThreshold = 0, eligibleStreamsAtThreshold = 0, mftExtents = 0, fragmentedDirectoryIndexes = 0, directoryIndexesAtThreshold = 0;
         CompressionResult compression = CompressionResult.Empty;
+        CompressionInventoryResult compressionInventory = CompressionInventoryResult.Empty;
         bool noMovesPlanned = false;
         bool layoutIndexDirty = false;
         long scannedRecords = 0;
@@ -219,7 +223,7 @@ public sealed class JobExecutor
             message = "Reconciling actual allocation after execution"; Publish(true);
             session.ResetPhysicalPlan();
             ReleaseLayoutForRescan();
-            layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
+            layout = InspectCompression(volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p));
             UpdateConditionMetrics();
             layoutIndexDirty = true;
             AddWarnings(layout.Warnings);
@@ -242,13 +246,26 @@ public sealed class JobExecutor
 
             VolumeLayout? ScanVolume()
             {
-                try { return volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p); }
+                try { return InspectCompression(volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p)); }
                 catch (Exception e) when (external && volume.FileSystem.UsesDirectoryScan &&
                     e is IOException or Win32Exception or UnauthorizedAccessException)
                 {
+                    compressionInventory = CompressionInventoryResult.Empty;
                     AddWarnings([$"{volume.Info.FileSystem} allocation analysis unavailable: {e.Message}. Windows maintenance can run independently of the allocation scan."]);
                     return null;
                 }
+            }
+            VolumeLayout InspectCompression(VolumeLayout observed)
+            {
+                if (!observed.Volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
+                {
+                    compressionInventory = CompressionInventoryResult.Empty;
+                    return observed;
+                }
+                message = "Inspecting compressed files"; progress = 1; Publish(true);
+                compressionInventory = readCompressionInventory(observed, Checkpoint, token);
+                AddWarnings(compressionInventory.Warnings);
+                return observed;
             }
         }
         catch (OperationCanceledException e) { state = JobState.Cancelled; message = string.IsNullOrEmpty(e.Message) ? "Cancelled at a safe boundary" : e.Message; }
@@ -286,7 +303,8 @@ public sealed class JobExecutor
                 initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics,
                 request.MinimumFragments, streamsAtThreshold, eligibleStreamsAtThreshold, mftExtents, fragmentedDirectoryIndexes,
                 directoryIndexesAtThreshold, layout?.TotalClusters ?? 0, compression.FilesMatched, compression.FilesChanged,
-                compression.FilesSkipped, compression.FilesFailed, compression.BytesSaved));
+                compression.FilesSkipped, compression.FilesFailed, compression.BytesSaved, compressionInventory.Files,
+                compressionInventory.TotalFiles, compressionInventory.TotalSize, compressionInventory.BytesSaved));
             lastPublish = clock.ElapsedMilliseconds;
         }
         void UpdateConditionMetrics()

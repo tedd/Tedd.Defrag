@@ -79,7 +79,8 @@ public sealed class WorkerVersionTests
         broker.Jobs =
         [
             new(activeId, "V:\\", Operation.Pack, JobState.Running, "Relocating", .5, 4096, 100, 3, 20,
-                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, [new(128, 64, 8, 2, 0, 4, 4)]),
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, [new(128, 64, 8, 2, 0, 4, 4)],
+                CompressedFiles: [new(@"V:\compressed.bin", "LZX", 8192, 4096)], CompressedFileCount: 1),
             new(completedId, "W:\\", Operation.Analyze, JobState.Completed, "Complete", 1, 0, 100, 0, 20,
                 DateTimeOffset.UtcNow)
         ];
@@ -90,6 +91,7 @@ public sealed class WorkerVersionTests
         Assert.Equal(activeId, job.Id);
         Assert.NotNull(job.Map);
         Assert.Equal(128, Assert.Single(job.Map!).Clusters);
+        Assert.Equal("LZX", Assert.Single(job.CompressedFiles!).CompressionType);
         Assert.Equal(["ping", "list", "get"], broker.Events);
     }
 
@@ -230,7 +232,7 @@ public sealed class WorkerVersionTests
             switch (command.Action)
             {
                 case "ping": return Task.FromResult(new BrokerReply(true, Worker: _build == null ? null : new(_build, 123, "worker.exe")));
-                case "list": return Task.FromResult(new BrokerReply(true, Jobs: Jobs.Select(job => job with { Map = null, Files = null }).ToArray()));
+                case "list": return Task.FromResult(new BrokerReply(true, Jobs: Jobs.Select(job => job with { Map = null, Files = null, CompressedFiles = null }).ToArray()));
                 case "get": return Task.FromResult(new BrokerReply(true, Snapshot: Jobs.FirstOrDefault(job => job.Id == command.Id)));
                 case "stop":
                     if (Busy) throw new InvalidOperationException("Finish active jobs before stopping the worker.");
