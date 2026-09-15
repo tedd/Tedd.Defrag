@@ -14,14 +14,17 @@ public sealed class JobExecutor
     private readonly JobStore store;
     private readonly Func<JobRequest, IJobVolume> openVolume;
     private readonly Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken> runMaintenance;
+    private readonly Func<JobRequest, VolumeInfo, Action<CompressionProgress>, Action, CancellationToken, CompressionResult> runCompression;
 
     public JobExecutor(JobStore store) : this(store, JobVolume.Open) { }
     internal JobExecutor(JobStore store, Func<JobRequest, IJobVolume> openVolume,
-        Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken>? runMaintenance = null)
+        Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken>? runMaintenance = null,
+        Func<JobRequest, VolumeInfo, Action<CompressionProgress>, Action, CancellationToken, CompressionResult>? runCompression = null)
     {
         this.store = store;
         this.openVolume = openVolume;
         this.runMaintenance = runMaintenance ?? WindowsMaintenance.Run;
+        this.runCompression = runCompression ?? NtfsCompression.Run;
     }
 
     public void Run(JobRequest request, CancellationToken token)
@@ -36,6 +39,7 @@ public sealed class JobExecutor
         int plannedMoves = 0, attemptedMoves = 0, verifiedMoves = 0, failedMoves = 0;
         int filesConsidered = 0, filesBlocked = 0, initialFragmentedFiles = 0;
         int streamsAtThreshold = 0, eligibleStreamsAtThreshold = 0, mftExtents = 0, fragmentedDirectoryIndexes = 0, directoryIndexesAtThreshold = 0;
+        CompressionResult compression = CompressionResult.Empty;
         bool noMovesPlanned = false;
         bool layoutIndexDirty = false;
         long scannedRecords = 0;
@@ -55,6 +59,25 @@ public sealed class JobExecutor
             if (!request.Preview && request.Operation is not (Operation.Analyze or Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace)
                 && volume!.Info.SeekPenalty != true && !request.AllowSsdRelocation)
                 throw new InvalidOperationException("Defragmentation on SSD or unknown media requires explicit opt-in.");
+            if (request.CompressionTargets.Length > 0)
+            {
+                state = request.Preview ? JobState.Planning : JobState.Running;
+                message = request.Preview ? "Inspecting compression targets before analysis" : "Applying compression targets before analysis";
+                Publish(true);
+                compression = runCompression(request, volume.Info, item =>
+                {
+                    message = request.Preview
+                        ? $"Inspecting compression target · {item.Path}"
+                        : $"Compressing · {item.Path}";
+                    Publish();
+                }, Checkpoint, token);
+                AddWarnings(compression.Warnings);
+                string summary = request.Preview
+                    ? $"Compression preview matched {compression.FilesMatched:N0} files; no compression changes were made."
+                    : $"Compression processed {compression.FilesMatched:N0} files before analysis: {compression.FilesChanged:N0} changed, {compression.FilesSkipped:N0} already compliant or skipped, {compression.FilesFailed:N0} failed.";
+                AddWarnings([summary]);
+                state = JobState.Scanning; progress = 0; message = "Preparing analysis after compression"; Publish(true);
+            }
             layout = ScanVolume();
             UpdateConditionMetrics();
             layoutIndexDirty = true;
@@ -65,7 +88,7 @@ public sealed class JobExecutor
                 MapAggregator.Build(layout, map); SaveLayoutIndex();
             }
             Publish(true);
-            if (request.Operation == Operation.Analyze) { state = layout!.Complete ? JobState.Completed : JobState.Partial; message = layout.Complete ? "Analysis complete" : "Analysis complete; file coverage is partial"; progress = 1; return; }
+            if (request.Operation == Operation.Analyze) { state = layout!.Complete && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; message = CompressionSummary() + (layout.Complete ? "Analysis complete" : "Analysis complete; file coverage is partial"); progress = 1; return; }
             if (external || request.Operation == Operation.ZeroFreeSpace)
             {
                 if (request.Preview) { state = JobState.Completed; progress = 1; message = external
@@ -85,9 +108,9 @@ public sealed class JobExecutor
                 UpdateConditionMetrics();
                 layoutIndexDirty = true;
                 if (layout != null) { AddWarnings(layout.Warnings); MapAggregator.Build(layout, map); }
-                state = layout?.Complete == true ? JobState.Completed : JobState.Partial; progress = 1;
-                message = layout == null ? "Windows maintenance completed; allocation map unavailable (see warnings)"
-                    : layout.Complete ? "Maintenance completed; allocation map refreshed" : "Windows maintenance completed; allocation map refreshed, file coverage is partial";
+                state = layout?.Complete == true && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; progress = 1;
+                message = CompressionSummary() + (layout == null ? "Windows maintenance completed; allocation map unavailable (see warnings)"
+                    : layout.Complete ? "Maintenance completed; allocation map refreshed" : "Windows maintenance completed; allocation map refreshed, file coverage is partial");
                 return;
             }
             if (layout == null) throw new IOException("The allocation layout is unavailable.");
@@ -205,17 +228,17 @@ public sealed class JobExecutor
                 && f.Size >= request.MinimumFileBytes && (request.MaximumFileBytes == 0 || f.Size <= request.MaximumFileBytes)
                 && (request.Operation is not (Operation.MinimumWrite or Operation.FilesOnly) || f.Extents.Length >= request.MinimumFragments));
             bool budgetReached = request.MaxMoveBytes > 0 && request.MaxMoveBytes - moved < layout.Volume.BytesPerCluster;
-            state = failedMoves > 0 || filesBlocked > 0 || !layout.Complete || budgetReached || ordered || remainingFragmentation ? JobState.Partial : JobState.Completed;
+            state = compression.FilesFailed > 0 || failedMoves > 0 || filesBlocked > 0 || !layout.Complete || budgetReached || ordered || remainingFragmentation ? JobState.Partial : JobState.Completed;
             progress = 1;
-            message = noMovesPlanned
+            message = CompressionSummary() + (noMovesPlanned
                 ? filesConsidered == 0
-                    ? "No files met the selected path, size, and fragmentation thresholds; no disk changes were required."
+                    ? "No files met the selected path, size, and fragmentation thresholds; no relocation changes were required."
                     : filesBlocked > 0
                     ? $"No relocations were possible: {filesBlocked:N0} of {filesConsidered:N0} considered files were constrained or ineligible."
                     : $"No eligible extents required relocation among {filesConsidered:N0} considered files."
                 : $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. "
                     + (failedMoves > 0 ? $"{failedMoves:N0} moves failed across {session.BlockedFiles.Count:N0} files; other eligible files were processed. " : "")
-                    + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete.");
+                    + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete."));
 
             VolumeLayout? ScanVolume()
             {
@@ -262,7 +285,8 @@ public sealed class JobExecutor
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,
                 initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics,
                 request.MinimumFragments, streamsAtThreshold, eligibleStreamsAtThreshold, mftExtents, fragmentedDirectoryIndexes,
-                directoryIndexesAtThreshold, layout?.TotalClusters ?? 0));
+                directoryIndexesAtThreshold, layout?.TotalClusters ?? 0, compression.FilesMatched, compression.FilesChanged,
+                compression.FilesSkipped, compression.FilesFailed, compression.BytesSaved));
             lastPublish = clock.ElapsedMilliseconds;
         }
         void UpdateConditionMetrics()
@@ -318,6 +342,8 @@ public sealed class JobExecutor
             foreach (string warning in additional)
                 if (!warnings.Contains(warning, StringComparer.Ordinal)) warnings.Add(warning);
         }
+        string CompressionSummary() => request.CompressionTargets.Length == 0 || request.Preview ? ""
+            : $"Compression: {compression.FilesChanged:N0} changed, {compression.FilesSkipped:N0} skipped, {compression.FilesFailed:N0} failed; {Format.StorageDelta(compression.BytesSaved)}. ";
         void SaveLayoutIndex()
         {
             if (!layoutIndexDirty || layout == null) return;

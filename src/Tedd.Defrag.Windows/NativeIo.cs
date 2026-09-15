@@ -8,12 +8,14 @@ namespace Tedd.Defrag.Windows;
 
 public static unsafe class NativeIo
 {
-    public static SafeFileHandle Open(string path, bool write = false)
+    public static SafeFileHandle Open(string path, bool write = false, bool openReparsePoint = true)
     {
+        var flags = FILE_FLAGS_AND_ATTRIBUTES.FILE_FLAG_BACKUP_SEMANTICS;
+        if (openReparsePoint) flags |= FILE_FLAGS_AND_ATTRIBUTES.FILE_FLAG_OPEN_REPARSE_POINT;
         var handle = PInvoke.CreateFile(path, (uint)(write ? 0xC0000000 : 0x80000000),
             FILE_SHARE_MODE.FILE_SHARE_READ | FILE_SHARE_MODE.FILE_SHARE_WRITE | FILE_SHARE_MODE.FILE_SHARE_DELETE,
             null, FILE_CREATION_DISPOSITION.OPEN_EXISTING,
-            FILE_FLAGS_AND_ATTRIBUTES.FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAGS_AND_ATTRIBUTES.FILE_FLAG_OPEN_REPARSE_POINT, null);
+            flags, null);
         if (handle.IsInvalid) { int error = Marshal.GetLastWin32Error(); handle.Dispose(); throw new Win32Exception(error, $"Cannot open {path}: {new Win32Exception(error).Message}"); }
         return handle;
     }

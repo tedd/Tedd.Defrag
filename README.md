@@ -48,7 +48,8 @@ Release builds check GitHub Releases for a newer stable version at startup. With
 | ReFS scan | Windows allocation bitmap and file extent queries; directory traversal of accessible unnamed streams; partial file coverage with explicit warnings |
 | FAT scan | FAT12/16/32 allocation bitmap and file extent queries through Windows; directory traversal of accessible file data; partial coverage of ownership |
 | NTFS placement | Minimum-write, files-only, pack, pack + defrag, alphabetical, size, creation/modification time, extension, directory locality, shrink boundary |
-| Constraints | Per-entry path, wildcard, or regular-expression exclusions; selected objects only; file size and fragment-count filters; optional relocation-byte/time budgets; no supporting moves of unrelated files |
+| Constraints | Per-entry path, wildcard, glob, or regular-expression exclusions; selected objects only; file size and fragment-count filters; optional relocation-byte/time budgets; no supporting moves of unrelated files |
+| Compression | Per-file or recursive-folder NTFS targets selected by path, wildcard, glob, or regular expression; NONE, XPRESS 4K/8K/16K, LZX, or try-all-and-retain-smallest |
 | Maintenance | Windows ReTRIM, automatic optimization and whole-volume Windows defrag on NTFS/ReFS/FAT where supported; slab consolidation on NTFS/ReFS; bounded NTFS virtual-disk pre-zeroing with delete-on-close files |
 | Metadata | Movable MFT data and directory-index targets through supported filesystem APIs; incomplete or unsupported streams remain constrained |
 | Visualization | Layered allocation/fragmentation/metadata/exclusion/activity counts; bounded drawing surface; zoom, cell inspection, live progress and JSON reports |
@@ -58,6 +59,8 @@ Release builds check GitHub Releases for a newer stable version at startup. With
 Ordering and packing are best-effort preferences using existing free space. They are not global optimality guarantees. `Partial` is a valid outcome when constraints, budgets, unsupported streams, or fragmentation remain. Directory locality is a placement preference, not a measured application speed claim.
 
 The NTFS raw scanner does not recursively traverse directories. It deduplicates file records by identity, observes named streams, and marks unsupported/incomplete records explicitly. Ordinary files with extension attributes, sparse/compressed/encrypted streams, reparse points, hard-linked identities and unresolved paths are conservatively excluded from custom relocation. Their allocated clusters are still occupied in the bitmap. The MFT data stream's own extension mapping is assembled separately.
+
+Compression targets are available only on NTFS and run before the MFT scan, so planning observes their resulting allocation. Preview enumerates matching targets without changing them. NONE removes classic NTFS compression or WOF file-provider compression. XPRESS 4K, XPRESS 8K, XPRESS 16K and LZX use the Windows Overlay Filter file provider. **Try all, pick smallest** is attempted only on an uncompressed file; it measures every supported WOF algorithm and retains the smallest allocation. WOF compression is intended for files that are read more often than modified because a content modification transparently restores an ordinary file. Sparse, encrypted, non-WOF reparse, inaccessible and non-beneficial files are reported without terminating later targets. The last rule governs when compression rules overlap.
 
 ReFS and FAT analysis enumerate accessible file data, query extents, and display the volume allocation bitmap. Directory allocation and filesystem metadata are outside file coverage; ReFS named streams and reparse targets are also outside coverage. Analysis reports `Partial`, and fragmentation counts describe observed streams. These scans run serially and honor cancellation and memory limits. Custom placement, selected-file defrag, MFT/index optimization, shrink preparation and pre-zeroing require NTFS.
 
@@ -90,6 +93,7 @@ Tedd.Defrag.Cli.exe volumes --json
 Tedd.Defrag.Cli.exe analyze D: --json
 Tedd.Defrag.Cli.exe optimize D: --policy MinimumWrite --budget-mib 1024 --wait
 Tedd.Defrag.Cli.exe defrag --path 'D:\Data\archive.bin' --execute --wait
+Tedd.Defrag.Cli.exe optimize C: --compress-glob 'smallest=C:\Archives\**\*.dll' --execute --wait
 Tedd.Defrag.Cli.exe optimize D: --exclude 'D:\VMs' --exclude '*\cache\*' --execute --wait
 Tedd.Defrag.Cli.exe optimize D: --cpu 20 --memory 512 --io 16 --affinity 0xF0 --wait
 Tedd.Defrag.Cli.exe optimize D: --preset performance --scan-workers 0 --planning-workers 0 --move-queue 16 --wait

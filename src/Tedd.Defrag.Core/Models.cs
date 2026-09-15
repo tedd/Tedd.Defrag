@@ -6,12 +6,31 @@ namespace Tedd.Defrag.Core;
 public enum Operation { Analyze, MinimumWrite, FilesOnly, Pack, PackAndDefrag, Alphabetical, Size, Created, Modified, Extension, DirectoryLocality, PrepareShrink, ReTrim, SlabConsolidate, Automatic, OptimizeMft, DirectoryIndexes, ZeroFreeSpace, WindowsDefrag }
 [JsonConverter(typeof(JsonStringEnumConverter<JobState>))]
 public enum JobState { Queued, Scanning, Planning, Running, Paused, WaitingForIdle, Completed, Partial, Cancelled, Failed, Interrupted }
-public enum PathRuleKind { Path, Wildcard, Regex }
+public enum PathRuleKind { Path, Wildcard, Glob, Regex }
+
+[JsonConverter(typeof(JsonStringEnumConverter<CompressionMode>))]
+public enum CompressionMode { None, Xpress4K, Xpress8K, Xpress16K, Lzx, Smallest }
 
 [JsonConverter(typeof(PathRuleJsonConverter))]
 public sealed record PathRule(string Pattern, PathRuleKind Kind = PathRuleKind.Path)
 {
     public static implicit operator PathRule(string pattern) => new(pattern);
+}
+public sealed record CompressionTarget(PathRule Rule, CompressionMode Mode = CompressionMode.Xpress4K);
+
+public static class CompressionModes
+{
+    public static IReadOnlyList<CompressionMode> Supported { get; } = Array.AsReadOnly(Enum.GetValues<CompressionMode>());
+    public static string DisplayName(CompressionMode mode) => mode switch
+    {
+        CompressionMode.None => "NONE",
+        CompressionMode.Xpress4K => "XPRESS 4K",
+        CompressionMode.Xpress8K => "XPRESS 8K",
+        CompressionMode.Xpress16K => "XPRESS 16K",
+        CompressionMode.Lzx => "LZX",
+        CompressionMode.Smallest => "Try all, pick smallest",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode))
+    };
 }
 
 [Flags]
@@ -74,6 +93,7 @@ public sealed record JobRequest
     public bool Preview { get; init; } = true;
     public PathRule[] SelectedPaths { get; init; } = [];
     public PathRule[] Exclusions { get; init; } = [];
+    public CompressionTarget[] CompressionTargets { get; init; } = [];
     public ResourcePolicy Resources { get; init; } = ResourcePolicy.Performance;
     public long MaxMoveBytes { get; init; }
     public int MaxMinutes { get; init; }
@@ -94,12 +114,17 @@ public sealed record JobRequest
         Resources.Validate();
         if (string.IsNullOrWhiteSpace(Volume) || Id == Guid.Empty || !Enum.IsDefined(Operation) || MaxMoveBytes < 0 || MaxMinutes < 0 ||
             MinimumFragments < 2 || MinimumFileBytes < 0 || MaximumFileBytes < 0 || (MaximumFileBytes > 0 && MaximumFileBytes < MinimumFileBytes) ||
-            SelectedPaths.Length > 10000 || Exclusions.Length > 10000 || FreeSpaceReserveBytes < 256L * 1024 * 1024)
+            SelectedPaths.Length > 10000 || Exclusions.Length > 10000 || CompressionTargets.Length > 10000 || FreeSpaceReserveBytes < 256L * 1024 * 1024)
             throw new ArgumentException("Invalid job parameters.");
         if (Operation == Operation.PrepareShrink && ShrinkBoundaryBytes <= 0) throw new ArgumentException("Supply a positive shrink boundary.");
         if (Operation == Operation.ZeroFreeSpace && !Preview && !ConfirmVirtualDiskZeroing)
             throw new ArgumentException("Virtual-disk pre-zeroing requires explicit acknowledgement.");
         foreach (var rule in SelectedPaths.Concat(Exclusions)) PathRules.Validate(rule);
+        foreach (var target in CompressionTargets)
+        {
+            if (target is null || target.Rule is null || !Enum.IsDefined(target.Mode)) throw new ArgumentException("Invalid compression target.");
+            PathRules.Validate(target.Rule);
+        }
     }
 }
 public sealed record ConcurrencySettings
@@ -121,7 +146,8 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     string? WorkerBuild = null, JobDiagnostics? Diagnostics = null, int FragmentationThreshold = 20,
     int StreamsAtOrAboveThreshold = 0, int EligibleStreamsAtOrAboveThreshold = 0,
     int MftExtents = 0, int FragmentedDirectoryIndexes = 0, int DirectoryIndexesAtOrAboveThreshold = 0,
-    long TotalClusters = 0)
+    long TotalClusters = 0, int CompressionFilesMatched = 0, int CompressionFilesChanged = 0,
+    int CompressionFilesSkipped = 0, int CompressionFilesFailed = 0, long CompressionBytesSaved = 0)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
     public JobSnapshot Transition(JobState state, string message)
@@ -148,4 +174,5 @@ public static class Format
         while (n >= 1024 && i < units.Length - 1) { n /= 1024; i++; }
         return $"{n:0.#} {units[i]}";
     }
+    public static string StorageDelta(long bytes) => bytes >= 0 ? $"{Bytes(bytes)} saved" : $"{Bytes(-bytes)} added";
 }

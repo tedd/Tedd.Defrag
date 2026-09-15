@@ -142,15 +142,42 @@ internal static class Program
         return new() { Volume = volume, Operation = operation, Preview = !args.Has("execute"), Resources = resources,
             SelectedPaths = [.. args.All("path").Concat(args.All("file")).Concat(args.All("folder")).Select(pattern => new PathRule(pattern)),
                 .. args.All("wildcard").Select(pattern => new PathRule(pattern, PathRuleKind.Wildcard)),
+                .. args.All("glob").Select(pattern => new PathRule(pattern, PathRuleKind.Glob)),
                 .. args.All("regex").Select(pattern => new PathRule(pattern, PathRuleKind.Regex))],
             Exclusions = [.. args.All("exclude").Select(pattern => new PathRule(pattern)),
                 .. args.All("exclude-wildcard").Select(pattern => new PathRule(pattern, PathRuleKind.Wildcard)),
+                .. args.All("exclude-glob").Select(pattern => new PathRule(pattern, PathRuleKind.Glob)),
                 .. args.All("exclude-regex").Select(pattern => new PathRule(pattern, PathRuleKind.Regex))],
+            CompressionTargets = [.. ParseCompression(args.All("compress"), PathRuleKind.Path),
+                .. ParseCompression(args.All("compress-wildcard"), PathRuleKind.Wildcard),
+                .. ParseCompression(args.All("compress-glob"), PathRuleKind.Glob),
+                .. ParseCompression(args.All("compress-regex"), PathRuleKind.Regex)],
             MaxMoveBytes = checked(args.Long("budget-mib", 0) * 1024 * 1024), MaxMinutes = args.Int("minutes", 0),
             MinimumFragments = args.Int("min-fragments", 20),
             MinimumFileBytes = checked(args.Long("min-file-mib", 0) * 1024 * 1024), MaximumFileBytes = checked(args.Long("max-file-mib", 0) * 1024 * 1024),
             ShrinkBoundaryBytes = checked(args.Long("boundary-mib", 0) * 1024 * 1024), AllowSsdRelocation = args.Has("allow-ssd"),
             ConfirmVirtualDiskZeroing = args.Has("confirm-virtual-zero"), FreeSpaceReserveBytes = checked(args.Long("reserve-mib", 2048) * 1024 * 1024) };
+    }
+    private static IEnumerable<CompressionTarget> ParseCompression(IEnumerable<string> values, PathRuleKind kind)
+    {
+        foreach (string value in values)
+        {
+            int separator = value.IndexOf('=');
+            if (separator <= 0 || separator == value.Length - 1)
+                throw new ArgumentException("Compression targets use <type>=<path-or-pattern>.");
+            string name = value[..separator].Replace("-", "", StringComparison.Ordinal).Replace(" ", "", StringComparison.Ordinal);
+            CompressionMode mode = name.ToLowerInvariant() switch
+            {
+                "none" => CompressionMode.None,
+                "xpress4k" => CompressionMode.Xpress4K,
+                "xpress8k" => CompressionMode.Xpress8K,
+                "xpress16k" => CompressionMode.Xpress16K,
+                "lzx" => CompressionMode.Lzx,
+                "smallest" or "tryall" or "tryall,picksmallest" => CompressionMode.Smallest,
+                _ => throw new ArgumentException($"Unknown compression type '{value[..separator]}'.")
+            };
+            yield return new(new(value[(separator + 1)..], kind), mode);
+        }
     }
     private static async Task<int> Watch(DefragClient client, Guid id, bool json, bool events)
     {
@@ -201,10 +228,18 @@ internal static class Program
         --wait --json          Wait and emit structured result; --events emits NDJSON
         --path <path>          Repeat for exact files or recursive folders
         --wildcard <pattern>   Repeat for * and ? full-path wildcards
+        --glob <pattern>       Repeat for full-path globs; * stays in one directory, ** recurses
         --regex <expression>   Repeat for case-insensitive full-path regular expressions
         --exclude <path>       Repeat for exact files or recursive folders; exclusions always win
         --exclude-wildcard <pattern>  Repeat for * and ? exclusion wildcards
+        --exclude-glob <pattern>      Repeat for exclusion globs
         --exclude-regex <expression>  Repeat for exclusion regular expressions
+        --compress <type>=<path>      Repeat for an NTFS file or recursive folder
+        --compress-wildcard <type>=<pattern>  Full-path compression wildcard
+        --compress-glob <type>=<pattern>      Full-path compression glob
+        --compress-regex <type>=<expression>  Full-path compression regex
+        Compression types: none, xpress4k, xpress8k, xpress16k, lzx, smallest.
+        Compression runs before the MFT scan. Smallest tests only uncompressed files.
         --preset quiet|balanced|performance       Default: performance
         --cpu 100 --memory 0 --io 0       CPU %, process commit MiB, relocation MiB/s; 0 means unlimited
         --affinity 0xF0        Advanced logical CPU mask (single processor group)

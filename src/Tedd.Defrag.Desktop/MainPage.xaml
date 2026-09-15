@@ -81,14 +81,14 @@
               <Picker x:Name="ThemePicker" Grid.Column="1" Title="Appearance" SelectedIndexChanged="OnThemeChanged" VerticalOptions="Center" />
             </Grid>
           </Border>
-          <Grid ColumnDefinitions="*,*" ColumnSpacing="16" RowDefinitions="Auto,Auto" RowSpacing="16">
+          <Grid ColumnDefinitions="*,*" ColumnSpacing="16" RowDefinitions="Auto,Auto,Auto" RowSpacing="16">
             <Border Grid.ColumnSpan="2" Style="{StaticResource Card}"><VerticalStackLayout Spacing="13">
               <Label Text="Files and exclusions" FontSize="17" FontFamily="OpenSansSemibold" />
-              <Label Text="Add one file, folder, wildcard, or regular expression per entry. An empty Files list includes the entire volume. Exclusions always override file entries." FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" />
+              <Label Text="Add one file, folder, wildcard, glob, or regular expression per entry. An empty Files list includes the entire volume. Exclusions always override file entries." FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" />
               <Label Text="FILES TO INCLUDE" FontSize="9" TextColor="{DynamicResource Muted}" />
               <Grid ColumnDefinitions="126,*,Auto" ColumnSpacing="8">
                 <Picker x:Name="FileRuleKind" Title="Match type" />
-                <Entry x:Name="FileRulePattern" Grid.Column="1" Placeholder="File, folder, wildcard, or regular expression" Completed="OnAddFileRule" />
+                <Entry x:Name="FileRulePattern" Grid.Column="1" Placeholder="File, folder, wildcard, glob, or regular expression" Completed="OnAddFileRule" />
                 <Button Grid.Column="2" Text="Add" Clicked="OnAddFileRule" Padding="14,8" />
               </Grid>
               <VerticalStackLayout x:Name="FileRulesList" Spacing="6" />
@@ -99,10 +99,23 @@
                 <Button Grid.Column="2" Text="Add" Clicked="OnAddExclusionRule" Padding="14,8" />
               </Grid>
               <VerticalStackLayout x:Name="ExclusionRulesList" Spacing="6" />
-              <Label Text="Path entries include an exact file or a folder and its descendants. Wildcards use * for any text and ? for one character. Regular expressions are case-insensitive and are evaluated against the full path." FontSize="10" TextColor="{DynamicResource SubtleText}" LineHeight="1.35" />
+              <Label Text="Path entries include an exact file or a folder and its descendants. Wildcards let * span directories. Globs keep * within one directory and use ** recursively. Regular expressions are case-insensitive. Patterns are matched against the full path." FontSize="10" TextColor="{DynamicResource SubtleText}" LineHeight="1.35" />
             </VerticalStackLayout></Border>
 
             <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Card}"><VerticalStackLayout Spacing="13">
+              <Label Text="Compression" FontSize="17" FontFamily="OpenSansSemibold" />
+              <Label x:Name="CompressionNotice" Text="Compression targets are applied before the MFT is read and are available only on NTFS volumes." FontSize="11" TextColor="{DynamicResource Muted}" LineHeight="1.3" />
+              <Grid ColumnDefinitions="126,*,178,Auto" ColumnSpacing="8">
+                <Picker x:Name="CompressionRuleKind" Title="Match type" />
+                <Entry x:Name="CompressionRulePattern" Grid.Column="1" Placeholder="File, folder, wildcard, glob, or regular expression" Completed="OnAddCompressionRule" />
+                <Picker x:Name="CompressionModePicker" Grid.Column="2" Title="Compression type" />
+                <Button Grid.Column="3" Text="Add" Clicked="OnAddCompressionRule" Padding="14,8" />
+              </Grid>
+              <VerticalStackLayout x:Name="CompressionRulesList" Spacing="6" />
+              <Label Text="NONE removes NTFS or WOF file compression. XPRESS and LZX use the Windows Overlay Filter file provider. Try all tests every algorithm only for currently uncompressed files, retains the smallest result, and can be write-intensive." FontSize="10" TextColor="{DynamicResource SubtleText}" LineHeight="1.35" />
+            </VerticalStackLayout></Border>
+
+            <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{StaticResource Card}"><VerticalStackLayout Spacing="13">
               <Grid ColumnDefinitions="*,Auto"><VerticalStackLayout Spacing="4"><Label Text="Performance utilization" FontSize="17" FontFamily="OpenSansSemibold" /><Label Text="Control resource use and operation constraints for subsequent previews and runs." FontSize="11" TextColor="{DynamicResource Muted}" /></VerticalStackLayout><Button x:Name="AdvancedToggle" Grid.Column="1" Text="Show controls" Clicked="OnToggleAdvanced" Padding="14,8" /></Grid>
               <VerticalStackLayout x:Name="AdvancedPanel" IsVisible="False" Spacing="13">
                 <Picker x:Name="ResourcePreset" Title="Resource preset" SelectedIndexChanged="OnPresetChanged" />

@@ -3,6 +3,7 @@ using Tedd.Defrag.Core;
 using Tedd.Defrag.Engine;
 using Tedd.Defrag.Persistence;
 using Tedd.Defrag.Planning;
+using Tedd.Defrag.Windows;
 using Xunit;
 
 namespace Tedd.Defrag.Tests;
@@ -334,6 +335,36 @@ public sealed class ExecutionContinuationTests
         Assert.NotEmpty(second.Moves);
         Assert.DoesNotContain("Sorting candidates", phases);
         Assert.Contains("Candidate order ready", phases);
+    }
+
+    [Fact]
+    public void CompressionRunsBeforeTheFirstMftScan()
+    {
+        var volume = Volume(64, []);
+        var request = Request(Operation.Analyze) with
+        {
+            CompressionTargets = [new(new PathRule(@"V:\Data"), CompressionMode.Xpress4K)]
+        };
+        bool compressionRan = false;
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new JobStore(root);
+            store.SaveRequest(request);
+            new JobExecutor(store, _ => volume, runCompression: (_, _, _, _, _) =>
+            {
+                Assert.Equal(0, volume.Scans);
+                compressionRan = true;
+                return new(1, 1, 0, 0, 4096, []);
+            }).Run(request, default);
+
+            Assert.True(compressionRan);
+            Assert.Equal(1, volume.Scans);
+            var report = Assert.IsType<JobSnapshot>(store.ReadReport(request.Id));
+            Assert.Equal(1, report.CompressionFilesChanged);
+            Assert.Equal(4096, report.CompressionBytesSaved);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     private static JobRequest Request(Operation operation) => new()

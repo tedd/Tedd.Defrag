@@ -5,6 +5,11 @@ GetFileInformationByHandle
 GetFinalPathNameByHandle
 GetVolumeNameForVolumeMountPoint
 GetDiskFreeSpace
+GetCompressedFileSize
+GetShortPathName
+SetThreadExecutionState
+WofIsExternalFile
+WofSetFileDataLocation
 CreateJobObject
 SetInformationJobObject
 AssignProcessToJobObject
@@ -26,6 +31,8 @@ FSCTL_GET_NTFS_VOLUME_DATA
 FSCTL_GET_NTFS_FILE_RECORD
 FSCTL_MOVE_FILE
 FSCTL_IS_VOLUME_DIRTY
+FSCTL_SET_COMPRESSION
+FSCTL_DELETE_EXTERNAL_BACKING
 IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS
 IOCTL_STORAGE_QUERY_PROPERTY
 MOVE_FILE_DATA

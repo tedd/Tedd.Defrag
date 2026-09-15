@@ -22,6 +22,7 @@ public partial class MainPage : ContentPage
     private readonly Dictionary<string, VolumeSession> _volumeSessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ObservableCollection<RuleEditorItem> _fileRules = [];
     private readonly ObservableCollection<RuleEditorItem> _exclusionRules = [];
+    private readonly ObservableCollection<CompressionEditorItem> _compressionRules = [];
     private VolumeInfo[] _volumes = [];
     private VolumeInfo? _volume;
     private bool _polling, _refreshing, _submitting;
@@ -75,8 +76,10 @@ public partial class MainPage : ContentPage
         };
         _settingTheme = false;
         ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · responsive", "Performance · full speed" }; ResourcePreset.SelectedIndex = 2;
-        FileRuleKind.ItemsSource = ExclusionRuleKind.ItemsSource = new[] { "Path", "Wildcard", "Regular expression" };
-        FileRuleKind.SelectedIndex = ExclusionRuleKind.SelectedIndex = 0;
+        FileRuleKind.ItemsSource = ExclusionRuleKind.ItemsSource = CompressionRuleKind.ItemsSource = new[] { "Path", "Wildcard", "Glob", "Regular expression" };
+        FileRuleKind.SelectedIndex = ExclusionRuleKind.SelectedIndex = CompressionRuleKind.SelectedIndex = 0;
+        CompressionModePicker.ItemsSource = CompressionModes.Supported.Select(CompressionModes.DisplayName).ToArray();
+        CompressionModePicker.SelectedIndex = 1;
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
         Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await AttachActiveJobs(); await CheckForUpdate(); };
         Unloaded += (_, _) => _timer.Stop();
@@ -210,6 +213,9 @@ public partial class MainPage : ContentPage
         ModeBadge.Text = volume?.FileSystem.ToUpperInvariant() ?? "NO VOLUME";
         VolumeTitle.Text = volume == null ? "No volume selected" : $"{volume.Root[..2]}  {volume.Label}";
         MapSubtitle.Text = volume == null ? "Connect a volume and refresh to begin." : $"{volume.FileSystem} · {volume.BytesPerCluster:N0}-byte clusters · awaiting analysis";
+        CompressionNotice.Text = volume == null || volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase)
+            ? "Compression targets are applied before the MFT is read and are available only on NTFS volumes."
+            : $"{volume.Root} uses {volume.FileSystem}. Compression targets require NTFS and cannot run on this volume.";
         TopologyText.Text = volume == null ? "" : string.Join(", ", volume.Resources) + "\n" + volume.TopologyConfidence;
         FreeMetric.Text = volume == null ? "—" : Format.Bytes(volume.FreeBytes);
         CapacityDetail.Text = volume == null ? "Select a volume" : $"of {Format.Bytes(volume.SizeBytes)} capacity";
@@ -248,9 +254,12 @@ public partial class MainPage : ContentPage
     {
         var volume = _volume ?? throw new InvalidOperationException("Select an available NTFS, ReFS, FAT or FAT32 volume first.");
         FileSystemCapabilities.Validate(volume.FileSystem, operation);
+        if (_compressionRules.Count > 0 && !volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException($"Compression targets require NTFS; {volume.Root} uses {volume.FileSystem}.");
         var request = new JobRequest { Volume = volume.Root, Operation = operation, Preview = preview,
             SelectedPaths = _fileRules.Select(item => item.Rule).ToArray(),
             Exclusions = _exclusionRules.Select(item => item.Rule).ToArray(),
+            CompressionTargets = _compressionRules.Select(item => item.Target).ToArray(),
             Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = ParseInt(MemoryEntry.Text, "Memory cap"), IoMiBPerSecond = ParseInt(IoEntry.Text, "Relocation bandwidth"),
                 ScanWorkers = ParseInt(ScanWorkersEntry.Text, "MFT workers"), PlanningWorkers = ParseInt(PlanningWorkersEntry.Text, "Planner workers"),
                 MoveQueueDepth = ParseInt(MoveQueueEntry.Text, "Move queue depth", ResourcePolicy.Performance.MoveQueueDepth),
@@ -279,6 +288,8 @@ public partial class MainPage : ContentPage
                     $"Run {_selectedPolicy.Name} on {request.Volume}, with {Limit(request.MaxMoveBytes, Format.Bytes, "no relocation limit")} and {Limit(request.MaxMinutes, n => $"{n}-minute limit", "no time limit")}?";
                 if (_volume?.SeekPenalty != true && operation is not (Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace))
                     details += "\n\nThis is SSD or unknown media. Relocation adds writes. Greater logical contiguity can reduce host I/O requests, but the device controls internal placement. Review the previewed write estimate.";
+                if (request.CompressionTargets.Length > 0)
+                    details += $"\n\n{request.CompressionTargets.Length:N0} compression target rules will be applied before the MFT is read. Compression can rewrite each matched file.";
                 if (!await DisplayAlertAsync("Review disk operation", details, "Start job", "Cancel")) return;
             }
             OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the worker…";
@@ -794,12 +805,32 @@ public partial class MainPage : ContentPage
         int exclusions = _exclusionRules.Count;
         string fragments = string.IsNullOrWhiteSpace(MinFragmentsEntry?.Text) ? "20" : MinFragmentsEntry.Text;
         string size = string.IsNullOrWhiteSpace(MinFileSizeEntry?.Text) && string.IsNullOrWhiteSpace(MaxFileSizeEntry?.Text) ? "all sizes" : "size-filtered";
-        ScopeSummary.Text = $"{selection} · {(exclusions == 0 ? "exclusions none" : $"{exclusions:N0} exclusions")} · {fragments}-fragment defrag threshold · {size}";
+        string compression = _compressionRules.Count == 0 ? "compression none" : $"{_compressionRules.Count:N0} compression targets";
+        ScopeSummary.Text = $"{selection} · {(exclusions == 0 ? "exclusions none" : $"{exclusions:N0} exclusions")} · {compression} · {fragments}-fragment defrag threshold · {size}";
         RenderRecommendation(CurrentSession?.LayoutSnapshot);
         UpdateVolumeActions();
     }
     private async void OnAddFileRule(object? sender, EventArgs e) => await AddRule(_fileRules, FileRulesList, FileRulePattern, FileRuleKind, "Files to include");
     private async void OnAddExclusionRule(object? sender, EventArgs e) => await AddRule(_exclusionRules, ExclusionRulesList, ExclusionRulePattern, ExclusionRuleKind, "Exclusions");
+    private async void OnAddCompressionRule(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (_volume == null || !_volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException(_volume == null ? "Select an NTFS volume before adding a compression target."
+                    : $"Compression targets require NTFS; {_volume.Root} uses {_volume.FileSystem}.");
+            var rule = new PathRule(CompressionRulePattern.Text?.Trim() ?? "", RuleKind(CompressionRuleKind));
+            PathRules.Validate(rule);
+            int index = CompressionModePicker.SelectedIndex;
+            if (index < 0 || index >= CompressionModes.Supported.Count) throw new ArgumentException("Select a compression type.");
+            var target = new CompressionTarget(rule, CompressionModes.Supported[index]);
+            if (!_compressionRules.Any(item => item.Target == target)) _compressionRules.Add(new(target));
+            CompressionRulePattern.Text = "";
+            RenderCompressionRuleList();
+            RefreshScopeSummary();
+        }
+        catch (Exception exception) { await DisplayAlertAsync("Compression", exception.Message, "Close"); }
+    }
     private async Task AddRule(ObservableCollection<RuleEditorItem> rules, VerticalStackLayout list, Entry patternEntry, Picker kindPicker, string title)
     {
         try
@@ -816,7 +847,8 @@ public partial class MainPage : ContentPage
     private static PathRuleKind RuleKind(Picker picker) => picker.SelectedIndex switch
     {
         1 => PathRuleKind.Wildcard,
-        2 => PathRuleKind.Regex,
+        2 => PathRuleKind.Glob,
+        3 => PathRuleKind.Regex,
         _ => PathRuleKind.Path
     };
     private void RenderRuleList(VerticalStackLayout list, ObservableCollection<RuleEditorItem> rules)
@@ -839,9 +871,29 @@ public partial class MainPage : ContentPage
     private static string RuleKindLabel(PathRuleKind kind) => kind switch
     {
         PathRuleKind.Wildcard => "Wildcard",
+        PathRuleKind.Glob => "Glob",
         PathRuleKind.Regex => "Regular expression",
         _ => "Path"
     };
+    private void RenderCompressionRuleList()
+    {
+        CompressionRulesList.Children.Clear();
+        foreach (var item in _compressionRules)
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = 118 });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Star });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = 170 });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.Add(new Label { Text = RuleKindLabel(item.Target.Rule.Kind), FontSize = 10, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center }, 0);
+            row.Add(new Label { Text = item.Target.Rule.Pattern, FontSize = 11, LineBreakMode = LineBreakMode.MiddleTruncation, VerticalOptions = LayoutOptions.Center }, 1);
+            row.Add(new Label { Text = CompressionModes.DisplayName(item.Target.Mode), FontSize = 10, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center }, 2);
+            var remove = new Button { Text = "Remove", Padding = new Thickness(10, 5) };
+            remove.Clicked += (_, _) => { _compressionRules.Remove(item); RenderCompressionRuleList(); RefreshScopeSummary(); };
+            row.Add(remove, 3);
+            CompressionRulesList.Children.Add(row);
+        }
+    }
     private void OnFileSelected(object? sender, SelectionChangedEventArgs e)
     {
         if (e.CurrentSelection.FirstOrDefault() is not FileRow row) return;
@@ -958,6 +1010,7 @@ public partial class MainPage : ContentPage
             $"Planned moves: {snapshot.PlannedMoves:N0}\nAttempted moves: {snapshot.AttemptedMoves:N0}\n" +
             $"Verified moves: {snapshot.VerifiedMoves:N0}\nFailed moves: {snapshot.FailedMoves:N0}\n" +
             $"Relocated and verified: {Format.Bytes(snapshot.BytesMoved)}\n" +
+            $"Compression: {snapshot.CompressionFilesChanged:N0} changed, {snapshot.CompressionFilesSkipped:N0} skipped, {snapshot.CompressionFilesFailed:N0} failed; {Format.StorageDelta(snapshot.CompressionBytesSaved)}\n" +
             $"Fragmented streams: {snapshot.InitialFragmentedFiles:N0} before, {snapshot.FragmentedFiles:N0} after\n" +
             $"Elapsed: {TimeSpan.FromMilliseconds(snapshot.ElapsedMilliseconds):g}";
         if (await DisplayAlertAsync("Job report", report, "Export report", "Close")) await ExportReport(snapshot);
@@ -1035,6 +1088,7 @@ public partial class MainPage : ContentPage
     }
     private sealed record FileRow(string Path, int Extents, string BytesLabel, string Status);
     private sealed record RuleEditorItem(PathRule Rule);
+    private sealed record CompressionEditorItem(CompressionTarget Target);
     private sealed record ClusterHitRow(ClusterFile File)
     {
         public string DisplayPath => File.Path + File.Stream;

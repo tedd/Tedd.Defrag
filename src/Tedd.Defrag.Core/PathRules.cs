@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Tedd;
 
@@ -36,6 +37,8 @@ public sealed class PathRules
             PathRuleKind.Path => new(rule, Normalize(rule.Pattern), null, null),
             PathRuleKind.Wildcard => new(rule, null, new WildcardMatch(rule.Pattern.Replace('/', '\\'),
                 WildcardOptions.Compiled | WildcardOptions.IgnoreCase | WildcardOptions.CultureInvariant, MatchTimeout), null),
+            PathRuleKind.Glob => new(rule, null, null, new Regex(GlobExpression(rule.Pattern),
+                RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, MatchTimeout)),
             PathRuleKind.Regex => new(rule, null, null, new Regex(rule.Pattern,
                 RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, MatchTimeout)),
             _ => throw new ArgumentException("Unknown file-rule kind.")
@@ -60,6 +63,7 @@ public sealed class PathRules
                     PathRuleKind.Path => normalized.Equals(rule.NormalizedPath, StringComparison.OrdinalIgnoreCase) ||
                         (normalized.Length > rule.NormalizedPath!.Length && normalized.StartsWith(rule.NormalizedPath, StringComparison.OrdinalIgnoreCase) && normalized[rule.NormalizedPath.Length] == '\\'),
                     PathRuleKind.Wildcard => rule.Wildcard!.IsMatch(normalized),
+                    PathRuleKind.Glob => rule.Regex!.IsMatch(normalized),
                     PathRuleKind.Regex => rule.Regex!.IsMatch(path),
                     _ => false
                 };
@@ -70,6 +74,30 @@ public sealed class PathRules
             catch (RegexMatchTimeoutException) when (timeoutMatches) { return true; }
         }
         return false;
+    }
+
+    private static string GlobExpression(string pattern)
+    {
+        string value = pattern.Replace('/', '\\');
+        var expression = new StringBuilder("\\A");
+        for (int i = 0; i < value.Length; i++)
+        {
+            char current = value[i];
+            if (current == '*' && i + 1 < value.Length && value[i + 1] == '*')
+            {
+                i++;
+                if (i + 1 < value.Length && value[i + 1] == '\\')
+                {
+                    i++;
+                    expression.Append("(?:.*\\\\)?");
+                }
+                else expression.Append(".*");
+            }
+            else if (current == '*') expression.Append("[^\\\\]*");
+            else if (current == '?') expression.Append("[^\\\\]");
+            else expression.Append(Regex.Escape(current.ToString()));
+        }
+        return expression.Append("\\z").ToString();
     }
 
     private sealed record CompiledRule(PathRule Source, string? NormalizedPath, WildcardMatch? Wildcard, Regex? Regex);

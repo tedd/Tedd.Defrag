@@ -27,6 +27,14 @@ Development clients locate the matching worker in its own build output, while pa
 
 Application startup discovers real volumes without starting analysis or optimization. Synthetic layouts are linked only into tests and benchmarks from `tests/Fixtures`. Requests are validated before storage access.
 
+## Compression
+
+Optional compression rules execute before the first NTFS MFT read. Exact file and directory rules traverse only their scope; wildcard, glob, or regular-expression rules make one volume traversal. Directory reparse points are not followed, patterns are matched against full paths, duplicate paths are processed once, and the last matching rule determines the target state. Compression rules are rejected on non-NTFS volumes.
+
+The WOF file provider supplies XPRESS 4K, XPRESS 8K, XPRESS 16K and LZX. The worker queries current backing with `WofIsExternalFile`, applies a selected algorithm with `WofSetFileDataLocation`, and removes file-provider backing with `FSCTL_DELETE_EXTERNAL_BACKING` through `DeviceIoControl`. NONE also clears classic NTFS compression with `FSCTL_SET_COMPRESSION`. `GetCompressedFileSizeW` and `GetDiskFreeSpace` provide cluster-rounded allocation measurements; `GetShortPathName` is a compatibility fallback for path-based queries. `SetThreadExecutionState` prevents idle sleep only while an executing compression pass is active.
+
+Try-all starts only from an uncompressed file. Each WOF algorithm is applied and measured in turn, intermediate backing is removed, and the smallest beneficial result is reapplied. An already compressed file is intentionally left unchanged. Preview performs scope enumeration without native mutation. Per-file failures are bounded in the warnings and produce a partial result while remaining targets continue. Compression rewrites are not governed by the relocation-byte pacer because each WOF operation is a synchronous, opaque filesystem request.
+
 The current broker is an elevated desktop-user agent. It is not hardened for arbitrary users submitting work to a SYSTEM identity. Current-user pipe restrictions, bounded frames, request validation and worker-side volume/path checks reduce exposure, but a formal threat model and adversarial local IPC/storage testing are still release requirements. Persistent files inherit the profile directory's access controls. Never change the service account to SYSTEM or share the job directory.
 
 ## Scanner
@@ -85,6 +93,9 @@ Virtual-disk pre-zeroing creates a uniquely named, uncompressed, non-sparse, del
 * [FSCTL_MOVE_FILE and allocation races](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_move_file)
 * [Volume allocation bitmap](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_get_volume_bitmap)
 * [MFT structure](https://learn.microsoft.com/en-us/windows/win32/fileio/master-file-table)
+* [WOF file-provider compression](https://learn.microsoft.com/en-us/windows/win32/api/wofapi/nf-wofapi-wofsetfiledatalocation)
+* [WOF compression algorithms](https://learn.microsoft.com/en-us/windows/win32/api/wofapi/ns-wofapi-wof_file_compression_info_v1)
+* [Removing external backing](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/fsctl-delete-external-backing)
 * [Typed NTFS volume geometry](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-ntfs_volume_data_buffer)
 * [Update-sequence restoration and its fixed stride](https://learn.microsoft.com/en-us/windows/win32/devnotes/multi-sector-header)
 * [Refreshing managed heap limits after applying a worker cap](https://learn.microsoft.com/en-us/dotnet/api/system.gc.refreshmemorylimit)
