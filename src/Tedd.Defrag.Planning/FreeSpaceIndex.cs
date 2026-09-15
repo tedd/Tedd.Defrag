@@ -9,7 +9,7 @@ public sealed class FreeSpaceIndex : IDisposable
 {
     private struct Node { public long Start, Length, Max; public int Left, Right; public uint Priority; }
     private Node[] _nodes;
-    private int _count, _root;
+    private int _count, _root, _free;
     private uint _random = 0xA341316C;
     public FreeSpaceIndex(IEnumerable<ClusterRange> ranges, int capacity = 4096)
     {
@@ -24,12 +24,22 @@ public sealed class FreeSpaceIndex : IDisposable
     private void Add(long start, long length)
     {
         if (start < 0 || length <= 0 || start > long.MaxValue - length) throw new ArgumentOutOfRangeException(nameof(length));
-        if (_count + 1 == _nodes.Length)
+        int n;
+        if (_free != 0)
         {
-            var larger = ArrayPool<Node>.Shared.Rent(checked(_nodes.Length * 2));
-            _nodes.AsSpan(0, _count + 1).CopyTo(larger); ArrayPool<Node>.Shared.Return(_nodes); _nodes = larger;
+            n = _free;
+            _free = _nodes[n].Right;
         }
-        int n = ++_count; _nodes[n] = new() { Start = start, Length = length, Max = length, Priority = Next() };
+        else
+        {
+            if (_count + 1 == _nodes.Length)
+            {
+                var larger = ArrayPool<Node>.Shared.Rent(checked(_nodes.Length * 2));
+                _nodes.AsSpan(0, _count + 1).CopyTo(larger); ArrayPool<Node>.Shared.Return(_nodes); _nodes = larger;
+            }
+            n = ++_count;
+        }
+        _nodes[n] = new() { Start = start, Length = length, Max = length, Priority = Next() };
         _root = Insert(_root, n);
     }
     private int RotateRight(int n) { int l = _nodes[n].Left; _nodes[n].Left = _nodes[l].Right; _nodes[l].Right = n; Update(n); Update(l); return l; }
@@ -48,12 +58,18 @@ public sealed class FreeSpaceIndex : IDisposable
         else if (start > _nodes[n].Start) _nodes[n].Right = Remove(_nodes[n].Right, start);
         else
         {
-            if (_nodes[n].Left == 0) return _nodes[n].Right;
-            if (_nodes[n].Right == 0) return _nodes[n].Left;
+            if (_nodes[n].Left == 0) { int replacement = _nodes[n].Right; Recycle(n); return replacement; }
+            if (_nodes[n].Right == 0) { int replacement = _nodes[n].Left; Recycle(n); return replacement; }
             if (_nodes[_nodes[n].Left].Priority < _nodes[_nodes[n].Right].Priority) { n = RotateRight(n); _nodes[n].Right = Remove(_nodes[n].Right, start); }
             else { n = RotateLeft(n); _nodes[n].Left = Remove(_nodes[n].Left, start); }
         }
         Update(n); return n;
+    }
+    private void Recycle(int n)
+    {
+        _nodes[n] = default;
+        _nodes[n].Right = _free;
+        _free = n;
     }
     public bool Contains(long start, long length)
     {
@@ -80,6 +96,38 @@ public sealed class FreeSpaceIndex : IDisposable
         if (end < oldEnd) Add(end, oldEnd - end);
         return true;
     }
+    public void Release(long start, long length)
+    {
+        if (start < 0 || length <= 0 || start > long.MaxValue - length) throw new ArgumentOutOfRangeException(nameof(length));
+        long end = start + length;
+        int predecessor = 0, successor = 0, n = _root;
+        while (n != 0)
+        {
+            if (_nodes[n].Start <= start) { predecessor = n; n = _nodes[n].Right; }
+            else { successor = n; n = _nodes[n].Left; }
+        }
+        if (predecessor != 0)
+        {
+            long predecessorEnd = _nodes[predecessor].Start + _nodes[predecessor].Length;
+            if (predecessorEnd > start) throw new InvalidOperationException("Released range overlaps free space.");
+            if (predecessorEnd == start)
+            {
+                start = _nodes[predecessor].Start;
+                length = checked(length + _nodes[predecessor].Length);
+                _root = Remove(_root, _nodes[predecessor].Start);
+            }
+        }
+        if (successor != 0)
+        {
+            if (_nodes[successor].Start < end) throw new InvalidOperationException("Released range overlaps free space.");
+            if (_nodes[successor].Start == end)
+            {
+                length = checked(length + _nodes[successor].Length);
+                _root = Remove(_root, _nodes[successor].Start);
+            }
+        }
+        Add(start, length);
+    }
     public long FindFirstFit(long length, long before = long.MaxValue, long after = 0) => Find(_root, length, before, after);
     private long Find(int n, long length, long before, long after)
     {
@@ -96,6 +144,6 @@ public sealed class FreeSpaceIndex : IDisposable
     public void Dispose()
     {
         if (_nodes.Length == 0) return;
-        ArrayPool<Node>.Shared.Return(_nodes); _nodes = []; _root = 0; _count = 0;
+        ArrayPool<Node>.Shared.Return(_nodes); _nodes = []; _root = 0; _count = 0; _free = 0;
     }
 }

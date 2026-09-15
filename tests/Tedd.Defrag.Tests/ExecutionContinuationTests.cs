@@ -91,6 +91,110 @@ public sealed class ExecutionContinuationTests
     }
 
     [Fact]
+    public void MinimumWriteRetainsCandidateAndFreeSpaceIndexesAcrossExecutionWindows()
+    {
+        var layout = ManyFiles(1100).Layout;
+        var planner = new LayoutPlanner();
+        using var session = new PlanningSession();
+        var phases = new List<string>();
+
+        var first = planner.Plan(layout, Request(Operation.MinimumWrite), session: session, progress: p => phases.Add(p.Phase));
+        Assert.Equal(1024, first.Moves.Length);
+        Assert.Contains("Indexing free space", phases);
+        Assert.Contains("Indexing defrag candidates", phases);
+        Assert.Contains("Sorting candidates", phases);
+        foreach (var move in first.Moves)
+        {
+            LayoutMutation.Apply(layout, move);
+            session.MoveVerified(move);
+        }
+
+        phases.Clear();
+        var second = planner.Plan(layout, Request(Operation.MinimumWrite), session: session, progress: p => phases.Add(p.Phase));
+
+        Assert.NotEmpty(second.Moves);
+        Assert.DoesNotContain("Indexing free space", phases);
+        Assert.DoesNotContain("Indexing defrag candidates", phases);
+        Assert.DoesNotContain("Sorting candidates", phases);
+        Assert.Contains("Free-space index ready", phases);
+        Assert.Contains("Continuing minimum-write plan", phases);
+    }
+
+    [Fact]
+    public void MinimumWriteCrossesExecutionWindowsWithoutRefreshingAllocation()
+    {
+        var volume = ManyFiles(1100);
+
+        var result = Run(volume, Request(Operation.MinimumWrite));
+
+        Assert.Equal(JobState.Completed, result.State);
+        Assert.Equal(1100, result.VerifiedMoves);
+        Assert.Equal(0, volume.BitmapRefreshes);
+        Assert.All(volume.Layout.Files, file => Assert.Single(file.Extents));
+    }
+
+    [Fact]
+    public void PreflightRejectionDoesNotInvalidateMinimumWriteAllocationState()
+    {
+        var volume = ManyFiles(1030);
+        ulong rejectedId = volume.Layout.Files[0].FileId;
+        volume.BeforeMove = (file, _) =>
+        {
+            if (file.FileId == rejectedId) throw new MovePreconditionException("Source changed before submission");
+        };
+
+        var result = Run(volume, Request(Operation.MinimumWrite));
+
+        Assert.Equal(JobState.Partial, result.State);
+        Assert.Equal(1, result.FailedMoves);
+        Assert.Equal(0, volume.BitmapRefreshes);
+        Assert.True(result.VerifiedMoves > 1024);
+        Assert.Single(volume.Attempts, move => move.FileId == rejectedId);
+    }
+
+    [Fact]
+    public void MinimumWriteRetainsCandidateOrderWhenAllocationMustBeRebuilt()
+    {
+        var layout = ManyFiles(1100).Layout;
+        var planner = new LayoutPlanner();
+        using var session = new PlanningSession();
+        var first = planner.Plan(layout, Request(Operation.MinimumWrite), session: session);
+        foreach (var move in first.Moves)
+        {
+            LayoutMutation.Apply(layout, move);
+            session.MoveVerified(move);
+        }
+        session.InvalidateAllocationPlan(Operation.MinimumWrite);
+        var phases = new List<string>();
+
+        var second = planner.Plan(layout, Request(Operation.MinimumWrite), session: session, progress: p => phases.Add(p.Phase));
+
+        Assert.NotEmpty(second.Moves);
+        Assert.Contains("Indexing free space", phases);
+        Assert.Contains("Candidate order ready", phases);
+        Assert.DoesNotContain("Indexing defrag candidates", phases);
+        Assert.DoesNotContain("Sorting candidates", phases);
+    }
+
+    [Fact]
+    public void MinimumWriteSortsOnlyEligibleFragmentedCandidates()
+    {
+        var contiguous = Enumerable.Range(0, 5000)
+            .Select(index => File((ulong)index + 32, [new(0, 10000 + index, 1)]));
+        var fragmented = File(6000, [new(0, 20000, 1), new(1, 20002, 1)]);
+        var layout = Volume(24000, [.. contiguous, fragmented]).Layout;
+        var stages = new List<WorkProgress>();
+        using var session = new PlanningSession();
+
+        var plan = new LayoutPlanner().Plan(layout, Request(Operation.MinimumWrite), session: session, progress: stages.Add);
+
+        Assert.NotEmpty(plan.Moves);
+        Assert.All(plan.Moves, move => Assert.Equal(fragmented.FileId, move.FileId));
+        Assert.Contains(stages, stage => stage.Phase == "Sorting candidates" && stage.Total == 1);
+        Assert.Contains(stages, stage => stage.Phase == "Plan ready" && stage.Total == 1);
+    }
+
+    [Fact]
     public void PackRadixOrdersLargePhysicalExtentColumnsFromTheTail()
     {
         var files = Enumerable.Range(0, 5000)

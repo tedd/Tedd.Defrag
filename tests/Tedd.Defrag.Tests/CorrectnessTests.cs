@@ -55,6 +55,18 @@ public class CorrectnessTests
         }
     }
     [Fact]
+    public void ReleasedRangesAreCoalescedAndReusable()
+    {
+        using var index = new FreeSpaceIndex([new(10, 5), new(20, 5)]);
+
+        index.Release(15, 5);
+
+        Assert.True(index.Contains(10, 15));
+        Assert.Equal(10, index.FindFirstFit(15));
+        Assert.True(index.Reserve(10, 15));
+        Assert.Equal(0, index.Largest);
+    }
+    [Fact]
     public void MinimumWriteKeepsLargeAnchor()
     {
         var bitmap = new byte[128]; BitmapOperations.SetRange(bitmap, 10, 100, true); BitmapOperations.SetRange(bitmap, 900, 4, true);

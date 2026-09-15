@@ -151,13 +151,13 @@ public sealed class JobExecutor
             if (layout == null) throw new IOException("The allocation layout is unavailable.");
             var rules = new PathRules(request.SelectedPaths, request.Exclusions);
             bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
-            var session = new PlanningSession();
+            using var session = new PlanningSession();
             var planner = new LayoutPlanner();
             while (request.MaxMoveBytes == 0 || moved < request.MaxMoveBytes)
             {
                 Checkpoint();
-                bool continuingPack = request.Operation == Operation.Pack && session.HasActivePackPlan;
-                if (!continuingPack)
+                bool continuingPlan = session.HasActivePlan(request.Operation);
+                if (!continuingPlan)
                 {
                     state = JobState.Planning; progress = 0; message = "Calculating eligible placements"; Publish(true);
                 }
@@ -165,7 +165,7 @@ public sealed class JobExecutor
                     p =>
                     {
                         planningWork = p;
-                        if (!continuingPack) { message = p.Phase; progress = p.Total > 0 ? (double)p.Completed / p.Total : 0; Publish(); }
+                        if (!continuingPlan) { message = p.Phase; progress = p.Total > 0 ? (double)p.Completed / p.Total : 0; Publish(); }
                     }, Checkpoint);
                 long batchPlannedBytes = plan.ClustersToMove * layout.Volume.BytesPerCluster;
                 filesConsidered = Math.Max(filesConsidered, plan.FilesConsidered);
@@ -178,7 +178,7 @@ public sealed class JobExecutor
                     state = JobState.Completed; progress = 1;
                     message = $"Preview of first batch: {plan.Moves.Length:N0} moves · {Format.Bytes(batchPlannedBytes)} · {plan.FilesBlocked:N0} constrained files. Execution continues through further batches. No writes performed."; return;
                 }
-                state = JobState.Running; int failuresBeforeBatch = failedMoves;
+                state = JobState.Running; int failuresBeforeBatch = failedMoves; bool allocationUncertain = false;
                 // Metadata moves remain serial. User queue depth applies to independent ordinary files.
                 int depth = request.Operation is Operation.OptimizeMft or Operation.DirectoryIndexes or Operation.DirectoryLocality
                     ? 1 : request.Resources.MoveQueueDepth;
@@ -211,12 +211,15 @@ public sealed class JobExecutor
                     }
                     catch (Exception e) when (e is Win32Exception or IOException or InvalidOperationException)
                     {
+                        bool notSubmitted = e is MovePreconditionException;
+                        if (notSubmitted) session.MoveRejected(move); else allocationUncertain = true;
                         failedMoves++; session.BlockFile(file.FileId);
                         layout.Files[move.FileIndex] = file with { Flags = file.Flags | StreamFlags.Excluded };
-                        store.Journal(request.Id, new(DateTimeOffset.UtcNow, "reconcile-required", move, e.Message));
+                        store.Journal(request.Id, new(DateTimeOffset.UtcNow, notSubmitted ? "preflight-rejected" : "reconcile-required", move, e.Message));
                         if (warnings.Count < 50) warnings.Add($"{file.Path}: {e.Message}");
                         return;
                     }
+                    session.MoveVerified(move);
                     layoutIndexDirty = true;
                     moved += move.Clusters * layout.Volume.BytesPerCluster;
                     verifiedMoves++;
@@ -234,10 +237,10 @@ public sealed class JobExecutor
                         $"{pending:N0} submitted requests pending (peak {peak:N0}); {verifiedMoves:N0} verified, {failedMoves:N0} failed. Per-file sequences stay serial; metadata queue depth is 1. Device scheduling remains under Windows control.");
                     Publish();
                 });
-                if (failedMoves > failuresBeforeBatch)
+                if (failedMoves > failuresBeforeBatch && allocationUncertain)
                 {
-                    // A failed request may have changed allocation before verification
-                    // failed. Refresh before rebuilding speculative physical cursors.
+                    // An indeterminate request may have changed allocation before
+                    // verification failed. Refresh before rebuilding speculative state.
                     state = JobState.Scanning; progress = 0;
                     message = $"Refreshing allocation after {failedMoves - failuresBeforeBatch:N0} failed moves; continuing with other files";
                     scanWork = new("Refreshing allocation", 0, 0, "clusters", ActiveWorkers: 1, PeakWorkers: 1, Detail: "Indeterminate bitmap refresh before the physical plan can be rebuilt.");
@@ -246,7 +249,7 @@ public sealed class JobExecutor
                     scanWork = scanWork with { Phase = "Allocation refreshed", ActiveWorkers = 0, InFlightIo = 0 };
                     // An ambiguous move invalidates speculative physical cursors.
                     // Rebuild them from the verified bitmap before continuing.
-                    session.ResetPhysicalPlan();
+                    session.InvalidateAllocationPlan(request.Operation);
                     layoutIndexDirty = true; MapAggregator.Build(layout, map); SaveLayoutIndex();
                 }
             }

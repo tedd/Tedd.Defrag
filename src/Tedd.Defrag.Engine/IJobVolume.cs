@@ -15,3 +15,6 @@ internal interface IJobVolume : IDisposable
     byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token);
     void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules);
 }
+
+/// <summary>The native relocation request was rejected before it was submitted.</summary>
+internal sealed class MovePreconditionException(string message, Exception? innerException = null) : IOException(message, innerException);
