@@ -42,28 +42,46 @@ public sealed class LayoutPlanner
                 }
             }
         }
-        using var order = new PooledBuffer<int>(layout.Files.Length);
-        for (int i = 0; i < layout.Files.Length; i++) order.Add(i);
-        Report("Sorting candidates", 0, (long)layout.Files.Length * (workers > 1 ? 2 : 1), "sort / merge entries", force: true);
-        ParallelOrder.Sort(order.Array, order.Count, workers, (a, b) =>
+        bool stablePackOrder = request.Operation is Operation.Pack or Operation.PrepareShrink && session != null;
+        int[]? rememberedOrder = stablePackOrder ? session!.CandidateOrder(layout.Files, request.Operation) : null;
+        using var orderOwner = rememberedOrder == null ? new PooledBuffer<int>(layout.Files.Length) : null;
+        int[] order;
+        if (rememberedOrder != null)
         {
-            int comparison = Compare(layout.Files[a], layout.Files[b], request.Operation);
-            // Stable ties are required when an ordered pass resumes in a later batch.
-            return comparison != 0 ? comparison : a.CompareTo(b);
-        }, (done, active, peak) => Report("Sorting candidates", done, (long)layout.Files.Length * (workers > 1 ? 2 : 1), "sort / merge entries", active, peak), Checkpoint, cancellationToken);
+            order = rememberedOrder;
+            Report("Candidate order ready", layout.Files.Length, layout.Files.Length, "candidate entries", active: 0, peak: 0, force: true);
+        }
+        else
+        {
+            for (int i = 0; i < layout.Files.Length; i++) orderOwner!.Add(i);
+            Report("Sorting candidates", 0, (long)layout.Files.Length * (workers > 1 ? 2 : 1), "sort / merge entries", force: true);
+            ParallelOrder.Sort(orderOwner!.Array, orderOwner.Count, workers, (a, b) =>
+            {
+                int comparison = Compare(layout.Files[a], layout.Files[b], request.Operation);
+                // Stable ties are required when a pass resumes in a later batch.
+                return comparison != 0 ? comparison : a.CompareTo(b);
+            }, (done, active, peak) => Report("Sorting candidates", done, (long)layout.Files.Length * (workers > 1 ? 2 : 1), "sort / merge entries", active, peak), Checkpoint, cancellationToken);
+            if (stablePackOrder)
+            {
+                session!.RememberCandidateOrder(layout.Files, request.Operation, orderOwner.Span);
+                order = session.CandidateOrder(layout.Files, request.Operation)!;
+            }
+            else order = orderOwner.Array;
+        }
+        int orderCount = layout.Files.Length;
         using var moves = new PooledBuffer<PlannedMove>(1024);
         long remaining = request.MaxMoveBytes == 0 ? long.MaxValue : request.MaxMoveBytes / layout.Volume.BytesPerCluster;
         bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
         long planned = 0, cursor = ordered ? session?.DestinationCursor ?? 0 : 0;
         long chunk = Math.Max(1, 16L * 1024 * 1024 / layout.Volume.BytesPerCluster);
         int blocked = ordered ? session?.FilesBlocked ?? 0 : 0, considered = ordered ? session?.FilesConsidered ?? 0 : 0;
-        Report("Reserving destinations", ordered ? session?.OrderedPosition ?? 0 : 0, order.Count, "files", force: true);
-        for (int position = ordered ? session?.OrderedPosition ?? 0 : 0; position < order.Count; position++)
+        Report("Reserving destinations", ordered ? session?.OrderedPosition ?? 0 : 0, orderCount, "files", force: true);
+        for (int position = ordered ? session?.OrderedPosition ?? 0 : 0; position < orderCount; position++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if ((position & 1023) == 0) { Checkpoint(); Report("Reserving destinations", position, order.Count, "files"); }
+            if ((position & 1023) == 0) { Checkpoint(); Report("Reserving destinations", position, orderCount, "files"); }
             if (ordered && session != null) session.OrderedPosition = position + 1;
-            int index = order.Span[position];
+            int index = order[position];
             var file = layout.Files[index];
             if (!rules.IsSelected(file.Path)) continue;
             bool metadata = (file.Flags & StreamFlags.Metadata) != 0, directory = (file.Flags & StreamFlags.Directory) != 0;
@@ -81,7 +99,7 @@ public sealed class LayoutPlanner
             if (pack)
             {
                 long boundary = request.Operation == Operation.PrepareShrink ? request.ShrinkBoundaryBytes / layout.Volume.BytesPerCluster : long.MaxValue;
-                foreach (var e in extents.Reverse())
+                void PlanExtent(Extent e)
                 {
                     long offset = boundary < e.End ? Math.Max(0, boundary - e.Lcn) : e.Length;
                     if (request.Operation == Operation.Pack) offset = 0;
@@ -95,6 +113,18 @@ public sealed class LayoutPlanner
                         Add(index, file.FileId, e.Vcn + offset, e.Lcn + offset, target, size);
                         offset += size;
                     }
+                }
+                if (extents.Length == 1) PlanExtent(extents[0]);
+                else
+                {
+                    var physicalOrder = ArrayPool<Extent>.Shared.Rent(extents.Length);
+                    try
+                    {
+                        extents.CopyTo(physicalOrder, 0);
+                        Array.Sort(physicalOrder, 0, extents.Length, DescendingPhysicalExtentComparer.Instance);
+                        foreach (var extent in physicalOrder.AsSpan(0, extents.Length)) PlanExtent(extent);
+                    }
+                    finally { ArrayPool<Extent>.Shared.Return(physicalOrder); }
                 }
             }
             else
@@ -167,12 +197,28 @@ public sealed class LayoutPlanner
         Operation.Size => a.Size.CompareTo(b.Size),
         Operation.Created => a.CreatedUtcTicks.CompareTo(b.CreatedUtcTicks),
         Operation.Modified => a.ModifiedUtcTicks.CompareTo(b.ModifiedUtcTicks),
-        Operation.Pack or Operation.PrepareShrink => Last(b).CompareTo(Last(a)),
+        Operation.Pack or Operation.PrepareShrink => HighestLcn(b).CompareTo(HighestLcn(a)),
         _ => Score(b).CompareTo(Score(a))
     };
-    private static long Last(FileLayout f) => f.Extents.Length == 0 ? 0 : f.Extents[^1].End;
+    private static long HighestLcn(FileLayout file)
+    {
+        long highest = 0;
+        foreach (var extent in file.Extents)
+            if (!extent.IsSparse) highest = Math.Max(highest, extent.End);
+        return highest;
+    }
     private static double Score(FileLayout f) => (f.Extents.Length - 1d) / Math.Max(1, f.Size);
     private static int CompareThenPath(string a, string b, FileLayout fa, FileLayout fb) { int c = StringComparer.OrdinalIgnoreCase.Compare(a, b); return c == 0 ? StringComparer.OrdinalIgnoreCase.Compare(fa.Path, fb.Path) : c; }
+
+    private sealed class DescendingPhysicalExtentComparer : IComparer<Extent>
+    {
+        public static DescendingPhysicalExtentComparer Instance { get; } = new();
+        public int Compare(Extent x, Extent y)
+        {
+            int comparison = y.Lcn.CompareTo(x.Lcn);
+            return comparison != 0 ? comparison : y.Vcn.CompareTo(x.Vcn);
+        }
+    }
 }
 
 internal sealed class PooledBuffer<T>(int capacity) : IDisposable

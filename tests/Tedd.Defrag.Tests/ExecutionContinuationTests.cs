@@ -48,6 +48,40 @@ public sealed class ExecutionContinuationTests
     }
 
     [Fact]
+    public void PackRanksFilesAndExtentsByPhysicalLocation()
+    {
+        var highFirstLogicalRun = File(32, [new(0, 100, 1), new(1, 10, 1)]);
+        var middle = File(33, [new(0, 90, 1)]);
+        var layout = Volume(128, [highFirstLogicalRun, middle]).Layout;
+
+        var plan = new LayoutPlanner().Plan(layout, Request(Operation.Pack));
+
+        Assert.Equal(100, plan.Moves[0].SourceLcn);
+        Assert.Equal(0, plan.Moves[0].DestinationLcn);
+    }
+
+    [Fact]
+    public void PackReusesCandidateOrderAcrossBoundedBatches()
+    {
+        var layout = ManyFiles(1100).Layout;
+        var planner = new LayoutPlanner();
+        var session = new PlanningSession();
+        var phases = new List<string>();
+
+        var first = planner.Plan(layout, Request(Operation.Pack), session: session, progress: p => phases.Add(p.Phase));
+        Assert.Equal(1024, first.Moves.Length);
+        Assert.Contains("Sorting candidates", phases);
+        foreach (var move in first.Moves) LayoutMutation.Apply(layout, move);
+
+        phases.Clear();
+        var second = planner.Plan(layout, Request(Operation.Pack), session: session, progress: p => phases.Add(p.Phase));
+
+        Assert.NotEmpty(second.Moves);
+        Assert.DoesNotContain("Sorting candidates", phases);
+        Assert.Contains("Candidate order ready", phases);
+    }
+
+    [Fact]
     public void AmbiguousMoveIsReconciledBeforeAnotherBatchUsesFreeSpace()
     {
         var volume = ManyFiles(520);

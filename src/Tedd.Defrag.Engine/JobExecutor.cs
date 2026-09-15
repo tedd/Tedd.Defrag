@@ -176,6 +176,11 @@ public sealed class JobExecutor
                     scanWork = new("Refreshing allocation", 0, 0, "clusters", ActiveWorkers: 1, PeakWorkers: 1, Detail: "Indeterminate bitmap refresh before source space can be reused.");
                     Publish(true);
                     layout = layout with { Bitmap = volume.ReadBitmap(request, Checkpoint, token) };
+                    scanWork = scanWork with { Phase = "Allocation refreshed", ActiveWorkers = 0, InFlightIo = 0 };
+                    // Skipped moves leave holes in the remembered plan order. Re-rank
+                    // current physical locations so the next pack batch fills them
+                    // from the tail instead of shifting already-packed files again.
+                    session.InvalidateCandidateOrder();
                     layoutIndexDirty = true; MapAggregator.Build(layout, map); SaveLayoutIndex();
                 }
             }
