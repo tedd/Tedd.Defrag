@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f7faf9">
-  <meta name="description" content="See fragmented NTFS storage, preview the plan, and optimize with control. Tedd.Defrag is a free, open-source Windows desktop app and CLI.">
+  <meta name="description" content="Analyze, compress, and optimize NTFS storage with explicit scope and preview controls. Tedd.Defrag is a free, open-source Windows desktop app and CLI.">
   <title>Tedd.Defrag — See the mess. Preview the fix.</title>
   <link rel="icon" href="assets/app-icon.svg" type="image/svg+xml">
   <script>document.documentElement.classList.add('js')</script>
@@ -28,6 +28,7 @@
     <nav aria-label="Primary navigation">
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
+      <a href="#compression">Compression</a>
       <a href="#ssd">SSD guidance</a>
       <a href="https://github.com/tedd/Tedd.Defrag">Source</a>
       <a class="nav-cta" href="#download">Download</a>
@@ -40,7 +41,7 @@
       <div class="hero-copy">
         <p class="eyebrow"><span></span> Free Windows NTFS optimizer</p>
         <h1>Understand your drive.<br><em>Control every move.</em></h1>
-        <p class="lede">Tedd.Defrag turns fragmented storage into a clear plan. Analyze the drive, see what needs attention, preview the operation, and decide exactly what gets moved.</p>
+        <p class="lede">Tedd.Defrag turns fragmented storage into a clear plan. Analyze the drive, inspect compression savings, preview the operation, and decide exactly what gets compressed or moved.</p>
         <div class="hero-actions">
           <a class="button primary" href="#download">
             <span>Get Tedd.Defrag free</span><span aria-hidden="true">↓</span>
@@ -135,6 +136,36 @@
         <article class="feature-card reveal"><span class="feature-icon">◷</span><h3>Order and group</h3><p>Prefer placement by path, directory, size, extension, or timestamps.</p></article>
         <article class="feature-card reveal"><span class="feature-icon">⇥</span><h3>Prepare to shrink</h3><p>Move eligible extents below an explicit partition boundary before resizing.</p></article>
         <article class="feature-card reveal"><span class="feature-icon">⌁</span><h3>ReTRIM</h3><p>Resend deallocation hints on supported SSDs without relocating file data.</p></article>
+      </div>
+    </section>
+
+    <section class="compression section-shell" id="compression">
+      <div class="compression-copy reveal">
+        <p class="eyebrow">NTFS compression, explicitly scoped</p>
+        <h2>Compress selected data.<br>Measure the result.</h2>
+        <p>Target an individual file, a recursive folder, wildcard, glob, or regular expression. Compression runs before the MFT scan so the allocation map and optimization plan reflect the resulting file sizes.</p>
+        <ul class="compression-points">
+          <li><strong>Choose the algorithm.</strong> Use XPRESS 4K, XPRESS 8K, XPRESS 16K, LZX, remove compression with NONE, or test every supported algorithm and retain the smallest result.</li>
+          <li><strong>Avoid ineffective work.</strong> Common archive, media, compressed-document, and web-font extensions are excluded by default; the list remains editable.</li>
+          <li><strong>Inspect before writing.</strong> Preview enumerates matching targets without modifying their compression state.</li>
+          <li><strong>See actual savings.</strong> Each analyzed drive reports compressed files, compression type, logical size, saved bytes, and savings percentage.</li>
+        </ul>
+        <p class="compression-constraint"><strong>NTFS only.</strong> Compression targets are unavailable on ReFS, FAT, and other filesystems.</p>
+      </div>
+
+      <div class="compression-panel reveal" aria-label="Compression details shown during an operation">
+        <div class="compression-panel-head"><span>COMPRESSION DETAILS</span><b>Live telemetry</b></div>
+        <div class="compression-status"><span>Current status</span><strong><i aria-hidden="true"></i> Finding best compression · testing LZX</strong></div>
+        <div class="compression-metrics">
+          <p><span>Waiting</span><strong>Files and input bytes</strong></p>
+          <p><span>Processed</span><strong>Files and input bytes</strong></p>
+          <p><span>Result</span><strong>Changed · skipped · failed</strong></p>
+          <p><span>Storage change</span><strong>Bytes and percentage saved</strong></p>
+        </div>
+        <div class="compression-modes" aria-label="Supported compression modes">
+          <span>NONE</span><span>XPRESS 4K</span><span>XPRESS 8K</span><span>XPRESS 16K</span><span>LZX</span><span>TRY ALL</span>
+        </div>
+        <p class="compression-panel-note">Try all is evaluated only for an uncompressed file. Already-compressed files are left unchanged.</p>
       </div>
     </section>
 
