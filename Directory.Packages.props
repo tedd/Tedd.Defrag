@@ -3,6 +3,7 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.Windows.CsWin32" Version="0.3.333" />
     <PackageVersion Include="System.Management" Version="10.0.12" />
+    <PackageVersion Include="Tedd.WildcardMatch" Version="1.0.3" />
     <PackageVersion Include="Tedd.TUI" Version="1.3.13" />
     <PackageVersion Include="Tedd.TUI.Platform.Console" Version="1.3.13" />
     <PackageVersion Include="Tedd.TUI.Platform.WindowsTerminal" Version="1.3.13" />

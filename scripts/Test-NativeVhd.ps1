@@ -50,7 +50,7 @@ try {
         $id = [Guid]::NewGuid()
         $jobDir = Join-Path $env:LOCALAPPDATA ('Tedd.Defrag\jobs\' + $id.ToString('N'))
         New-Item -ItemType Directory -Path $jobDir | Out-Null
-        $request = @{ Id=$id.ToString(); Volume="${DriveLetter}:\"; Operation=$Operation; Preview=$false; SelectedPaths=@($fixture); Exclusions=@((Join-Path $fixture '0.bin')); MinimumFragments=2; AllowSsdRelocation=$true; MaxMoveBytes=256MB; MaxMinutes=10; Resources=@{MemoryMiB=1024;CpuPercent=50;IoMiBPerSecond=0;AcOnly=$false;Background=$true;MoveQueueDepth=$MoveQueueDepth;ScanWorkers=$ScanWorkers} }
+        $request = @{ Id=$id.ToString(); Volume="${DriveLetter}:\"; Operation=$Operation; Preview=$false; SelectedPaths=@(@{Pattern=$fixture;Kind='Path'}); Exclusions=@(@{Pattern=(Join-Path $fixture '0.bin');Kind='Path'}); MinimumFragments=2; AllowSsdRelocation=$true; MaxMoveBytes=256MB; MaxMinutes=10; Resources=@{MemoryMiB=1024;CpuPercent=50;IoMiBPerSecond=0;AcOnly=$false;Background=$true;MoveQueueDepth=$MoveQueueDepth;ScanWorkers=$ScanWorkers} }
         $request | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $jobDir 'request.json') -Encoding utf8NoBOM
         & $worker --execute $id.ToString()
         $result = Get-Content -LiteralPath (Join-Path $jobDir 'snapshot.json') -Raw | ConvertFrom-Json

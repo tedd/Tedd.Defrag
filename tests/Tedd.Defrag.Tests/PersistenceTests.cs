@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Persistence;
 using Xunit;
@@ -6,6 +7,18 @@ namespace Tedd.Defrag.Tests;
 
 public class PersistenceTests
 {
+    [Fact]
+    public void PathRulesPersistTheirKindsAndReadLegacyStringRules()
+    {
+        var modern = JsonSerializer.Deserialize<PathRule>("{\"Pattern\":\"*\\\\cache\\\\*\",\"Kind\":\"Wildcard\"}", JobStore.Json);
+        var legacy = JsonSerializer.Deserialize<PathRule>("\"V:\\\\Data\"", JobStore.Json);
+
+        Assert.Equal(new PathRule(@"*\cache\*", PathRuleKind.Wildcard), modern);
+        Assert.Equal(new PathRule(@"V:\Data"), legacy);
+        Assert.Contains("\"Kind\":\"Regex\"", JsonSerializer.Serialize(new PathRule("\\\\temp\\\\.*", PathRuleKind.Regex), JobStore.Json));
+        Assert.Throws<ArgumentException>(() => new JobRequest { Volume = "V:", Exclusions = [new("[", PathRuleKind.Regex)] }.Validate());
+    }
+
     [Theory]
     [InlineData(JobState.Failed)]
     [InlineData(JobState.Cancelled)]

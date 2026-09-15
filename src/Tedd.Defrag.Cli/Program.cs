@@ -140,7 +140,12 @@ internal static class Program
             IoMiBPerSecond = args.Int("io", resources.IoMiBPerSecond), AffinityMask = Convert.ToUInt64(args.Get("affinity", "0").Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
             IdleOnly = args.Has("idle-only") || resources.IdleOnly, AcOnly = !args.Has("allow-battery") && resources.AcOnly, Background = !args.Has("foreground") && resources.Background };
         return new() { Volume = volume, Operation = operation, Preview = !args.Has("execute"), Resources = resources,
-            SelectedPaths = [.. args.All("path"), .. args.All("file"), .. args.All("folder")], Exclusions = args.All("exclude"),
+            SelectedPaths = [.. args.All("path").Concat(args.All("file")).Concat(args.All("folder")).Select(pattern => new PathRule(pattern)),
+                .. args.All("wildcard").Select(pattern => new PathRule(pattern, PathRuleKind.Wildcard)),
+                .. args.All("regex").Select(pattern => new PathRule(pattern, PathRuleKind.Regex))],
+            Exclusions = [.. args.All("exclude").Select(pattern => new PathRule(pattern)),
+                .. args.All("exclude-wildcard").Select(pattern => new PathRule(pattern, PathRuleKind.Wildcard)),
+                .. args.All("exclude-regex").Select(pattern => new PathRule(pattern, PathRuleKind.Regex))],
             MaxMoveBytes = checked(args.Long("budget-mib", 0) * 1024 * 1024), MaxMinutes = args.Int("minutes", 0),
             MinimumFragments = args.Int("min-fragments", 20),
             MinimumFileBytes = checked(args.Long("min-file-mib", 0) * 1024 * 1024), MaximumFileBytes = checked(args.Long("max-file-mib", 0) * 1024 * 1024),
@@ -194,7 +199,12 @@ internal static class Program
 
         --execute              Perform changes (default: preview)
         --wait --json          Wait and emit structured result; --events emits NDJSON
-        --exclude <path/glob>  Repeat for recursive paths or patterns; exclusions always win
+        --path <path>          Repeat for exact files or recursive folders
+        --wildcard <pattern>   Repeat for * and ? full-path wildcards
+        --regex <expression>   Repeat for case-insensitive full-path regular expressions
+        --exclude <path>       Repeat for exact files or recursive folders; exclusions always win
+        --exclude-wildcard <pattern>  Repeat for * and ? exclusion wildcards
+        --exclude-regex <expression>  Repeat for exclusion regular expressions
         --preset quiet|balanced|performance       Default: performance
         --cpu 100 --memory 0 --io 0       CPU %, process commit MiB, relocation MiB/s; 0 means unlimited
         --affinity 0xF0        Advanced logical CPU mask (single processor group)

@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text.Json;
 using Tedd.Defrag.Client;
@@ -19,6 +20,8 @@ public partial class MainPage : ContentPage
     private readonly DiskMapDrawable _map = new();
     private readonly MapOverviewDrawable _overview = new();
     private readonly Dictionary<string, VolumeSession> _volumeSessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ObservableCollection<RuleEditorItem> _fileRules = [];
+    private readonly ObservableCollection<RuleEditorItem> _exclusionRules = [];
     private VolumeInfo[] _volumes = [];
     private VolumeInfo? _volume;
     private bool _polling, _refreshing, _submitting;
@@ -72,6 +75,8 @@ public partial class MainPage : ContentPage
         };
         _settingTheme = false;
         ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · responsive", "Performance · full speed" }; ResourcePreset.SelectedIndex = 2;
+        FileRuleKind.ItemsSource = ExclusionRuleKind.ItemsSource = new[] { "Path", "Wildcard", "Regular expression" };
+        FileRuleKind.SelectedIndex = ExclusionRuleKind.SelectedIndex = 0;
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
         Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await AttachActiveJobs(); await CheckForUpdate(); };
         Unloaded += (_, _) => _timer.Stop();
@@ -201,7 +206,7 @@ public partial class MainPage : ContentPage
         ClearFileHighlight(); ClusterOverlay.IsVisible = false; DiagnosticsOverlay.IsVisible = false;
         _map.EmptyMessage = volume == null ? "Connect a volume and refresh to begin." :
             FileSystemCapabilities.IsSupported(volume.FileSystem) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS, ReFS, FAT or FAT32 volume to analyze its allocation.";
-        DiskMap.Invalidate();
+        DiskMap.Invalidate(); MapOverview.Invalidate();
         ModeBadge.Text = volume?.FileSystem.ToUpperInvariant() ?? "NO VOLUME";
         VolumeTitle.Text = volume == null ? "No volume selected" : $"{volume.Root[..2]}  {volume.Label}";
         MapSubtitle.Text = volume == null ? "Connect a volume and refresh to begin." : $"{volume.FileSystem} · {volume.BytesPerCluster:N0}-byte clusters · awaiting analysis";
@@ -244,8 +249,8 @@ public partial class MainPage : ContentPage
         var volume = _volume ?? throw new InvalidOperationException("Select an available NTFS, ReFS, FAT or FAT32 volume first.");
         FileSystemCapabilities.Validate(volume.FileSystem, operation);
         var request = new JobRequest { Volume = volume.Root, Operation = operation, Preview = preview,
-            SelectedPaths = string.IsNullOrWhiteSpace(SelectedPath.Text) ? [] : [SelectedPath.Text.Trim()],
-            Exclusions = (ExclusionEntry.Text ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
+            SelectedPaths = _fileRules.Select(item => item.Rule).ToArray(),
+            Exclusions = _exclusionRules.Select(item => item.Rule).ToArray(),
             Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = ParseInt(MemoryEntry.Text, "Memory cap"), IoMiBPerSecond = ParseInt(IoEntry.Text, "Relocation bandwidth"),
                 ScanWorkers = ParseInt(ScanWorkersEntry.Text, "MFT workers"), PlanningWorkers = ParseInt(PlanningWorkersEntry.Text, "Planner workers"),
                 MoveQueueDepth = ParseInt(MoveQueueEntry.Text, "Move queue depth", ResourcePolicy.Performance.MoveQueueDepth),
@@ -779,19 +784,76 @@ public partial class MainPage : ContentPage
         MoveQueueEntry.Text = p.MoveQueueDepth.ToString(CultureInfo.InvariantCulture);
     }
     private void OnToggleAdvanced(object? sender, EventArgs e)
-    { AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible; AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide advanced" : "Show advanced"; }
+    { AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible; AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide controls" : "Show controls"; }
     private void OnScopeChanged(object? sender, TextChangedEventArgs e)
+        => RefreshScopeSummary();
+    private void RefreshScopeSummary()
     {
         if (ScopeSummary == null) return;
-        string selection = string.IsNullOrWhiteSpace(SelectedPath?.Text) ? "All files" : "Selected path";
-        int exclusions = (ExclusionEntry?.Text ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Length;
+        string selection = _fileRules.Count == 0 ? "All files" : $"{_fileRules.Count:N0} file rules";
+        int exclusions = _exclusionRules.Count;
         string fragments = string.IsNullOrWhiteSpace(MinFragmentsEntry?.Text) ? "20" : MinFragmentsEntry.Text;
         string size = string.IsNullOrWhiteSpace(MinFileSizeEntry?.Text) && string.IsNullOrWhiteSpace(MaxFileSizeEntry?.Text) ? "all sizes" : "size-filtered";
         ScopeSummary.Text = $"{selection} · {(exclusions == 0 ? "exclusions none" : $"{exclusions:N0} exclusions")} · {fragments}-fragment defrag threshold · {size}";
         RenderRecommendation(CurrentSession?.LayoutSnapshot);
         UpdateVolumeActions();
     }
-    private void OnFileSelected(object? sender, SelectionChangedEventArgs e) { if (e.CurrentSelection.FirstOrDefault() is FileRow row) { SelectedPath.Text = row.Path; CellDetail.Text = row.Path; } }
+    private async void OnAddFileRule(object? sender, EventArgs e) => await AddRule(_fileRules, FileRulesList, FileRulePattern, FileRuleKind, "Files to include");
+    private async void OnAddExclusionRule(object? sender, EventArgs e) => await AddRule(_exclusionRules, ExclusionRulesList, ExclusionRulePattern, ExclusionRuleKind, "Exclusions");
+    private async Task AddRule(ObservableCollection<RuleEditorItem> rules, VerticalStackLayout list, Entry patternEntry, Picker kindPicker, string title)
+    {
+        try
+        {
+            var rule = new PathRule(patternEntry.Text?.Trim() ?? "", RuleKind(kindPicker));
+            PathRules.Validate(rule);
+            if (!rules.Any(item => item.Rule == rule)) rules.Add(new(rule));
+            patternEntry.Text = "";
+            RenderRuleList(list, rules);
+            RefreshScopeSummary();
+        }
+        catch (Exception exception) { await DisplayAlertAsync(title, exception.Message, "Close"); }
+    }
+    private static PathRuleKind RuleKind(Picker picker) => picker.SelectedIndex switch
+    {
+        1 => PathRuleKind.Wildcard,
+        2 => PathRuleKind.Regex,
+        _ => PathRuleKind.Path
+    };
+    private void RenderRuleList(VerticalStackLayout list, ObservableCollection<RuleEditorItem> rules)
+    {
+        list.Children.Clear();
+        foreach (var item in rules)
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = 118 });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Star });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.Add(new Label { Text = RuleKindLabel(item.Rule.Kind), FontSize = 10, TextColor = Colors.Gray, VerticalOptions = LayoutOptions.Center }, 0);
+            row.Add(new Label { Text = item.Rule.Pattern, FontSize = 11, LineBreakMode = LineBreakMode.MiddleTruncation, VerticalOptions = LayoutOptions.Center }, 1);
+            var remove = new Button { Text = "Remove", Padding = new Thickness(10, 5) };
+            remove.Clicked += (_, _) => { rules.Remove(item); RenderRuleList(list, rules); RefreshScopeSummary(); };
+            row.Add(remove, 2);
+            list.Children.Add(row);
+        }
+    }
+    private static string RuleKindLabel(PathRuleKind kind) => kind switch
+    {
+        PathRuleKind.Wildcard => "Wildcard",
+        PathRuleKind.Regex => "Regular expression",
+        _ => "Path"
+    };
+    private void OnFileSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        if (e.CurrentSelection.FirstOrDefault() is not FileRow row) return;
+        var rule = new PathRule(row.Path);
+        if (!_fileRules.Any(item => item.Rule == rule))
+        {
+            _fileRules.Add(new(rule));
+            RenderRuleList(FileRulesList, _fileRules);
+            RefreshScopeSummary();
+        }
+        CellDetail.Text = row.Path;
+    }
     private async Task ShowClusterFiles(ClusterRange range)
     {
         var session = CurrentSession; if (session == null || session.JobId == Guid.Empty) return;
@@ -972,6 +1034,7 @@ public partial class MainPage : ContentPage
         public FileRow[]? Files { get; set; }
     }
     private sealed record FileRow(string Path, int Extents, string BytesLabel, string Status);
+    private sealed record RuleEditorItem(PathRule Rule);
     private sealed record ClusterHitRow(ClusterFile File)
     {
         public string DisplayPath => File.Path + File.Stream;

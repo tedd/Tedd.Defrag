@@ -48,7 +48,7 @@ Release builds check GitHub Releases for a newer stable version at startup. With
 | ReFS scan | Windows allocation bitmap and file extent queries; directory traversal of accessible unnamed streams; partial file coverage with explicit warnings |
 | FAT scan | FAT12/16/32 allocation bitmap and file extent queries through Windows; directory traversal of accessible file data; partial coverage of ownership |
 | NTFS placement | Minimum-write, files-only, pack, pack + defrag, alphabetical, size, creation/modification time, extension, directory locality, shrink boundary |
-| Constraints | Recursive path/glob exclusions, selected objects only, file size and fragment-count filters, optional relocation-byte/time budgets, no supporting moves of unrelated files |
+| Constraints | Per-entry path, wildcard, or regular-expression exclusions; selected objects only; file size and fragment-count filters; optional relocation-byte/time budgets; no supporting moves of unrelated files |
 | Maintenance | Windows ReTRIM, automatic optimization and whole-volume Windows defrag on NTFS/ReFS/FAT where supported; slab consolidation on NTFS/ReFS; bounded NTFS virtual-disk pre-zeroing with delete-on-close files |
 | Metadata | Movable MFT data and directory-index targets through supported filesystem APIs; incomplete or unsupported streams remain constrained |
 | Visualization | Layered allocation/fragmentation/metadata/exclusion/activity counts; bounded drawing surface; zoom, cell inspection, live progress and JSON reports |

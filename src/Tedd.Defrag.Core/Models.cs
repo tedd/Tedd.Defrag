@@ -6,6 +6,13 @@ namespace Tedd.Defrag.Core;
 public enum Operation { Analyze, MinimumWrite, FilesOnly, Pack, PackAndDefrag, Alphabetical, Size, Created, Modified, Extension, DirectoryLocality, PrepareShrink, ReTrim, SlabConsolidate, Automatic, OptimizeMft, DirectoryIndexes, ZeroFreeSpace, WindowsDefrag }
 [JsonConverter(typeof(JsonStringEnumConverter<JobState>))]
 public enum JobState { Queued, Scanning, Planning, Running, Paused, WaitingForIdle, Completed, Partial, Cancelled, Failed, Interrupted }
+public enum PathRuleKind { Path, Wildcard, Regex }
+
+[JsonConverter(typeof(PathRuleJsonConverter))]
+public sealed record PathRule(string Pattern, PathRuleKind Kind = PathRuleKind.Path)
+{
+    public static implicit operator PathRule(string pattern) => new(pattern);
+}
 
 [Flags]
 public enum StreamFlags { None = 0, Directory = 1, Metadata = 2, Sparse = 4, Compressed = 8, Encrypted = 16, ReparsePoint = 32, Incomplete = 64, HardLinked = 128, Excluded = 256, Resident = 512, AnalysisOnly = 1024 }
@@ -65,8 +72,8 @@ public sealed record JobRequest
     public string Volume { get; init; } = "";
     public Operation Operation { get; init; } = Operation.Analyze;
     public bool Preview { get; init; } = true;
-    public string[] SelectedPaths { get; init; } = [];
-    public string[] Exclusions { get; init; } = [];
+    public PathRule[] SelectedPaths { get; init; } = [];
+    public PathRule[] Exclusions { get; init; } = [];
     public ResourcePolicy Resources { get; init; } = ResourcePolicy.Performance;
     public long MaxMoveBytes { get; init; }
     public int MaxMinutes { get; init; }
@@ -92,7 +99,7 @@ public sealed record JobRequest
         if (Operation == Operation.PrepareShrink && ShrinkBoundaryBytes <= 0) throw new ArgumentException("Supply a positive shrink boundary.");
         if (Operation == Operation.ZeroFreeSpace && !Preview && !ConfirmVirtualDiskZeroing)
             throw new ArgumentException("Virtual-disk pre-zeroing requires explicit acknowledgement.");
-        if (SelectedPaths.Concat(Exclusions).Any(p => p.Length > 32760 || p.Contains('\0'))) throw new ArgumentException("Invalid path rule.");
+        foreach (var rule in SelectedPaths.Concat(Exclusions)) PathRules.Validate(rule);
     }
 }
 public sealed record ConcurrencySettings

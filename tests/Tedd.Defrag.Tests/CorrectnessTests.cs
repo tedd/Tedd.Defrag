@@ -98,7 +98,7 @@ public class CorrectnessTests
         for (int seed = 1; seed <= 8; seed++)
         {
             var layout = SyntheticVolume.Create(seed); var original = layout.Files.ToArray(); long before = BitmapOperations.CountAllocated(layout.Bitmap);
-            var request = Request(operation) with { Exclusions = [@"V:\Projects"], MaxMoveBytes = 32 * 1024 * 1024, ShrinkBoundaryBytes = 512 * 1024 * 1024 };
+            var request = Request(operation) with { Exclusions = [new(@"V:\Projects")], MaxMoveBytes = 32 * 1024 * 1024, ShrinkBoundaryBytes = 512 * 1024 * 1024 };
             var plan = new LayoutPlanner().Plan(layout, request);
             Assert.True(plan.ClustersToMove * 4096 <= request.MaxMoveBytes); Assert.True(plan.Moves.Length <= 1024);
             foreach (var move in plan.Moves)
@@ -115,15 +115,17 @@ public class CorrectnessTests
     public void SingleFileSelectionNeverMovesSupportingFiles()
     {
         var layout = SyntheticVolume.Create(); string selected = layout.Files.First(f => f.Fragmented && f.Movable).Path;
-        var plan = new LayoutPlanner().Plan(layout, Request(Operation.MinimumWrite) with { SelectedPaths = [selected] });
+        var plan = new LayoutPlanner().Plan(layout, Request(Operation.MinimumWrite) with { SelectedPaths = [new(selected)] });
         Assert.NotEmpty(plan.Moves); Assert.All(plan.Moves, m => Assert.Equal(selected, layout.Files[m.FileIndex].Path));
     }
     [Fact]
-    public void PathRulesAreRecursiveWithoutPrefixCollisions()
+    public void PathRulesSupportRecursivePathsWildcardsAndRegularExpressions()
     {
-        var rules = new PathRules([], [@"C:\Data", @"*\cache\*"]);
+        var rules = new PathRules([], [new(@"C:\Data"), new(@"*\cache\*", PathRuleKind.Wildcard),
+            new(@"\\temp\\[^\\]+\.tmp$", PathRuleKind.Regex)]);
         Assert.True(rules.IsExcluded(@"c:\data\report.bin")); Assert.True(rules.IsExcluded(@"C:\Data"));
         Assert.False(rules.IsExcluded(@"C:\Database\file.bin")); Assert.True(rules.IsExcluded(@"D:\app\cache\entry"));
+        Assert.True(rules.IsExcluded(@"D:\Temp\scratch.tmp")); Assert.False(rules.IsExcluded(@"D:\Temp\scratch.log"));
     }
     [Fact]
     public void NtfsRunsDecodeSignedDeltasAndSparseHoles()

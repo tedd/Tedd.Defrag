@@ -142,8 +142,8 @@ public abstract class WindowsManagedFileSystemTests
     {
         JobRequest[] requests =
         [
-            Request(Operation.ReTrim, true) with { SelectedPaths = [@"V:\folder"] },
-            Request(Operation.WindowsDefrag, true) with { Exclusions = ["*.bin"] },
+            Request(Operation.ReTrim, true) with { SelectedPaths = [new(@"V:\folder")] },
+            Request(Operation.WindowsDefrag, true) with { Exclusions = [new("*.bin", PathRuleKind.Wildcard)] },
             Request(Operation.WindowsDefrag, true) with { MaxMoveBytes = 4096 },
             Request(Operation.WindowsDefrag, true) with { MinimumFragments = 2 },
             Request(Operation.WindowsDefrag, true) with { MinimumFileBytes = 4096 },
