@@ -219,7 +219,7 @@ public partial class MainPage : ContentPage
         MapSubtitle.Text = volume == null ? "Connect a volume and refresh to begin." : $"{volume.FileSystem} · {volume.BytesPerCluster:N0}-byte clusters · awaiting analysis";
         CompressionNotice.Text = volume == null || volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase)
             ? "Compression targets are applied before the MFT is read and are available only on NTFS volumes."
-            : $"{volume.Root} uses {volume.FileSystem}. Compression targets require NTFS and cannot run on this volume.";
+            : $"{volume.Root} uses {volume.FileSystem}. Compression targets will be skipped; analysis and supported maintenance remain available.";
         TopologyText.Text = volume == null ? "" : string.Join(", ", volume.Resources) + "\n" + volume.TopologyConfidence;
         FreeMetric.Text = volume == null ? "—" : Format.Bytes(volume.FreeBytes);
         CapacityDetail.Text = volume == null ? "Select a volume" : $"of {Format.Bytes(volume.SizeBytes)} capacity";
@@ -261,8 +261,6 @@ public partial class MainPage : ContentPage
     {
         var volume = _volume ?? throw new InvalidOperationException("Select an available NTFS, ReFS, FAT or FAT32 volume first.");
         FileSystemCapabilities.Validate(volume.FileSystem, operation);
-        if (_compressionRules.Count > 0 && !volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException($"Compression targets require NTFS; {volume.Root} uses {volume.FileSystem}.");
         var request = new JobRequest { Volume = volume.Root, Operation = operation, Preview = preview,
             SelectedPaths = _fileRules.Select(item => item.Rule).ToArray(),
             Exclusions = _exclusionRules.Select(item => item.Rule).ToArray(),
@@ -296,8 +294,10 @@ public partial class MainPage : ContentPage
                     $"Run {_selectedPolicy.Name} on {request.Volume}, with {Limit(request.MaxMoveBytes, Format.Bytes, "no relocation limit")} and {Limit(request.MaxMinutes, n => $"{n}-minute limit", "no time limit")}?";
                 if (_volume?.SeekPenalty != true && operation is not (Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace))
                     details += "\n\nThis is SSD or unknown media. Relocation adds writes. Greater logical contiguity can reduce host I/O requests, but the device controls internal placement. Review the previewed write estimate.";
-                if (request.CompressionTargets.Length > 0)
+                if (request.CompressionTargets.Length > 0 && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true)
                     details += $"\n\n{request.CompressionTargets.Length:N0} compression target rules will be applied before the MFT is read. Compression can rewrite each matched file; {request.CompressionExcludedExtensions.Length:N0} excluded extensions will be ignored.";
+                else if (request.CompressionTargets.Length > 0)
+                    details += $"\n\n{request.CompressionTargets.Length:N0} compression target rules are configured, but {request.Volume} uses {_volume?.FileSystem}. Compression will be skipped and {_selectedPolicy.Name} will continue.";
                 if (!await DisplayAlertAsync("Review disk operation", details, "Start job", "Cancel")) return;
             }
             OptimizeButton.IsEnabled = false; FooterStatus.Text = "Connecting to the worker…";
@@ -856,9 +856,7 @@ public partial class MainPage : ContentPage
     {
         try
         {
-            if (_volume == null || !_volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
-                throw new NotSupportedException(_volume == null ? "Select an NTFS volume before adding a compression target."
-                    : $"Compression targets require NTFS; {_volume.Root} uses {_volume.FileSystem}.");
+            if (_volume == null) throw new InvalidOperationException("Select a volume before adding a compression target.");
             var rule = new PathRule(CompressionRulePattern.Text?.Trim() ?? "", RuleKind(CompressionRuleKind));
             PathRules.Validate(rule);
             ValidatePathSelection(rule, CompressionRuleKind);
@@ -874,6 +872,9 @@ public partial class MainPage : ContentPage
             EndCompressionRuleEdit();
             RenderCompressionRuleList();
             RefreshScopeSummary();
+            if (!_volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
+                await DisplayAlertAsync("Compression target saved",
+                    $"{_volume.Root} uses {_volume.FileSystem}. This target will be skipped for jobs on that volume; analysis and supported maintenance remain available.", "Close");
         }
         catch (Exception exception) { await DisplayAlertAsync("Compression", exception.Message, "Close"); }
     }

@@ -87,6 +87,23 @@ public abstract class WindowsManagedFileSystemTests
     }
 
     [Fact]
+    public void CompressionTargetsDoNotBlockSupportedNonNtfsMaintenance()
+    {
+        var volume = new TestVolume();
+        var request = Request(Operation.Automatic, true) with
+        {
+            CompressionTargets = [new(new PathRule(@"V:\Data"), CompressionMode.Xpress4K)]
+        };
+
+        var result = Run(volume, request);
+
+        Assert.Equal(JobState.Completed, result.State);
+        Assert.Equal(1, volume.Scans);
+        Assert.Equal("Skipped · compression requires NTFS", result.CompressionStatus);
+        Assert.Contains(result.Warnings!, warning => warning.Contains($"uses {FileSystemName}") && warning.Contains("remains available"));
+    }
+
+    [Fact]
     public void TrimDoesNotDependOnAllocationScanAvailability()
     {
         var volume = new TestVolume { ScanError = new IOException("Bitmap unavailable") };

@@ -29,7 +29,7 @@ Application startup discovers real volumes without starting analysis or optimiza
 
 ## Compression
 
-Optional compression rules execute before the first NTFS MFT read. Exact file and directory rules traverse only their scope; wildcard, glob, or regular-expression rules make one volume traversal. Directory reparse points are not followed, patterns are matched against full paths, duplicate paths are processed once, excluded extension suffixes are ignored, and the last matching rule determines the target state. Compression rules are rejected on non-NTFS volumes.
+Optional compression rules execute before the first NTFS MFT read. Exact file and directory rules traverse only their scope; wildcard, glob, or regular-expression rules make one volume traversal. Directory reparse points are not followed, patterns are matched against full paths, duplicate paths are processed once, excluded extension suffixes are ignored, and the last matching rule determines the target state. Jobs on non-NTFS volumes report and skip configured compression rules while continuing any analysis or maintenance operation supported by that filesystem.
 
 The WOF file provider supplies XPRESS 4K, XPRESS 8K, XPRESS 16K and LZX. The worker queries current backing with `WofIsExternalFile`, applies a selected algorithm with `WofSetFileDataLocation`, and removes file-provider backing with `FSCTL_DELETE_EXTERNAL_BACKING` through `DeviceIoControl`. NONE also clears classic NTFS compression with `FSCTL_SET_COMPRESSION`. `GetCompressedFileSizeW` and `GetDiskFreeSpace` provide cluster-rounded allocation measurements; `GetShortPathName` is a compatibility fallback for path-based queries. `SetThreadExecutionState` prevents idle sleep only while an executing compression pass is active.
 

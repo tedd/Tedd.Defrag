@@ -48,6 +48,7 @@ public sealed class JobExecutor
         CompressionInventoryResult compressionInventory = CompressionInventoryResult.Empty;
         bool noMovesPlanned = false;
         bool layoutIndexDirty = false;
+        bool compressionSupported = false;
         long scannedRecords = 0;
         WorkProgress? scanWork = null, planningWork = null, executionWork = null;
         var executionWatch = new Stopwatch(); var moveActivity = new WorkerActivity();
@@ -57,6 +58,7 @@ public sealed class JobExecutor
             Checkpoint();
             using var volume = openVolume(request);
             volumeInfo = volume.Info;
+            compressionSupported = FileSystemCapabilities.IsNtfs(volume.Info.FileSystem);
             FileSystemCapabilities.Validate(volume.Info.FileSystem, request.Operation);
             bool external = FileSystemCapabilities.IsWindowsMaintenance(request.Operation);
             string? maintenanceFlag = external ? WindowsMaintenance.Validate(request, volume.Info) : null;
@@ -65,7 +67,7 @@ public sealed class JobExecutor
             if (!request.Preview && request.Operation is not (Operation.Analyze or Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace)
                 && volume!.Info.SeekPenalty != true && !request.AllowSsdRelocation)
                 throw new InvalidOperationException("Defragmentation on SSD or unknown media requires explicit opt-in.");
-            if (request.CompressionTargets.Length > 0)
+            if (request.CompressionTargets.Length > 0 && compressionSupported)
             {
                 state = request.Preview ? JobState.Planning : JobState.Running;
                 message = request.Preview ? "Inspecting compression targets before analysis" : "Applying compression targets before analysis";
@@ -97,6 +99,19 @@ public sealed class JobExecutor
                     : $"Compression processed {compression.FilesMatched:N0} files before analysis: {compression.FilesChanged:N0} changed, {compression.FilesSkipped:N0} already compliant or skipped, {compression.FilesFailed:N0} failed.";
                 AddWarnings([summary]);
                 state = JobState.Scanning; progress = 0; message = "Preparing analysis after compression"; Publish(true);
+            }
+            else if (request.CompressionTargets.Length > 0)
+            {
+                compressionProgress = compressionProgress with
+                {
+                    Status = "Skipped · compression requires NTFS",
+                    Path = null,
+                    FilesWaiting = 0,
+                    BytesWaiting = 0
+                };
+                AddWarnings([$"{volume.Info.Root} uses {volume.Info.FileSystem}. Configured compression targets were skipped; {request.Operation} remains available without compression."]);
+                message = $"Compression skipped on {volume.Info.FileSystem}; preparing analysis";
+                Publish(true);
             }
             layout = ScanVolume();
             UpdateConditionMetrics();
@@ -379,7 +394,7 @@ public sealed class JobExecutor
             foreach (string warning in additional)
                 if (!warnings.Contains(warning, StringComparer.Ordinal)) warnings.Add(warning);
         }
-        string CompressionSummary() => request.CompressionTargets.Length == 0 || request.Preview ? ""
+        string CompressionSummary() => request.CompressionTargets.Length == 0 || request.Preview || !compressionSupported ? ""
             : $"Compression: {compression.FilesChanged:N0} changed, {compression.FilesSkipped:N0} skipped, {compression.FilesFailed:N0} failed; {Format.StorageDelta(compression.BytesSaved)}. ";
         void SaveLayoutIndex()
         {
