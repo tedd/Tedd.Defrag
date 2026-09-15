@@ -97,9 +97,18 @@ public sealed class JobExecutor
             var planner = new LayoutPlanner();
             while (request.MaxMoveBytes == 0 || moved < request.MaxMoveBytes)
             {
-                Checkpoint(); state = JobState.Planning; progress = 0; message = "Calculating eligible placements"; Publish(true);
+                Checkpoint();
+                bool continuingPack = request.Operation == Operation.Pack && session.HasActivePackPlan;
+                if (!continuingPack)
+                {
+                    state = JobState.Planning; progress = 0; message = "Calculating eligible placements"; Publish(true);
+                }
                 var plan = planner.Plan(layout, request with { MaxMoveBytes = request.MaxMoveBytes == 0 ? 0 : request.MaxMoveBytes - moved }, token, session,
-                    p => { planningWork = p; message = p.Phase; progress = p.Total > 0 ? (double)p.Completed / p.Total : 0; Publish(); }, Checkpoint);
+                    p =>
+                    {
+                        planningWork = p;
+                        if (!continuingPack) { message = p.Phase; progress = p.Total > 0 ? (double)p.Completed / p.Total : 0; Publish(); }
+                    }, Checkpoint);
                 long batchPlannedBytes = plan.ClustersToMove * layout.Volume.BytesPerCluster;
                 filesConsidered = Math.Max(filesConsidered, plan.FilesConsidered);
                 filesBlocked = Math.Max(filesBlocked, plan.FilesBlocked);
@@ -170,22 +179,22 @@ public sealed class JobExecutor
                 if (failedMoves > failuresBeforeBatch)
                 {
                     // A failed request may have changed allocation before verification
-                    // failed. Refresh before recycling source space in another batch.
+                    // failed. Refresh before rebuilding speculative physical cursors.
                     state = JobState.Scanning; progress = 0;
                     message = $"Refreshing allocation after {failedMoves - failuresBeforeBatch:N0} failed moves; continuing with other files";
-                    scanWork = new("Refreshing allocation", 0, 0, "clusters", ActiveWorkers: 1, PeakWorkers: 1, Detail: "Indeterminate bitmap refresh before source space can be reused.");
+                    scanWork = new("Refreshing allocation", 0, 0, "clusters", ActiveWorkers: 1, PeakWorkers: 1, Detail: "Indeterminate bitmap refresh before the physical plan can be rebuilt.");
                     Publish(true);
                     layout = layout with { Bitmap = volume.ReadBitmap(request, Checkpoint, token) };
                     scanWork = scanWork with { Phase = "Allocation refreshed", ActiveWorkers = 0, InFlightIo = 0 };
-                    // Skipped moves leave holes in the remembered plan order. Re-rank
-                    // current physical locations so the next pack batch fills them
-                    // from the tail instead of shifting already-packed files again.
-                    session.InvalidateCandidateOrder();
+                    // An ambiguous move invalidates speculative physical cursors.
+                    // Rebuild them from the verified bitmap before continuing.
+                    session.ResetPhysicalPlan();
                     layoutIndexDirty = true; MapAggregator.Build(layout, map); SaveLayoutIndex();
                 }
             }
             state = JobState.Scanning; progress = 0; scanWork = null;
             message = "Reconciling actual allocation after execution"; Publish(true);
+            session.ResetPhysicalPlan();
             ReleaseLayoutForRescan();
             layout = volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p);
             UpdateConditionMetrics();

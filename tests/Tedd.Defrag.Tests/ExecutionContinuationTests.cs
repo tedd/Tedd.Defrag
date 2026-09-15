@@ -35,15 +35,18 @@ public sealed class ExecutionContinuationTests
     }
 
     [Fact]
-    public void PackContinuesPastSixtyFourBatchesUntilTheLeadingHoleIsFilled()
+    public void PackFillsALeadingHoleDirectlyFromTheTail()
     {
         var volume = Volume(80, [File(32, [new(0, 1, 70)])]);
 
         var result = Run(volume, Request(Operation.Pack));
 
         Assert.Equal(JobState.Completed, result.State);
-        Assert.Equal(70, result.VerifiedMoves);
-        Assert.Equal(new Extent(0, 0, 70), Assert.Single(volume.Layout.Files[0].Extents));
+        Assert.Equal(1, result.VerifiedMoves);
+        var move = Assert.Single(volume.Attempts);
+        Assert.Equal(70, move.SourceLcn);
+        Assert.Equal(0, move.DestinationLcn);
+        Assert.Equal(70, BitmapOperations.CountRange(volume.Layout.Bitmap, 0, 70));
         Assert.Equal(70, BitmapOperations.CountAllocated(volume.Layout.Bitmap));
     }
 
@@ -61,7 +64,7 @@ public sealed class ExecutionContinuationTests
     }
 
     [Fact]
-    public void PackReusesCandidateOrderAcrossBoundedBatches()
+    public void PackReusesPhysicalAndFreeSpaceCursorsAcrossExecutionWindows()
     {
         var layout = ManyFiles(1100).Layout;
         var planner = new LayoutPlanner();
@@ -70,7 +73,10 @@ public sealed class ExecutionContinuationTests
 
         var first = planner.Plan(layout, Request(Operation.Pack), session: session, progress: p => phases.Add(p.Phase));
         Assert.Equal(1024, first.Moves.Length);
-        Assert.Contains("Sorting candidates", phases);
+        Assert.Contains("Indexing free space", phases);
+        Assert.Contains("Indexing physical extents", phases);
+        Assert.Contains("Ordering physical extents", phases);
+        Assert.DoesNotContain("Sorting candidates", phases);
         foreach (var move in first.Moves) LayoutMutation.Apply(layout, move);
 
         phases.Clear();
@@ -78,7 +84,50 @@ public sealed class ExecutionContinuationTests
 
         Assert.NotEmpty(second.Moves);
         Assert.DoesNotContain("Sorting candidates", phases);
-        Assert.Contains("Candidate order ready", phases);
+        Assert.DoesNotContain("Indexing free space", phases);
+        Assert.DoesNotContain("Indexing physical extents", phases);
+        Assert.Contains("Continuing pack plan", phases);
+    }
+
+    [Fact]
+    public void PackRadixOrdersLargePhysicalExtentColumnsFromTheTail()
+    {
+        var files = Enumerable.Range(0, 5000)
+            .Select(i => File((ulong)i + 32, [new(0, 10000 + i, 1)]))
+            .ToArray();
+        var layout = Volume(20000, files).Layout;
+        var phases = new List<string>();
+
+        var plan = new LayoutPlanner().Plan(layout, Request(Operation.Pack), session: new PlanningSession(), progress: p => phases.Add(p.Phase));
+
+        Assert.Equal(1024, plan.Moves.Length);
+        Assert.Equal(14999, plan.Moves[0].SourceLcn);
+        Assert.Equal(0, plan.Moves[0].DestinationLcn);
+        Assert.True(plan.Moves.Zip(plan.Moves.Skip(1)).All(pair => pair.First.SourceLcn > pair.Second.SourceLcn));
+        Assert.Contains("Ordering physical extents", phases);
+    }
+
+    [Fact]
+    public void PackProducesADenseAllocatedPrefixAcrossExecutionWindows()
+    {
+        const int totalClusters = 4000, allocatedClusters = 2000;
+        var positions = Enumerable.Range(allocatedClusters, allocatedClusters).ToArray();
+        var layout = Volume(totalClusters, positions.Select((lcn, index) => File((ulong)index + 32, [new(0, lcn, 1)])).ToArray()).Layout;
+        var planner = new LayoutPlanner();
+        var session = new PlanningSession();
+        int windows = 0;
+
+        while (true)
+        {
+            var plan = planner.Plan(layout, Request(Operation.Pack), session: session);
+            if (plan.Moves.Length == 0) break;
+            Assert.True(++windows < 10);
+            foreach (var move in plan.Moves) LayoutMutation.Apply(layout, move);
+        }
+
+        Assert.True(windows > 1);
+        Assert.Equal(allocatedClusters, BitmapOperations.CountRange(layout.Bitmap, 0, allocatedClusters));
+        Assert.Equal(allocatedClusters, BitmapOperations.CountAllocated(layout.Bitmap));
     }
 
     [Fact]
@@ -264,6 +313,27 @@ public sealed class ExecutionContinuationTests
         Assert.Equal(3, second.Moves.Count(m => m.FileId == old.FileId));
         Assert.Equal(0, second.FilesBlocked);
         Assert.Equal(513, second.FilesConsidered);
+    }
+
+    [Fact]
+    public void OrderedPassReusesItsImmutableCandidateColumnsAcrossBatches()
+    {
+        var layout = ManyFiles(1100).Layout;
+        var planner = new LayoutPlanner();
+        var session = new PlanningSession();
+        var phases = new List<string>();
+
+        var first = planner.Plan(layout, Request(Operation.Size), session: session, progress: p => phases.Add(p.Phase));
+        Assert.Equal(1024, first.Moves.Length);
+        Assert.Contains("Sorting candidates", phases);
+        foreach (var move in first.Moves) LayoutMutation.Apply(layout, move);
+
+        phases.Clear();
+        var second = planner.Plan(layout, Request(Operation.Size), session: session, progress: p => phases.Add(p.Phase));
+
+        Assert.NotEmpty(second.Moves);
+        Assert.DoesNotContain("Sorting candidates", phases);
+        Assert.Contains("Candidate order ready", phases);
     }
 
     private static JobRequest Request(Operation operation) => new()

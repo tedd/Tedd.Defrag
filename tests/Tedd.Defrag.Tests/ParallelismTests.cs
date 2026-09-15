@@ -160,7 +160,12 @@ public sealed class ParallelismTests
         var parallel = planner.Plan(layout, request with { Resources = request.Resources with { PlanningWorkers = 4 } }, progress: stages.Add);
         Assert.Equal(serial.Moves, parallel.Moves); Assert.Equal(serial.FilesConsidered, parallel.FilesConsidered);
         Assert.Equal(serial.FilesBlocked, parallel.FilesBlocked); Assert.Equal(serial.ClustersToMove, parallel.ClustersToMove);
-        Assert.Contains(stages, p => p.Phase == "Sorting candidates" && p.WorkerLimit == 4);
+        if (operation == Operation.Pack)
+        {
+            Assert.DoesNotContain(stages, p => p.Phase == "Sorting candidates");
+            Assert.Contains(stages, p => p.Phase == "Ordering physical extents" && p.Acceleration.Contains("radix sort"));
+        }
+        else Assert.Contains(stages, p => p.Phase == "Sorting candidates" && p.WorkerLimit == 4);
     }
 
     [Theory]
