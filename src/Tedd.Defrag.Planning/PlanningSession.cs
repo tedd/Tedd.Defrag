@@ -53,7 +53,7 @@ public sealed class PlanningSession : IDisposable
 
     public bool HasActivePlan(Operation operation) => operation == Operation.Pack
         ? _packPlan != null
-        : _candidateOperation == operation && _candidateOrder != null;
+        : _candidateOperation == operation && (_candidateOrder != null || _freeSpace != null);
 
     public void MoveVerified(PlannedMove move) => _freeSpace?.Release(move.SourceLcn, move.Clusters);
     public void MoveRejected(PlannedMove move) => _freeSpace?.Release(move.DestinationLcn, move.Clusters);

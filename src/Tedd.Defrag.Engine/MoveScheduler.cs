@@ -1,4 +1,5 @@
 using Tedd.Defrag.Core;
+using System.Buffers;
 
 namespace Tedd.Defrag.Engine;
 
@@ -33,23 +34,49 @@ internal static class MoveScheduler
             finally { report(done, 0, serialPeak); }
             return;
         }
-        var ready = new Queue<Queue<PlannedMove>>(moves.GroupBy(m => m.FileId).Select(g => new Queue<PlannedMove>(g)));
-        var active = new List<(Queue<PlannedMove> Sequence, PlannedMove Move, Task<Exception?> Task)>();
+        int capacity = Math.Max(1, moves.Length);
+        int[] next = ArrayPool<int>.Shared.Rent(capacity);
+        int[] heads = ArrayPool<int>.Shared.Rent(capacity);
+        int[] tails = ArrayPool<int>.Shared.Rent(capacity);
+        int[] remaining = ArrayPool<int>.Shared.Rent(capacity);
+        var ready = new Queue<int>(Math.Min(moves.Length, 4096));
+        var active = new List<(int Lane, PlannedMove Move, Task<Exception?> Task)>(depth);
         int finished = 0, peak = 0;
         try
         {
+            var lanes = new Dictionary<ulong, int>(moves.Length);
+            int laneCount = 0;
+            for (int moveIndex = 0; moveIndex < moves.Length; moveIndex++)
+            {
+                next[moveIndex] = -1;
+                ulong fileId = moves[moveIndex].FileId;
+                if (!lanes.TryGetValue(fileId, out int lane))
+                {
+                    lane = laneCount++;
+                    lanes.Add(fileId, lane);
+                    heads[lane] = tails[lane] = moveIndex;
+                    remaining[lane] = 1;
+                    ready.Enqueue(lane);
+                }
+                else
+                {
+                    next[tails[lane]] = moveIndex;
+                    tails[lane] = moveIndex;
+                    remaining[lane]++;
+                }
+            }
             while (ready.Count > 0 || active.Count > 0)
             {
                 checkpoint();
-                while (active.Count < depth && ready.TryDequeue(out var sequence)) Start(sequence);
+                while (active.Count < depth && ready.TryDequeue(out int lane)) Start(lane);
                 report(finished, active.Count, peak);
                 if (active.Count == 0) continue;
                 int index = active.FindIndex(x => x.Task.IsCompleted);
                 if (index < 0) { Task.WaitAny(active.Select(x => (Task)x.Task).ToArray(), 100); continue; }
-                var next = active[index]; active.RemoveAt(index);
-                complete(next.Move, next.Task.GetAwaiter().GetResult()); finished++;
+                var completedEntry = active[index]; active.RemoveAt(index);
+                complete(completedEntry.Move, completedEntry.Task.GetAwaiter().GetResult()); finished++;
                 // Keep each file sequence in its lane for locality, until completed or blocked.
-                checkpoint(); Start(next.Sequence);
+                checkpoint(); Start(completedEntry.Lane);
             }
         }
         finally
@@ -57,28 +84,35 @@ internal static class MoveScheduler
             // Cancellation, pause-boundary failure or journaling failure must not orphan native requests.
             // Apply every completed result before the volume can close or a terminal report is saved.
             Exception? drainError = null;
-            foreach (var next in active)
+            foreach (var pending in active)
             {
-                var error = next.Task.GetAwaiter().GetResult();
-                try { complete(next.Move, error); }
+                var error = pending.Task.GetAwaiter().GetResult();
+                try { complete(pending.Move, error); }
                 catch (Exception e) { drainError ??= e; }
                 finished++;
             }
             report(finished, 0, peak);
+            ArrayPool<int>.Shared.Return(next);
+            ArrayPool<int>.Shared.Return(heads);
+            ArrayPool<int>.Shared.Return(tails);
+            ArrayPool<int>.Shared.Return(remaining);
             if (drainError != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(drainError).Throw();
         }
-        void Start(Queue<PlannedMove> sequence)
+        void Start(int lane)
         {
-            if (sequence.Count == 0) return;
+            int moveIndex = heads[lane];
+            if (moveIndex < 0) return;
+            heads[lane] = next[moveIndex];
+            remaining[lane]--;
             checkpoint();
-            var move = sequence.Dequeue();
-            if (!prepare(move)) { finished += sequence.Count + 1; sequence.Clear(); return; }
+            var move = moves[moveIndex];
+            if (!prepare(move)) { finished += remaining[lane] + 1; remaining[lane] = 0; heads[lane] = -1; return; }
             var task = Task.Run<Exception?>(() =>
             {
                 try { execute(move); return null; }
                 catch (Exception e) { return e; }
             });
-            active.Add((sequence, move, task)); peak = Math.Max(peak, active.Count);
+            active.Add((lane, move, task)); peak = Math.Max(peak, active.Count);
         }
     }
 }

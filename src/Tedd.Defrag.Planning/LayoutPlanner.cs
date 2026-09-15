@@ -13,6 +13,7 @@ public sealed class LayoutPlanner
         var watch = Stopwatch.StartNew(); long lastReport = -1000;
         int peakWorkers = 0;
         int workers = WorkerPolicy.PlanningWorkers(request.Resources, layout.Files.Length);
+        int maximumMoves = checked(request.Resources.MoveQueueDepth * 1024);
         void Checkpoint() { cancellationToken.ThrowIfCancellationRequested(); checkpoint?.Invoke(); }
         void Report(string phase, long done, long total, string unit, int active = 1, int peak = 1, bool force = false)
         {
@@ -46,7 +47,6 @@ public sealed class LayoutPlanner
 
         if (request.Operation == Operation.Pack)
         {
-            const int maximumMoves = 1024;
             var pack = session?.PackPlan(layout.Files);
             if (pack == null)
             {
@@ -66,11 +66,11 @@ public sealed class LayoutPlanner
             var plan = pack.NextBatch(packRemaining, packChunk, maximumMoves);
             progress?.Invoke(new("Plan ready", pack.SourcesConsumed, pack.SourceCount, "physical extents", 1, 0, peakWorkers,
                 ElapsedMilliseconds: watch.ElapsedMilliseconds, Acceleration: WorkerPolicy.BitmapAcceleration + "; contiguous radix-ordered extents",
-                Detail: $"{plan.Moves.Length:N0} moves, {plan.ClustersToMove:N0} clusters, {plan.FilesBlocked:N0} constrained files. Physical cursors persist across 1,024-move execution windows."));
+                Detail: $"{plan.Moves.Length:N0} moves, {plan.ClustersToMove:N0} clusters, {plan.FilesBlocked:N0} constrained files. Physical cursors persist across {maximumMoves:N0}-move execution windows."));
             return plan;
         }
 
-        bool retainFreeSpace = request.Operation == Operation.MinimumWrite && session != null;
+        bool retainFreeSpace = session != null;
         var free = retainFreeSpace ? session!.FreeSpace(layout.Files, request.Operation) : null;
         if (free == null)
         {
@@ -81,7 +81,7 @@ public sealed class LayoutPlanner
         else Report("Free-space index ready", 1, 1, "allocation index", active: 0, peak: 0, force: true);
         using var freeOwner = retainFreeSpace ? null : free;
         bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
-        bool reusableOrder = request.Operation is Operation.MinimumWrite or Operation.PrepareShrink || ordered;
+        bool reusableOrder = session != null && request.Operation != Operation.PackAndDefrag;
         int[]? rememberedOrder = reusableOrder && session != null ? session.CandidateOrder(layout.Files, request.Operation) : null;
         using var orderOwner = rememberedOrder == null ? new PooledBuffer<int>(layout.Files.Length) : null;
         int[] order;
@@ -94,20 +94,14 @@ public sealed class LayoutPlanner
         }
         else
         {
-            if (request.Operation == Operation.MinimumWrite)
+            string indexPhase = request.Operation == Operation.MinimumWrite ? "Indexing defrag candidates" : "Indexing candidates";
+            Report(indexPhase, 0, layout.Files.Length, "files", force: true);
+            for (int index = 0; index < layout.Files.Length; index++)
             {
-                Report("Indexing defrag candidates", 0, layout.Files.Length, "files", force: true);
-                for (int index = 0; index < layout.Files.Length; index++)
-                {
-                    if ((index & 4095) == 0) { Checkpoint(); Report("Indexing defrag candidates", index, layout.Files.Length, "files"); }
-                    var file = layout.Files[index];
-                    if (rules.IsSelected(file.Path) && (file.Flags & (StreamFlags.Metadata | StreamFlags.Directory)) == 0
-                        && file.Size >= request.MinimumFileBytes && (request.MaximumFileBytes == 0 || file.Size <= request.MaximumFileBytes)
-                        && file.Extents.Length >= request.MinimumFragments) orderOwner!.Add(index);
-                }
-                Report("Indexing defrag candidates", layout.Files.Length, layout.Files.Length, "files", force: true);
+                if ((index & 4095) == 0) { Checkpoint(); Report(indexPhase, index, layout.Files.Length, "files"); }
+                if (IsCandidate(layout.Files[index])) orderOwner!.Add(index);
             }
-            else for (int index = 0; index < layout.Files.Length; index++) orderOwner!.Add(index);
+            Report(indexPhase, layout.Files.Length, layout.Files.Length, "files", force: true);
             orderCount = orderOwner!.Count;
             workers = WorkerPolicy.PlanningWorkers(request.Resources, orderCount);
             long sortWork = (long)orderCount * (workers > 1 ? 2 : 1);
@@ -116,42 +110,46 @@ public sealed class LayoutPlanner
             double[]? scoreKeys = null;
             string[]? textKeys = null;
             string[]? pathKeys = null;
+            int[]? fileIndices = null;
             bool descendingInteger = false;
             try
             {
+                fileIndices = ArrayPool<int>.Shared.Rent(Math.Max(1, orderCount));
+                orderOwner.Span.CopyTo(fileIndices);
+                for (int position = 0; position < orderCount; position++) orderOwner.Array[position] = position;
                 if (request.Operation is Operation.Size or Operation.Created or Operation.Modified or Operation.PrepareShrink)
                 {
-                    integerKeys = ArrayPool<long>.Shared.Rent(Math.Max(1, layout.Files.Length));
+                    integerKeys = ArrayPool<long>.Shared.Rent(Math.Max(1, orderCount));
                     descendingInteger = request.Operation == Operation.PrepareShrink;
-                    for (int index = 0; index < layout.Files.Length; index++) integerKeys[index] = request.Operation switch
+                    for (int position = 0; position < orderCount; position++)
                     {
-                        Operation.Size => layout.Files[index].Size,
-                        Operation.Created => layout.Files[index].CreatedUtcTicks,
-                        Operation.Modified => layout.Files[index].ModifiedUtcTicks,
-                        _ => HighestLcn(layout.Files[index])
-                    };
+                        var file = layout.Files[fileIndices[position]];
+                        integerKeys[position] = request.Operation switch
+                        {
+                            Operation.Size => file.Size,
+                            Operation.Created => file.CreatedUtcTicks,
+                            Operation.Modified => file.ModifiedUtcTicks,
+                            _ => HighestLcn(file)
+                        };
+                    }
                 }
                 else if (request.Operation is Operation.Alphabetical or Operation.Extension or Operation.DirectoryLocality)
                 {
-                    pathKeys = ArrayPool<string>.Shared.Rent(Math.Max(1, layout.Files.Length));
-                    if (request.Operation != Operation.Alphabetical) textKeys = ArrayPool<string>.Shared.Rent(Math.Max(1, layout.Files.Length));
+                    pathKeys = ArrayPool<string>.Shared.Rent(Math.Max(1, orderCount));
+                    if (request.Operation != Operation.Alphabetical) textKeys = ArrayPool<string>.Shared.Rent(Math.Max(1, orderCount));
                     else textKeys = pathKeys;
-                    for (int index = 0; index < layout.Files.Length; index++)
+                    for (int position = 0; position < orderCount; position++)
                     {
-                        string path = layout.Files[index].Path;
-                        pathKeys[index] = path;
-                        if (!ReferenceEquals(textKeys, pathKeys)) textKeys[index] = request.Operation == Operation.Extension
+                        string path = layout.Files[fileIndices[position]].Path;
+                        pathKeys[position] = path;
+                        if (!ReferenceEquals(textKeys, pathKeys)) textKeys[position] = request.Operation == Operation.Extension
                             ? Path.GetExtension(path) : Path.GetDirectoryName(path) ?? "";
                     }
                 }
                 else
                 {
-                    scoreKeys = ArrayPool<double>.Shared.Rent(Math.Max(1, layout.Files.Length));
-                    if (request.Operation == Operation.MinimumWrite)
-                    {
-                        foreach (int index in orderOwner.Span) scoreKeys[index] = Score(layout.Files[index]);
-                    }
-                    else for (int index = 0; index < layout.Files.Length; index++) scoreKeys[index] = Score(layout.Files[index]);
+                    scoreKeys = ArrayPool<double>.Shared.Rent(Math.Max(1, orderCount));
+                    for (int position = 0; position < orderCount; position++) scoreKeys[position] = Score(layout.Files[fileIndices[position]]);
                 }
 
                 ParallelOrder.Sort(orderOwner.Array, orderCount, workers, (a, b) =>
@@ -163,8 +161,9 @@ public sealed class LayoutPlanner
                     if (comparison == 0 && pathKeys != null && !ReferenceEquals(textKeys, pathKeys))
                         comparison = StringComparer.OrdinalIgnoreCase.Compare(pathKeys[a], pathKeys[b]);
                     // Stable ties are required when a pass resumes in a later batch.
-                    return comparison != 0 ? comparison : a.CompareTo(b);
+                    return comparison != 0 ? comparison : fileIndices[a].CompareTo(fileIndices[b]);
                 }, (done, active, peak) => Report("Sorting candidates", done, sortWork, "sort / merge entries", active, peak), Checkpoint, cancellationToken);
+                for (int position = 0; position < orderCount; position++) orderOwner.Array[position] = fileIndices[orderOwner.Array[position]];
             }
             finally
             {
@@ -172,6 +171,7 @@ public sealed class LayoutPlanner
                 if (scoreKeys != null) ArrayPool<double>.Shared.Return(scoreKeys);
                 if (textKeys != null && !ReferenceEquals(textKeys, pathKeys)) ArrayPool<string>.Shared.Return(textKeys, clearArray: true);
                 if (pathKeys != null) ArrayPool<string>.Shared.Return(pathKeys, clearArray: true);
+                if (fileIndices != null) ArrayPool<int>.Shared.Return(fileIndices);
             }
             if (reusableOrder && session != null)
             {
@@ -180,7 +180,7 @@ public sealed class LayoutPlanner
             }
             else order = orderOwner.Array;
         }
-        using var moves = new PooledBuffer<PlannedMove>(1024);
+        using var moves = new PooledBuffer<PlannedMove>(maximumMoves);
         long remaining = request.MaxMoveBytes == 0 ? long.MaxValue : request.MaxMoveBytes / layout.Volume.BytesPerCluster;
         long planned = 0, cursor = ordered ? session?.DestinationCursor ?? 0 : 0;
         long chunk = Math.Max(1, 16L * 1024 * 1024 / layout.Volume.BytesPerCluster);
@@ -213,7 +213,7 @@ public sealed class LayoutPlanner
                 void PlanExtent(Extent e)
                 {
                     long offset = boundary < e.End ? Math.Max(0, boundary - e.Lcn) : e.Length;
-                    while (offset < e.Length && remaining > 0 && moves.Count < 1024)
+                    while (offset < e.Length && remaining > 0 && moves.Count < maximumMoves)
                     {
                         long size = Math.Min(Math.Min(chunk, e.Length - offset), remaining);
                         long target = free.FindFirstFit(1, Math.Min(e.Lcn + offset, boundary));
@@ -245,7 +245,7 @@ public sealed class LayoutPlanner
                 long tailMoves = 0;
                 for (int extentIndex = 1; extentIndex < extents.Length; extentIndex++)
                     tailMoves += (extents[extentIndex].Length - 1) / chunk + 1;
-                if (!ordered && extents.Length > 1 && tail <= remaining && free.Contains(extents[0].End, tail) && tailMoves <= 1024 - moves.Count)
+                if (!ordered && extents.Length > 1 && tail <= remaining && free.Contains(extents[0].End, tail) && tailMoves <= maximumMoves - moves.Count)
                 {
                     long destination = extents[0].End;
                     for (int i = 1; i < extents.Length; i++) MoveExtent(extents[i], ref destination);
@@ -256,7 +256,7 @@ public sealed class LayoutPlanner
                     long target = free.FindFirstFit(total, before, ordered ? cursor : 0);
                     long requiredMoves = 0;
                     foreach (var extent in extents) requiredMoves += (extent.Length - 1) / chunk + 1;
-                    if (ordered && session != null && target >= 0 && requiredMoves <= 1024 && requiredMoves > 1024 - moves.Count)
+                    if (ordered && session != null && target >= 0 && requiredMoves <= maximumMoves && requiredMoves > maximumMoves - moves.Count)
                     {
                         // This file fits a fresh batch. Resume here instead of dropping it
                         // merely because preceding files consumed this batch's capacity.
@@ -264,7 +264,7 @@ public sealed class LayoutPlanner
                         considered--;
                         break;
                     }
-                    if (target < 0 || requiredMoves > 1024 - moves.Count) { blocked++; continue; }
+                    if (target < 0 || requiredMoves > maximumMoves - moves.Count) { blocked++; continue; }
                     foreach (var extent in extents) MoveExtent(extent, ref target);
                     if (ordered) cursor = target;
                 }
@@ -280,7 +280,7 @@ public sealed class LayoutPlanner
                     }
                 }
             }
-            if (moves.Count >= 1024 || remaining <= 0) break;
+            if (moves.Count >= maximumMoves || remaining <= 0) break;
         }
         if (ordered && session != null)
         {
@@ -290,7 +290,7 @@ public sealed class LayoutPlanner
         }
         progress?.Invoke(new("Plan ready", considered, orderCount, "considered files", workers, 0, peakWorkers,
             ElapsedMilliseconds: watch.ElapsedMilliseconds, Acceleration: WorkerPolicy.BitmapAcceleration + "; scalar sort / placement",
-            Detail: $"{moves.Count:N0} moves, {planned:N0} clusters, {blocked:N0} constrained files. At most 1,024 moves per batch."));
+            Detail: $"{moves.Count:N0} moves, {planned:N0} clusters, {blocked:N0} constrained files. Up to {maximumMoves:N0} moves feed a continuously replenished execution queue."));
         return new(moves.ToArray(), planned, considered, blocked,
             "Bounded free-destination plan. Existing anchors are preserved where possible; excluded objects are never moved. Constraints may prevent full packing or ordering.");
 
@@ -300,6 +300,16 @@ public sealed class LayoutPlanner
             moves.Add(new(id, index, vcn, source, destination, count));
             planned += count; remaining -= count;
             // Source space is deliberately not recycled in this batch: failed moves cannot invalidate downstream destinations.
+        }
+
+        bool IsCandidate(FileLayout file)
+        {
+            if (!rules.IsSelected(file.Path)) return false;
+            bool metadata = (file.Flags & StreamFlags.Metadata) != 0, directory = (file.Flags & StreamFlags.Directory) != 0;
+            if (request.Operation == Operation.OptimizeMft ? (file.FileId & 0xFFFFFFFFFFFF) != 0 : metadata) return false;
+            if (request.Operation == Operation.DirectoryIndexes ? !directory : directory && request.Operation != Operation.DirectoryLocality) return false;
+            if (file.Size < request.MinimumFileBytes || request.MaximumFileBytes > 0 && file.Size > request.MaximumFileBytes) return false;
+            return request.Operation is not (Operation.MinimumWrite or Operation.FilesOnly) || file.Extents.Length >= request.MinimumFragments;
         }
     }
     private static long HighestLcn(FileLayout file)

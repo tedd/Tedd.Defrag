@@ -69,7 +69,7 @@ public sealed class ExecutionContinuationTests
     {
         var layout = ManyFiles(1100).Layout;
         var planner = new LayoutPlanner();
-        var session = new PlanningSession();
+        using var session = new PlanningSession();
         var phases = new List<string>();
 
         var first = planner.Plan(layout, Request(Operation.Pack), session: session, progress: p => phases.Add(p.Phase));
@@ -219,7 +219,7 @@ public sealed class ExecutionContinuationTests
         var positions = Enumerable.Range(allocatedClusters, allocatedClusters).ToArray();
         var layout = Volume(totalClusters, positions.Select((lcn, index) => File((ulong)index + 32, [new(0, lcn, 1)])).ToArray()).Layout;
         var planner = new LayoutPlanner();
-        var session = new PlanningSession();
+        using var session = new PlanningSession();
         int windows = 0;
 
         while (true)
@@ -373,7 +373,7 @@ public sealed class ExecutionContinuationTests
     {
         var layout = ManyFiles(1100).Layout;
         var planner = new LayoutPlanner();
-        var session = new PlanningSession();
+        using var session = new PlanningSession();
         var visits = new Dictionary<ulong, int>();
         long previousDestination = -1;
         int batches = 0;
@@ -388,6 +388,7 @@ public sealed class ExecutionContinuationTests
                 Assert.True(move.DestinationLcn > previousDestination);
                 previousDestination = move.DestinationLcn;
                 LayoutMutation.Apply(layout, move);
+                session.MoveVerified(move);
             }
         }
         Assert.True(batches > 1);
@@ -407,11 +408,11 @@ public sealed class ExecutionContinuationTests
         var extra = new Extent(2, 19000, 1);
         layout.Files[511] = old with { Extents = [.. old.Extents, extra], Size = 3 * 4096 };
         BitmapOperations.SetRange(layout.Bitmap, extra.Lcn, extra.Length, true);
-        var planner = new LayoutPlanner(); var session = new PlanningSession();
+        var planner = new LayoutPlanner(); using var session = new PlanningSession();
 
         var first = planner.Plan(layout, Request(Operation.Alphabetical), session: session);
         Assert.Equal(1022, first.Moves.Length);
-        foreach (var move in first.Moves) LayoutMutation.Apply(layout, move);
+        foreach (var move in first.Moves) { LayoutMutation.Apply(layout, move); session.MoveVerified(move); }
         var second = planner.Plan(layout, Request(Operation.Alphabetical), session: session);
 
         Assert.Equal(old.FileId, second.Moves[0].FileId);
@@ -425,20 +426,80 @@ public sealed class ExecutionContinuationTests
     {
         var layout = ManyFiles(1100).Layout;
         var planner = new LayoutPlanner();
-        var session = new PlanningSession();
+        using var session = new PlanningSession();
         var phases = new List<string>();
 
         var first = planner.Plan(layout, Request(Operation.Size), session: session, progress: p => phases.Add(p.Phase));
         Assert.Equal(1024, first.Moves.Length);
         Assert.Contains("Sorting candidates", phases);
-        foreach (var move in first.Moves) LayoutMutation.Apply(layout, move);
+        foreach (var move in first.Moves) { LayoutMutation.Apply(layout, move); session.MoveVerified(move); }
 
         phases.Clear();
         var second = planner.Plan(layout, Request(Operation.Size), session: session, progress: p => phases.Add(p.Phase));
 
         Assert.NotEmpty(second.Moves);
         Assert.DoesNotContain("Sorting candidates", phases);
+        Assert.DoesNotContain("Indexing free space", phases);
         Assert.Contains("Candidate order ready", phases);
+    }
+
+    [Theory]
+    [InlineData(Operation.FilesOnly)]
+    [InlineData(Operation.PrepareShrink)]
+    public void StablePoliciesRetainCandidateAndAllocationIndexesAcrossWindows(Operation operation)
+    {
+        var layout = ManyFiles(1100).Layout;
+        var planner = new LayoutPlanner();
+        using var session = new PlanningSession();
+        var request = Request(operation) with { ShrinkBoundaryBytes = 10000L * 4096 };
+        var first = planner.Plan(layout, request, session: session);
+        Assert.Equal(1024, first.Moves.Length);
+        foreach (var move in first.Moves) { LayoutMutation.Apply(layout, move); session.MoveVerified(move); }
+        var phases = new List<string>();
+
+        var second = planner.Plan(layout, request, session: session, progress: p => phases.Add(p.Phase));
+
+        Assert.NotEmpty(second.Moves);
+        Assert.DoesNotContain("Indexing free space", phases);
+        Assert.DoesNotContain("Indexing candidates", phases);
+        Assert.DoesNotContain("Sorting candidates", phases);
+        Assert.Contains("Candidate order ready", phases);
+    }
+
+    [Fact]
+    public void DynamicPackAndDefragRetainsItsAllocationIndexAcrossWindows()
+    {
+        var layout = ManyFiles(1100).Layout;
+        var planner = new LayoutPlanner();
+        using var session = new PlanningSession();
+        var first = planner.Plan(layout, Request(Operation.PackAndDefrag), session: session);
+        foreach (var move in first.Moves) { LayoutMutation.Apply(layout, move); session.MoveVerified(move); }
+        var phases = new List<string>();
+
+        var second = planner.Plan(layout, Request(Operation.PackAndDefrag), session: session, progress: p => phases.Add(p.Phase));
+
+        Assert.NotEmpty(second.Moves);
+        Assert.DoesNotContain("Indexing free space", phases);
+        Assert.Contains("Free-space index ready", phases);
+        Assert.Contains("Sorting candidates", phases);
+    }
+
+    [Theory]
+    [InlineData(Operation.MinimumWrite)]
+    [InlineData(Operation.FilesOnly)]
+    [InlineData(Operation.Pack)]
+    [InlineData(Operation.PackAndDefrag)]
+    [InlineData(Operation.Alphabetical)]
+    public void ExecutionWindowScalesWithMoveQueueDepth(Operation operation)
+    {
+        var files = Enumerable.Range(0, 5000)
+            .Select(index => File((ulong)index + 32, [new(0, 10000 + index * 4, 1), new(1, 10002 + index * 4, 1)]))
+            .ToArray();
+        var request = Request(operation) with { Resources = Request(operation).Resources with { MoveQueueDepth = 4 } };
+
+        var plan = new LayoutPlanner().Plan(Volume(32000, files).Layout, request);
+
+        Assert.Equal(4096, plan.Moves.Length);
     }
 
     [Fact]
