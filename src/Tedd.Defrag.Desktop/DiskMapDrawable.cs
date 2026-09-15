@@ -6,12 +6,15 @@ namespace Tedd.Defrag.Desktop;
 /// <summary>One retained surface, bounded cells, cached palette; draw traversal creates no objects.</summary>
 public sealed class DiskMapDrawable : IDrawable
 {
+    private static readonly Color HighlightColor = Color.FromArgb("#FFD45A");
     public MapCell[] Cells { get; set; } = [];
     public string EmptyMessage { get; set; } = "Select a volume to begin.";
     public long StartCluster { get; private set; }
     public long ClusterCount { get; private set; }
     public long TotalClusters { get; private set; }
     private readonly Dictionary<uint, Color> _colors = [];
+    private readonly Dictionary<uint, List<int>> _fillGroups = [];
+    private readonly List<uint> _activeFillGroups = [];
     private readonly HashSet<int> _highlightedCells = [];
     private float _width, _height;
     private int _columns, _rows;
@@ -83,39 +86,68 @@ public sealed class DiskMapDrawable : IDrawable
         _columns = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(n * _width / Math.Max(1, _height))));
         _rows = Math.Max(1, (n + _columns - 1) / _columns);
         float cw = _width / _columns, ch = _height / _rows;
-        for (int y = 0; y < _rows; y++) for (int x = 0; x < _columns; x++)
+        ClearFillGroups();
+        for (int index = 0; index < n; index++)
         {
-            int slot = y * _columns + x;
-            if (slot >= n) continue;
-            int index = slot;
-            var cell = Cells[index];
-            uint key = MapAggregator.Color(cell);
-            // The few non-quantized colors can be cached once on arrival; normal draw passes allocate nothing.
+            uint key = MapAggregator.Color(Cells[index]);
             if (!_colors.TryGetValue(key, out var color)) _colors[key] = color = Color.FromUint(key);
-            canvas.FillColor = color;
-            canvas.FillRoundedRectangle(x * cw + 1, y * ch + 1, Math.Max(1, cw - 2), Math.Max(1, ch - 2), Math.Min(1.6f, cw / 4));
-            if (_highlightedCells.Contains(index))
+            if (!_fillGroups.TryGetValue(key, out var group)) _fillGroups[key] = group = [];
+            if (group.Count == 0) _activeFillGroups.Add(key);
+            group.Add(index);
+        }
+        float radius = Math.Min(1.6f, cw / 4);
+        foreach (uint key in _activeFillGroups)
+        {
+            canvas.FillColor = _colors[key];
+            foreach (int index in _fillGroups[key])
             {
-                canvas.StrokeColor = Color.FromArgb("#FFD45A"); canvas.StrokeSize = Math.Min(3, Math.Max(1, cw / 4));
-                canvas.DrawRoundedRectangle(x * cw + .5f, y * ch + .5f, Math.Max(1, cw - 1), Math.Max(1, ch - 1), Math.Min(1.6f, cw / 4));
+                int x = index % _columns, y = index / _columns;
+                canvas.FillRoundedRectangle(x * cw + 1, y * ch + 1, Math.Max(1, cw - 2), Math.Max(1, ch - 2), radius);
             }
-            if (_selectionStart >= 0 && index >= Math.Min(_selectionStart, _selectionEnd) && index <= Math.Max(_selectionStart, _selectionEnd))
+        }
+        if (_highlightedCells.Count > 0)
+        {
+            canvas.StrokeColor = HighlightColor; canvas.StrokeSize = Math.Min(3, Math.Max(1, cw / 4));
+            foreach (int index in _highlightedCells)
             {
-                canvas.StrokeColor = Colors.White; canvas.StrokeSize = 1;
+                if (index < 0 || index >= n) continue;
+                int x = index % _columns, y = index / _columns;
+                canvas.DrawRoundedRectangle(x * cw + .5f, y * ch + .5f, Math.Max(1, cw - 1), Math.Max(1, ch - 1), radius);
+            }
+        }
+        if (_selectionStart >= 0)
+        {
+            canvas.StrokeColor = Colors.White; canvas.StrokeSize = 1;
+            int first = Math.Max(0, Math.Min(_selectionStart, _selectionEnd));
+            int last = Math.Min(n - 1, Math.Max(_selectionStart, _selectionEnd));
+            for (int index = first; index <= last; index++)
+            {
+                int x = index % _columns, y = index / _columns;
                 canvas.DrawRectangle(x * cw + .5f, y * ch + .5f, Math.Max(1, cw - 1), Math.Max(1, ch - 1));
             }
         }
+    }
+
+    private void ClearFillGroups()
+    {
+        foreach (uint key in _activeFillGroups) _fillGroups[key].Clear();
+        _activeFillGroups.Clear();
     }
 }
 
 /// <summary>A linear whole-volume navigator; horizontal position always corresponds to LCN.</summary>
 public sealed class MapOverviewDrawable : IDrawable
 {
+    private static readonly Color BackgroundColor = Color.FromArgb("#172531");
+    private static readonly Color ViewportShadeColor = Color.FromArgb("#99111B24");
+    private static readonly Color ViewportAccentColor = Color.FromArgb("#FFD45A");
     public MapCell[] Cells { get; set; } = [];
     public long TotalClusters { get; set; }
     public long StartCluster { get; set; }
     public long ClusterCount { get; set; }
     private readonly Dictionary<uint, Color> _colors = [];
+    private readonly Dictionary<uint, List<int>> _fillGroups = [];
+    private readonly List<uint> _activeFillGroups = [];
     private float _width;
 
     public long ClusterAt(float x)
@@ -127,26 +159,41 @@ public sealed class MapOverviewDrawable : IDrawable
     public void Draw(ICanvas canvas, RectF dirtyRect)
     {
         _width = dirtyRect.Width;
-        canvas.FillColor = Color.FromArgb("#172531"); canvas.FillRectangle(dirtyRect);
+        canvas.FillColor = BackgroundColor; canvas.FillRectangle(dirtyRect);
         if (Cells.Length == 0 || TotalClusters <= 0) return;
         int columns = Math.Max(1, (int)Math.Ceiling(dirtyRect.Width));
         float width = dirtyRect.Width / columns;
+        ClearFillGroups();
         for (int x = 0; x < columns; x++)
         {
             int index = Math.Min(Cells.Length - 1, (int)((long)x * Cells.Length / columns));
             uint key = MapAggregator.Color(Cells[index]);
             if (!_colors.TryGetValue(key, out var color)) _colors[key] = color = Color.FromUint(key);
-            canvas.FillColor = color; canvas.FillRectangle(x * width, 0, Math.Max(1, width), dirtyRect.Height);
+            if (!_fillGroups.TryGetValue(key, out var group)) _fillGroups[key] = group = [];
+            if (group.Count == 0) _activeFillGroups.Add(key);
+            group.Add(x);
+        }
+        foreach (uint key in _activeFillGroups)
+        {
+            canvas.FillColor = _colors[key];
+            foreach (int x in _fillGroups[key])
+                canvas.FillRectangle(x * width, 0, Math.Max(1, width), dirtyRect.Height);
         }
         float left = (float)StartCluster / TotalClusters * dirtyRect.Width;
         float right = (float)(StartCluster + ClusterCount) / TotalClusters * dirtyRect.Width;
-        canvas.FillColor = Color.FromArgb("#99111B24");
+        canvas.FillColor = ViewportShadeColor;
         if (left > 0) canvas.FillRectangle(0, 0, left, dirtyRect.Height);
         if (right < dirtyRect.Width) canvas.FillRectangle(right, 0, dirtyRect.Width - right, dirtyRect.Height);
-        canvas.StrokeColor = Color.FromArgb("#FFD45A"); canvas.StrokeSize = 2;
+        canvas.StrokeColor = ViewportAccentColor; canvas.StrokeSize = 2;
         canvas.DrawRectangle(left, 1, Math.Max(2, right - left), Math.Max(1, dirtyRect.Height - 2));
         float center = (left + right) / 2;
         var marker = new PathF(); marker.MoveTo(center - 6, 0); marker.LineTo(center + 6, 0); marker.LineTo(center, 8); marker.Close();
-        canvas.FillColor = Color.FromArgb("#FFD45A"); canvas.FillPath(marker);
+        canvas.FillColor = ViewportAccentColor; canvas.FillPath(marker);
+    }
+
+    private void ClearFillGroups()
+    {
+        foreach (uint key in _activeFillGroups) _fillGroups[key].Clear();
+        _activeFillGroups.Clear();
     }
 }
