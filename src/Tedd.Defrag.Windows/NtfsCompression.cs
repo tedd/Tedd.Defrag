@@ -27,17 +27,22 @@ public static class NtfsCompression
 {
     public static CompressionResult Run(JobRequest request, VolumeInfo volume, Action<CompressionProgress> progress,
         Action checkpoint, CancellationToken token)
+        => Run(request, volume, progress, checkpoint, token, _ => new NativeCompressionPlatform(volume.Root));
+
+    internal static CompressionResult Run(JobRequest request, VolumeInfo volume, Action<CompressionProgress> progress,
+        Action checkpoint, CancellationToken token, Func<string, ICompressionPlatform> platformForPath)
     {
         if (request.CompressionTargets.Length == 0) return CompressionResult.Empty;
         if (!volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException($"Compression targets require NTFS; {volume.Root} uses {volume.FileSystem}.");
 
         var warnings = new List<string>();
-        var platform = new NativeCompressionPlatform(volume.Root);
         string[] excludedExtensions = request.CompressionExcludedExtensions.Select(CompressionFileTypes.Normalize)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         int matched = 0, changed = 0, skipped = 0, failed = 0;
         long bytesTotal = 0, bytesProcessed = 0, bytesSaved = 0;
+        var active = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        object stateLock = new();
         using var awake = request.Preview ? null : new ExecutionStateScope();
         var candidates = new List<(string Path, CompressionMode Mode, long Size)>();
         Report("Finding compression candidates", null);
@@ -56,44 +61,73 @@ public static class NtfsCompression
         }
         matched = candidates.Count;
         Report(request.Preview ? "Compression preview ready" : "Compression queue ready", null);
-        foreach (var candidate in candidates)
-        {
-            token.ThrowIfCancellationRequested(); checkpoint();
-            try
-            {
-                if (request.Preview)
-                {
-                    Report("Inspecting compression target", candidate.Path, candidate.Size);
-                    skipped++;
-                }
-                else
-                {
-                    var outcome = CompressionFileProcessor.Apply(candidate.Path, candidate.Mode, platform,
-                        status => Report(status, candidate.Path, candidate.Size));
-                    if (outcome.Changed) { changed++; bytesSaved += outcome.BytesSaved; }
-                    else skipped++;
-                }
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception or COMException or NotSupportedException)
-            {
-                failed++;
-                if (warnings.Count < 50) warnings.Add($"{candidate.Path}: {error.Message}");
-            }
-            bytesProcessed = checked(bytesProcessed + candidate.Size);
-            Report(request.Preview ? "Compression target inspected" : "Compression target processed", null);
-        }
+        int nextCandidate = -1;
+        int workerCount = Math.Min(candidates.Count, WorkerPolicy.CompressionWorkers(request.Resources));
+        Task[] workers = Enumerable.Range(0, workerCount).Select(_ => Task.Run(ProcessCandidates)).ToArray();
+        Task.WhenAll(workers).GetAwaiter().GetResult();
         Report(candidates.Count == 0 ? "No matching compression targets" :
             request.Preview ? "Compression preview complete" : "Compression complete", null);
         return new(matched, changed, skipped, failed, bytesSaved, warnings.ToArray());
 
-        void Report(string status, string? path, long activeBytes = 0)
+        void ProcessCandidates()
         {
-            int filesProcessed = changed + skipped + failed;
-            bool active = path != null && status is not "Finding compression candidates";
-            int waiting = Math.Max(0, candidates.Count - filesProcessed - (active ? 1 : 0));
-            long waitingBytes = Math.Max(0, bytesTotal - bytesProcessed - (active ? activeBytes : 0));
-            progress(new(status, path, candidates.Count, filesProcessed, waiting, changed, skipped, failed,
-                bytesTotal, bytesProcessed, waitingBytes, bytesSaved));
+            while (true)
+            {
+                int index = Interlocked.Increment(ref nextCandidate);
+                if (index >= candidates.Count) return;
+                var candidate = candidates[index];
+                lock (stateLock)
+                {
+                    token.ThrowIfCancellationRequested();
+                    checkpoint();
+                    active.Add(candidate.Path, candidate.Size);
+                }
+                try
+                {
+                    if (request.Preview)
+                    {
+                        Report("Inspecting compression target", candidate.Path);
+                        lock (stateLock) skipped++;
+                    }
+                    else
+                    {
+                        var outcome = CompressionFileProcessor.Apply(candidate.Path, candidate.Mode, platformForPath(candidate.Path),
+                            status => Report(status, candidate.Path));
+                        lock (stateLock)
+                        {
+                            if (outcome.Changed) { changed++; bytesSaved += outcome.BytesSaved; }
+                            else skipped++;
+                        }
+                    }
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception or COMException or NotSupportedException)
+                {
+                    lock (stateLock)
+                    {
+                        failed++;
+                        if (warnings.Count < 50) warnings.Add($"{candidate.Path}: {error.Message}");
+                    }
+                }
+                lock (stateLock)
+                {
+                    active.Remove(candidate.Path);
+                    bytesProcessed = checked(bytesProcessed + candidate.Size);
+                }
+                Report(request.Preview ? "Compression target inspected" : "Compression target processed", null);
+            }
+        }
+
+        void Report(string status, string? path)
+        {
+            lock (stateLock)
+            {
+                int filesProcessed = changed + skipped + failed;
+                int waiting = Math.Max(0, candidates.Count - filesProcessed - active.Count);
+                long activeBytes = active.Values.Sum();
+                long waitingBytes = Math.Max(0, bytesTotal - bytesProcessed - activeBytes);
+                progress(new(status, path, candidates.Count, filesProcessed, waiting, changed, skipped, failed,
+                    bytesTotal, bytesProcessed, waitingBytes, bytesSaved));
+            }
         }
     }
 

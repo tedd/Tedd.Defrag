@@ -21,6 +21,9 @@ public static class WorkerPolicy
         if (policy.AffinityMask != 0) eligible = Math.Min(eligible, BitOperations.PopCount(policy.AffinityMask));
         return Math.Clamp((int)Math.Ceiling(eligible * policy.CpuPercent / 100d), 1, 32);
     }
+    public static int CompressionWorkers(ResourcePolicy policy) => policy.CompressionWorkers > 0
+        ? policy.CompressionWorkers
+        : Math.Min(policy.Background ? 2 : 4, CpuWorkers(policy));
     public static int ScanWorkers(ResourcePolicy policy)
     {
         int workers = policy.ScanWorkers > 0 ? policy.ScanWorkers : Math.Min(policy.Background ? 2 : 4, CpuWorkers(policy));

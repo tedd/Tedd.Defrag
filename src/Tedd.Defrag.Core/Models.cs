@@ -96,18 +96,19 @@ public sealed record ResourcePolicy
     public int IdleSeconds { get; init; } = 600;
     public bool AcOnly { get; init; } = true;
     public int MapCells { get; init; } = 8192;
+    public int CompressionWorkers { get; init; }
     public int ScanWorkers { get; init; }
     public int PlanningWorkers { get; init; }
     public int MoveQueueDepth { get; init; } = 1;
-    public static ResourcePolicy Quiet => new() { MemoryMiB = 512, CpuPercent = 10, IoMiBPerSecond = 8, IdleOnly = true, ScanWorkers = 1, PlanningWorkers = 1 };
+    public static ResourcePolicy Quiet => new() { MemoryMiB = 512, CpuPercent = 10, IoMiBPerSecond = 8, IdleOnly = true, CompressionWorkers = 1, ScanWorkers = 1, PlanningWorkers = 1 };
     public static ResourcePolicy Balanced => new();
     public static ResourcePolicy Performance => new() { CpuPercent = 100, Background = false, AcOnly = false, MoveQueueDepth = 16 };
     public void Validate()
     {
         if ((MemoryMiB != 0 && MemoryMiB < 256) || CpuPercent is < 1 or > 100 || IoMiBPerSecond < 0 ||
             IdleSeconds is < 1 or > 86400 || MapCells is < 256 or > 65536 ||
-            ScanWorkers is < 0 or > 32 || PlanningWorkers is < 0 or > 32 || MoveQueueDepth is < 1 or > 16)
-            throw new ArgumentException("Resource policy is out of range (memory 0 or at least 256 MiB, CPU 1–100%, I/O 0 or greater, scan/planning workers 0–32, move queue 1–16).");
+            CompressionWorkers is < 0 or > 32 || ScanWorkers is < 0 or > 32 || PlanningWorkers is < 0 or > 32 || MoveQueueDepth is < 1 or > 16)
+            throw new ArgumentException("Resource policy is out of range (memory 0 or at least 256 MiB, CPU 1–100%, I/O 0 or greater, compression/scan/planning workers 0–32, move queue 1–16).");
     }
 }
 public sealed record JobRequest

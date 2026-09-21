@@ -162,6 +162,66 @@ public sealed class CompressionTests
     }
 
     [Fact]
+    public void SmallestKeepsLastTestedLzxWhenItWins()
+    {
+        var platform = new FakePlatform(100);
+        platform.Sizes[CompressionMode.Xpress4K] = 70;
+        platform.Sizes[CompressionMode.Xpress8K] = 60;
+        platform.Sizes[CompressionMode.Xpress16K] = 50;
+        platform.Sizes[CompressionMode.Lzx] = 40;
+
+        var result = CompressionFileProcessor.Apply("file", CompressionMode.Smallest, platform);
+
+        Assert.True(result.Changed);
+        Assert.Equal(60, result.BytesSaved);
+        Assert.Equal([CompressionMode.Xpress4K, CompressionMode.Xpress8K, CompressionMode.Xpress16K, CompressionMode.Lzx], platform.Applied);
+        Assert.Equal(3, platform.Decompressions);
+        Assert.Equal(CompressionMode.Lzx, platform.Current);
+    }
+
+    [Fact]
+    public void CompressionUsesDedicatedWorkerLimitAcrossFiles()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string[] paths = Enumerable.Range(0, 3).Select(i => Path.Combine(root, $"{i}.bin")).ToArray();
+        foreach (string path in paths) File.WriteAllBytes(path, new byte[100]);
+        using var barrier = new Barrier(paths.Length);
+        int active = 0, peak = 0;
+        var platforms = paths.ToDictionary(path => path, path => new FakePlatform(100)
+        {
+            Applying = () =>
+            {
+                int current = Interlocked.Increment(ref active);
+                int observed;
+                while (current > (observed = Volatile.Read(ref peak)) &&
+                       Interlocked.CompareExchange(ref peak, current, observed) != observed) { }
+                try { Assert.True(barrier.SignalAndWait(TimeSpan.FromSeconds(5))); }
+                finally { Interlocked.Decrement(ref active); }
+            }
+        }, StringComparer.OrdinalIgnoreCase);
+        foreach (var platform in platforms.Values) platform.Sizes[CompressionMode.Xpress4K] = 50;
+        try
+        {
+            var request = new JobRequest
+            {
+                Volume = root,
+                Operation = Operation.Analyze,
+                Preview = false,
+                CompressionTargets = paths.Select(path => new CompressionTarget(new(path), CompressionMode.Xpress4K)).ToArray(),
+                Resources = ResourcePolicy.Performance with { CompressionWorkers = paths.Length }
+            };
+            var volume = new VolumeInfo("test", root, "fixture", "NTFS", 4096, 0, 4096, true, false, [], "fixture");
+
+            var result = NtfsCompression.Run(request, volume, _ => { }, () => { }, default, path => platforms[path]);
+
+            Assert.Equal(paths.Length, result.FilesChanged);
+            Assert.Equal(paths.Length, peak);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void NoneRemovesClassicNtfsCompression()
     {
         var platform = new FakePlatform(100, ntfsCompressed: true) { NtfsCompressedSize = 60 };
@@ -236,6 +296,7 @@ public sealed class CompressionTests
         public bool NtfsCompressed { get; private set; }
         public long NtfsCompressedSize { get; init; }
         public int Decompressions { get; private set; }
+        public Action? Applying { get; init; }
 
         public FakePlatform(long uncompressedSize, CompressionMode? current = null, bool ntfsCompressed = false)
         {
@@ -254,6 +315,7 @@ public sealed class CompressionTests
 
         public bool ApplyWof(string path, CompressionMode mode)
         {
+            Applying?.Invoke();
             Applied.Add(mode);
             if (Sizes.GetValueOrDefault(mode, _uncompressedSize) >= _uncompressedSize) return false;
             Current = mode;

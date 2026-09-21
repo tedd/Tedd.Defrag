@@ -135,6 +135,7 @@ internal static class Program
         operation = command switch { "analyze" => Operation.Analyze, "trim" => Operation.ReTrim, "zero" => Operation.ZeroFreeSpace, _ => operation };
         ResourcePolicy resources = args.Get("preset", "performance").ToLowerInvariant() switch { "quiet" => ResourcePolicy.Quiet, "performance" => ResourcePolicy.Performance, "balanced" => ResourcePolicy.Balanced, _ => throw new ArgumentException("Unknown resource preset.") };
         resources = resources with { CpuPercent = args.Int("cpu", resources.CpuPercent), MemoryMiB = args.Int("memory", resources.MemoryMiB),
+            CompressionWorkers = args.Int("compression-workers", resources.CompressionWorkers),
             ScanWorkers = args.Int("scan-workers", resources.ScanWorkers), PlanningWorkers = args.Int("planning-workers", resources.PlanningWorkers),
             MoveQueueDepth = args.Int("move-queue", resources.MoveQueueDepth),
             IoMiBPerSecond = args.Int("io", resources.IoMiBPerSecond), AffinityMask = Convert.ToUInt64(args.Get("affinity", "0").Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
@@ -247,7 +248,8 @@ internal static class Program
         --preset quiet|balanced|performance       Default: performance
         --cpu 100 --memory 0 --io 0       CPU %, process commit MiB, relocation MiB/s; 0 means unlimited
         --affinity 0xF0        Advanced logical CPU mask (single processor group)
-        --scan-workers 0 --planning-workers 0   0 = automatic, 1–32 = explicit worker limit
+        --compression-workers 0                0 = automatic, 1–32 = explicit file-compression workers
+        --scan-workers 0 --planning-workers 0  0 = automatic, 1–32 = explicit worker limit
         --move-queue 16       1–16 independent file moves in flight; Performance preset uses 16
         --idle-only --allow-battery --foreground
         --budget-mib 0 --minutes 0 --allow-ssd   0 means unlimited

@@ -267,6 +267,7 @@ public partial class MainPage : ContentPage
             CompressionTargets = _compressionRules.Select(item => item.Target).ToArray(),
             CompressionExcludedExtensions = _compressionExcludedExtensions.ToArray(),
             Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = ParseInt(MemoryEntry.Text, "Memory cap"), IoMiBPerSecond = ParseInt(IoEntry.Text, "Relocation bandwidth"),
+                CompressionWorkers = ParseInt(CompressionWorkersEntry.Text, "Compression workers"),
                 ScanWorkers = ParseInt(ScanWorkersEntry.Text, "MFT workers"), PlanningWorkers = ParseInt(PlanningWorkersEntry.Text, "Planner workers"),
                 MoveQueueDepth = ParseInt(MoveQueueEntry.Text, "Move queue depth", ResourcePolicy.Performance.MoveQueueDepth),
                 AffinityMask = string.IsNullOrWhiteSpace(AffinityEntry.Text) ? 0 : Convert.ToUInt64(AffinityEntry.Text.Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
@@ -825,6 +826,7 @@ public partial class MainPage : ContentPage
         if (ResourcePreset.SelectedIndex < 0 || CpuSlider == null) return;
         var p = ResourcePreset.SelectedIndex switch { 0 => ResourcePolicy.Quiet, 2 => ResourcePolicy.Performance, _ => ResourcePolicy.Balanced };
         CpuSlider.Value = p.CpuPercent; MemoryEntry.Text = p.MemoryMiB.ToString(CultureInfo.InvariantCulture); IoEntry.Text = p.IoMiBPerSecond.ToString(CultureInfo.InvariantCulture); IdleSwitch.IsToggled = p.IdleOnly; AcSwitch.IsToggled = p.AcOnly; BackgroundSwitch.IsToggled = p.Background;
+        CompressionWorkersEntry.Text = p.CompressionWorkers.ToString(CultureInfo.InvariantCulture);
         ScanWorkersEntry.Text = p.ScanWorkers.ToString(CultureInfo.InvariantCulture);
         PlanningWorkersEntry.Text = p.PlanningWorkers.ToString(CultureInfo.InvariantCulture);
         MoveQueueEntry.Text = p.MoveQueueDepth.ToString(CultureInfo.InvariantCulture);
