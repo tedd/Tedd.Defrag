@@ -6,6 +6,22 @@ namespace Tedd.Defrag.Tests;
 
 public sealed class UpdateTests
 {
+    [Fact]
+    public void DistributionLookupFindsInstalledFilesOutsideBundleBase()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            string extracted = Path.Combine(root, "single-file-extraction");
+            string installed = Path.Combine(root, "installed");
+            Directory.CreateDirectory(extracted); Directory.CreateDirectory(installed);
+            File.WriteAllText(Path.Combine(installed, "release-manifest.json"), "{}");
+
+            Assert.Equal(installed, ReleaseUpdater.FindDistributionDirectory([extracted, installed]));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
     [Theory]
     [InlineData("0.1.0", "v0.1.1", true)]
     [InlineData("1.9.9+abc123", "2.0.0", true)]

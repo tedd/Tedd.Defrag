@@ -174,6 +174,27 @@ public sealed class WorkerVersionTests
     }
 
     [Fact]
+    public void PackagedLookupUsesPhysicalExecutableDirectoryWhenBundleBaseDiffers()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            string extracted = Path.Combine(root, "single-file-extraction");
+            string installed = Path.Combine(root, "installed");
+            Directory.CreateDirectory(extracted); Directory.CreateDirectory(installed);
+            string worker = Path.Combine(installed, "Tedd.Defrag.Worker.exe");
+            File.WriteAllText(Path.Combine(installed, "release-manifest.json"), "{}");
+            File.WriteAllText(worker, "published worker");
+
+            string? selected = DefragClient.LocateWorker([extracted, installed], null,
+                path => path == worker ? BrokerProtocol.BuildVersion : "old", _ => DateTime.UtcNow);
+
+            Assert.Equal(worker, selected);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void LegacyPingReplyIsRecognizedAsMissingBuildInformation()
     {
         var reply = JsonSerializer.Deserialize<BrokerReply>("""{"Success":true}""", JobStore.Json);

@@ -157,15 +157,34 @@ public sealed class DefragClient
     public static ProcessStartInfo WorkerStart(params string[] args)
     {
         string? configured = Environment.GetEnvironmentVariable("TEDD_DEFRAG_WORKER");
-        string? worker = LocateWorker(AppContext.BaseDirectory, configured,
+        string[] applicationDirectories = [
+            Path.GetDirectoryName(Environment.ProcessPath) ?? string.Empty,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory
+        ];
+        string? worker = LocateWorker(applicationDirectories, configured,
             path => FileVersionInfo.GetVersionInfo(path).ProductVersion, File.GetLastWriteTimeUtc);
-        if (worker == null || !File.Exists(worker)) throw new FileNotFoundException($"Build Tedd.Defrag.Worker for client build {BrokerProtocol.BuildVersion}, or place the matching published worker beside the application.", worker);
+        if (worker == null || !File.Exists(worker))
+            throw new FileNotFoundException($"Tedd.Defrag.Worker for client build {BrokerProtocol.BuildVersion} was not found beside the application. Searched: {string.Join(", ", applicationDirectories.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))}.", worker);
         string? workerBuild = FileVersionInfo.GetVersionInfo(worker).ProductVersion;
         if (workerBuild != BrokerProtocol.BuildVersion)
             throw new InvalidOperationException($"Worker '{worker}' is build {workerBuild ?? "unknown"}; the client is {BrokerProtocol.BuildVersion}. Use executables from the same build.");
         var info = new ProcessStartInfo(worker) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(worker)! };
         foreach (string arg in args) info.ArgumentList.Add(arg);
         return info;
+    }
+
+    internal static string? LocateWorker(IEnumerable<string> baseDirectories, string? configured,
+        Func<string, string?> readBuild, Func<string, DateTime> lastWrite)
+    {
+        if (!string.IsNullOrWhiteSpace(configured)) return configured;
+        foreach (string directory in baseDirectories.Where(directory => !string.IsNullOrWhiteSpace(directory))
+                     .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string? worker = LocateWorker(directory, null, readBuild, lastWrite);
+            if (worker != null) return worker;
+        }
+        return null;
     }
 
     internal static string? LocateWorker(string baseDirectory, string? configured,

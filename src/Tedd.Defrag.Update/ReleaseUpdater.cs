@@ -32,6 +32,11 @@ public static class ReleaseUpdater
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true, WriteIndented = true };
     private static readonly HttpClient Http = CreateHttpClient();
     private static Task<AvailableRelease?>? _pendingCheck;
+    private static string DistributionDirectory => FindDistributionDirectory([
+        Path.GetDirectoryName(Environment.ProcessPath),
+        AppContext.BaseDirectory,
+        Environment.CurrentDirectory
+    ]);
 
     public static string DisplayVersion => ReadManifest()?.Version
         ?? Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
@@ -45,9 +50,9 @@ public static class ReleaseUpdater
             : ReleasePackageKind.Portable;
 
     public static bool IsPackaged => ReadManifest() is not null
-        && File.Exists(Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Cli.exe"))
-        && File.Exists(Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Desktop.exe"))
-        && File.Exists(Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Worker.exe"));
+        && File.Exists(Path.Combine(DistributionDirectory, "Tedd.Defrag.Cli.exe"))
+        && File.Exists(Path.Combine(DistributionDirectory, "Tedd.Defrag.Desktop.exe"))
+        && File.Exists(Path.Combine(DistributionDirectory, "Tedd.Defrag.Worker.exe"));
 
     public static Task<AvailableRelease?> CheckForUpdateAsync(CancellationToken cancellationToken = default)
     {
@@ -104,7 +109,7 @@ public static class ReleaseUpdater
         {
             var installerRequest = new InstallerUpdateRequest(
                 Environment.ProcessId,
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)),
+                Path.TrimEndingDirectorySeparator(DistributionDirectory),
                 archivePath,
                 expectedHash,
                 launcherName,
@@ -115,7 +120,7 @@ public static class ReleaseUpdater
 
         var request = new UpdateRequest(
             Environment.ProcessId,
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)),
+            Path.TrimEndingDirectorySeparator(DistributionDirectory),
             archivePath,
             expectedHash,
             release.DisplayVersion,
@@ -347,7 +352,7 @@ public static class ReleaseUpdater
 
     private static string CopyUpdater(string updateDirectory)
     {
-        string updaterSource = Path.Combine(AppContext.BaseDirectory, "Tedd.Defrag.Cli.exe");
+        string updaterSource = Path.Combine(DistributionDirectory, "Tedd.Defrag.Cli.exe");
         string updaterPath = Path.Combine(updateDirectory, "Tedd.Defrag.Updater.exe");
         File.Copy(updaterSource, updaterPath, true);
         return updaterPath;
@@ -407,7 +412,15 @@ public static class ReleaseUpdater
         throw new IOException("An application process is still using the installation directory.");
     }
 
-    private static ReleaseManifest? ReadManifest() => ReadManifest(Path.Combine(AppContext.BaseDirectory, "release-manifest.json"));
+    internal static string FindDistributionDirectory(IEnumerable<string?> candidates)
+    {
+        foreach (string directory in candidates.Where(directory => !string.IsNullOrWhiteSpace(directory))
+                     .Select(directory => Path.GetFullPath(directory!)).Distinct(StringComparer.OrdinalIgnoreCase))
+            if (File.Exists(Path.Combine(directory, "release-manifest.json"))) return directory;
+        return Path.GetFullPath(AppContext.BaseDirectory);
+    }
+
+    private static ReleaseManifest? ReadManifest() => ReadManifest(Path.Combine(DistributionDirectory, "release-manifest.json"));
 
     private static ReleaseManifest? ReadManifest(string path)
     {
