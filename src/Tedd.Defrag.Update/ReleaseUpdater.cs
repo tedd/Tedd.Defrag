@@ -18,6 +18,20 @@ public sealed record AvailableRelease(
     Uri ReleasePageUri,
     ReleasePackageKind PackageKind);
 
+public sealed class PreparedUpdate
+{
+    public AvailableRelease Release { get; }
+    public string PackagePath { get; }
+    public string ExpectedSha256 { get; }
+
+    internal PreparedUpdate(AvailableRelease release, string packagePath, string expectedSha256)
+    {
+        Release = release;
+        PackagePath = packagePath;
+        ExpectedSha256 = expectedSha256;
+    }
+}
+
 public enum ReleasePackageKind
 {
     Portable,
@@ -83,8 +97,14 @@ public static class ReleaseUpdater
 
     public static async Task LaunchUpdateAsync(AvailableRelease release, string launcherName, IReadOnlyList<string> launchArguments, CancellationToken cancellationToken = default)
     {
+        ValidateLauncherName(launcherName);
+        PreparedUpdate prepared = await PrepareUpdateAsync(release, cancellationToken);
+        LaunchPreparedUpdate(prepared, launcherName, launchArguments);
+    }
+
+    public static async Task<PreparedUpdate> PrepareUpdateAsync(AvailableRelease release, CancellationToken cancellationToken = default)
+    {
         if (!IsPackaged) throw new InvalidOperationException("Self-update is available only in a release distribution.");
-        if (Path.GetFileName(launcherName) != launcherName) throw new ArgumentException("The launcher must be a file in the installation directory.", nameof(launcherName));
 
         string localRoot = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         string updateDirectory = Path.Combine(localRoot, "Tedd.Defrag", "updates", release.DisplayVersion + "-" + RuntimeId());
@@ -103,15 +123,26 @@ public static class ReleaseUpdater
             throw new InvalidDataException("The downloaded release did not match its published SHA-256 checksum.");
         }
         File.Move(partialPath, archivePath, true);
+        return new(release, archivePath, expectedHash);
+    }
 
-        string updaterPath = CopyUpdater(updateDirectory);
-        if (release.PackageKind == ReleasePackageKind.Installer)
+    public static void LaunchPreparedUpdate(PreparedUpdate prepared, string launcherName, IReadOnlyList<string> launchArguments)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (!IsPackaged) throw new InvalidOperationException("Self-update is available only in a release distribution.");
+        ValidateLauncherName(launcherName);
+        if (!File.Exists(prepared.PackagePath)) throw new FileNotFoundException("The downloaded update package was not found.", prepared.PackagePath);
+        if (prepared.ExpectedSha256.Length != 64 || !prepared.ExpectedSha256.All(Uri.IsHexDigit))
+            throw new InvalidDataException("The expected update checksum is invalid.");
+
+        string updaterPath = CopyUpdater(Path.GetDirectoryName(prepared.PackagePath)!);
+        if (prepared.Release.PackageKind == ReleasePackageKind.Installer)
         {
             var installerRequest = new InstallerUpdateRequest(
                 Environment.ProcessId,
                 Path.TrimEndingDirectorySeparator(DistributionDirectory),
-                archivePath,
-                expectedHash,
+                prepared.PackagePath,
+                prepared.ExpectedSha256,
                 launcherName,
                 [.. launchArguments]);
             StartUpdater(updaterPath, "--apply-installer-update", installerRequest);
@@ -121,12 +152,18 @@ public static class ReleaseUpdater
         var request = new UpdateRequest(
             Environment.ProcessId,
             Path.TrimEndingDirectorySeparator(DistributionDirectory),
-            archivePath,
-            expectedHash,
-            release.DisplayVersion,
+            prepared.PackagePath,
+            prepared.ExpectedSha256,
+            prepared.Release.DisplayVersion,
             launcherName,
             [.. launchArguments]);
         StartUpdater(updaterPath, "--apply-update", request);
+    }
+
+    private static void ValidateLauncherName(string launcherName)
+    {
+        if (Path.GetFileName(launcherName) != launcherName)
+            throw new ArgumentException("The launcher must be a file in the installation directory.", nameof(launcherName));
     }
 
     public static async Task<int> ApplyUpdateAsync(string requestPayload)

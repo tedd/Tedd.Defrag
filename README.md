@@ -38,7 +38,7 @@ For a conventional installation, download the architecture-matched `Tedd.Defrag-
 
 For stand-alone use, extract `Tedd.Defrag-win-*.zip` and run either `Tedd.Defrag.Desktop.exe` or `Tedd.Defrag.Cli.exe`. Keep all three executables together because the separately elevated worker isolates privileged disk operations. The ZIP does not register an uninstaller; remove its extracted directory to uninstall it.
 
-Release builds check GitHub Releases for a newer stable version at startup. With consent, installed copies download and run the architecture-matched verified EXE installer; portable copies download the matching ZIP and atomically replace their extracted application directory. Every automatic update verifies the release asset against its published SHA-256 checksum before execution or extraction. Active jobs must finish or be cancelled first. `TEDD_DEFRAG_WORKER` can point to another built worker executable.
+Release builds check GitHub Releases for a newer stable version when the application starts. The desktop offers to delay until the next start, update immediately, or download and verify the package now and start setup when the application exits. Installed copies use the architecture-matched EXE installer; portable copies use the matching ZIP and atomically replace their extracted application directory. Every automatic update verifies the release asset against its published SHA-256 checksum before execution or extraction. Active jobs must finish or be cancelled before an immediate update. `TEDD_DEFRAG_WORKER` can point to another built worker executable.
 
 ## Capabilities
 

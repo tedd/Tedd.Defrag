@@ -29,6 +29,9 @@ public partial class MainPage : ContentPage
     private VolumeInfo[] _volumes = [];
     private VolumeInfo? _volume;
     private bool _polling, _refreshing, _submitting;
+    private bool _updateCheckStarted;
+    private int _shuttingDown;
+    private PreparedUpdate? _updateOnExit;
     private bool _settingTheme;
     private bool _selectingRegion, _mapDragged;
     private int _mapGestureStart = -1, _mapGestureCurrent = -1, _regionRequest;
@@ -85,11 +88,12 @@ public partial class MainPage : ContentPage
         CompressionModePicker.SelectedIndex = 1;
         RenderCompressionExtensionList();
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
-        Loaded += async (_, _) => { _timer.Start(); await RefreshVolumes(); await AttachActiveJobs(); await CheckForUpdate(); };
+        Loaded += async (_, _) => { _timer.Start(); await CheckForUpdate(); await RefreshVolumes(); await AttachActiveJobs(); };
         Unloaded += (_, _) => _timer.Stop();
     }
     internal void Shutdown()
     {
+        if (Interlocked.Exchange(ref _shuttingDown, 1) != 0) return;
         _timer.Stop();
         try
         {
@@ -100,37 +104,71 @@ public partial class MainPage : ContentPage
         {
             System.Diagnostics.Debug.WriteLine(exception);
         }
+        if (_updateOnExit is not { } prepared) return;
+        try
+        {
+            ReleaseUpdater.LaunchPreparedUpdate(prepared, "Tedd.Defrag.Desktop.exe", []);
+            _updateOnExit = null;
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine(exception);
+        }
     }
     private async Task CheckForUpdate()
     {
+        if (_updateCheckStarted) return;
+        _updateCheckStarted = true;
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             AvailableRelease? release = await ReleaseUpdater.CheckForUpdateAsync(timeout.Token);
             if (release is null) return;
-            string action = release.PackageKind == ReleasePackageKind.Installer
-                ? "run the verified installer, and restart"
-                : "replace this portable copy and restart";
-            bool install = await DisplayAlertAsync("Update available",
-                $"Tedd.Defrag {release.DisplayVersion} is available. Download the release, verify its SHA-256 checksum, {action}?",
-                "Download and restart", "Later");
-            if (!install) return;
-            try { await _client.Send(new("stop")); }
-            catch (TimeoutException) { }
-            catch (InvalidOperationException exception)
+            const string updateNow = "Update now";
+            const string updateOnExit = "Update when Tedd.Defrag exits";
+            string? choice = await DisplayActionSheetAsync(
+                $"Tedd.Defrag {release.DisplayVersion} is available. The download is verified before setup starts.",
+                "Delay until next start", null, updateNow, updateOnExit);
+            if (choice == updateNow)
             {
-                await DisplayAlertAsync("Update postponed", exception.Message, "Close");
-                return;
+                try { await _client.Send(new("stop")); }
+                catch (TimeoutException) { }
+                catch (InvalidOperationException exception)
+                {
+                    await DisplayAlertAsync("Update postponed", exception.Message, "Close");
+                    return;
+                }
+                FooterStatus.Text = $"Downloading and verifying Tedd.Defrag {release.DisplayVersion}…";
+                PreparedUpdate prepared = await ReleaseUpdater.PrepareUpdateAsync(release);
+                ReleaseUpdater.LaunchPreparedUpdate(prepared, "Tedd.Defrag.Desktop.exe", []);
+                Environment.Exit(0);
             }
-            FooterStatus.Text = $"Downloading and verifying Tedd.Defrag {release.DisplayVersion}…";
-            await ReleaseUpdater.LaunchUpdateAsync(release, "Tedd.Defrag.Desktop.exe", []);
-            Environment.Exit(0);
+            if (choice != updateOnExit) return;
+            _ = PrepareUpdateForExit(release);
         }
         catch (OperationCanceledException) { }
         catch (Exception exception)
         {
             FooterStatus.Text = "Update check unavailable · the application remains ready";
             System.Diagnostics.Debug.WriteLine(exception);
+        }
+    }
+    private async Task PrepareUpdateForExit(AvailableRelease release)
+    {
+        try
+        {
+            FooterStatus.Text = $"Downloading and verifying Tedd.Defrag {release.DisplayVersion}…";
+            _updateOnExit = await ReleaseUpdater.PrepareUpdateAsync(release);
+            FooterStatus.Text = $"Tedd.Defrag {release.DisplayVersion} is ready and will install when the application exits";
+            await DisplayAlertAsync("Update ready",
+                $"Tedd.Defrag {release.DisplayVersion} will start setup after the application exits.", "Close");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception)
+        {
+            FooterStatus.Text = "Update download failed · the application remains ready";
+            System.Diagnostics.Debug.WriteLine(exception);
+            await DisplayAlertAsync("Update download failed", exception.Message, "Close");
         }
     }
     private async Task RefreshVolumes()

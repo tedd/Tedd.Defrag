@@ -42,4 +42,15 @@ public sealed class UpdateTests
     [Fact]
     public void UnsupportedUpdateArchitectureIsRejected() =>
         Assert.Throws<PlatformNotSupportedException>(() => ReleaseUpdater.AssetNameFor(ReleasePackageKind.Portable, Architecture.X86));
+
+    [Fact]
+    public async Task LauncherPathsAreRejectedBeforeDownloadOrPackageInspection()
+    {
+        var release = new AvailableRelease(new(1, 0, 0), "1.0.0", "package.zip",
+            new("https://example.invalid/package.zip"), new("https://example.invalid/package.zip.sha256"),
+            new("https://example.invalid/release"), ReleasePackageKind.Portable);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            ReleaseUpdater.LaunchUpdateAsync(release, @"..\Tedd.Defrag.Desktop.exe", []));
+    }
 }
