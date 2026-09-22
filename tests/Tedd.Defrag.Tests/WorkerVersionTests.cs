@@ -71,6 +71,26 @@ public sealed class WorkerVersionTests
     }
 
     [Fact]
+    public async Task SettingsAreSavedDirectlyWhenBrokerIsNotRunning()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new JobStore(root);
+            var client = new DefragClient((_, _) => throw new TimeoutException(),
+                () => throw new InvalidOperationException("The worker must not be started."),
+                (_, _) => Task.CompletedTask, () => store);
+            var settings = new ConcurrencySettings { MaxConcurrentVolumes = 7, MaxConcurrentJobsPerSharedResource = 3 };
+
+            var reply = await client.Send(new("settings", Settings: settings));
+
+            Assert.Equal(7, reply.Settings!.MaxConcurrentVolumes);
+            Assert.Equal(3, new JobStore(root).Settings.MaxConcurrentJobsPerSharedResource);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public async Task ActiveJobsAreRehydratedWithTheirAllocationMaps()
     {
         var broker = new BrokerFixture(BrokerProtocol.BuildVersion);

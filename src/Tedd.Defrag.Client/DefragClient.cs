@@ -13,12 +13,13 @@ public sealed class DefragClient
     private readonly Func<BrokerCommand, CancellationToken, Task<BrokerReply>> _connect;
     private readonly Func<Action> _prepareStart;
     private readonly Func<int, CancellationToken, Task> _delay;
+    private readonly Func<JobStore> _openStore;
 
-    public DefragClient() : this(Connect, PrepareBrokerStart, Task.Delay) { }
+    public DefragClient() : this(Connect, PrepareBrokerStart, Task.Delay, () => new JobStore()) { }
     internal DefragClient(Func<BrokerCommand, CancellationToken, Task<BrokerReply>> connect,
-        Func<Action> prepareStart, Func<int, CancellationToken, Task> delay)
+        Func<Action> prepareStart, Func<int, CancellationToken, Task> delay, Func<JobStore>? openStore = null)
     {
-        _connect = connect; _prepareStart = prepareStart; _delay = delay;
+        _connect = connect; _prepareStart = prepareStart; _delay = delay; _openStore = openStore ?? (() => new JobStore());
     }
 
     public async Task<BrokerReply> Send(BrokerCommand command, bool startBroker = false, CancellationToken token = default)
@@ -32,18 +33,24 @@ public sealed class DefragClient
             return await _connect(submitsWork ? command with { ClientBuild = BrokerProtocol.BuildVersion } : command, token);
         }
         try { return await _connect(command, token); }
-        catch (TimeoutException) when (!startBroker && command.Action is "list" or "get" or "explore" || !startBroker && command.Action == "settings" && command.Settings == null)
+        catch (TimeoutException) when (!startBroker && command.Action is "list" or "get" or "explore" or "settings")
         {
-            var store = new JobStore();
+            var store = _openStore();
             return command.Action switch
             {
                 "list" => new(true, Jobs: store.List().Select(s => s with { Map = null, Files = null, CompressedFiles = null }).ToArray()),
                 "get" => new(true, Snapshot: store.ReadSnapshot(command.Id)),
                 "explore" => new(true, Region: new LayoutExplorerStore(store).Explore(command.Id, command.StartCluster,
                     command.ClusterCount, command.MapCells, command.IncludeFiles, command.Path, command.FileId, command.Stream)),
-                _ => new(true, Settings: store.Settings)
+                _ => PersistSettings(store, command.Settings)
             };
         }
+    }
+
+    private static BrokerReply PersistSettings(JobStore store, ConcurrencySettings? settings)
+    {
+        if (settings != null) store.SaveSettings(settings);
+        return new(true, Settings: store.Settings);
     }
 
     public async Task<JobSnapshot[]> GetActiveJobs(CancellationToken token = default)
