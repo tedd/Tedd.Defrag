@@ -11,6 +11,34 @@ namespace Tedd.Defrag.Engine;
 
 public sealed class JobExecutor
 {
+    internal static (int Fragmented, FileSummary[] TopFiles) SummarizeFiles(FileLayout[] files)
+    {
+        const int limit = 100;
+        var top = new PriorityQueue<(FileLayout File, int Index), (int Extents, int NegativeIndex)>();
+        int fragmented = 0;
+        for (int index = 0; index < files.Length; index++)
+        {
+            FileLayout file = files[index];
+            if (!file.Fragmented) continue;
+            fragmented++;
+            var priority = (file.Extents.Length, -index);
+            if (top.Count < limit) top.Enqueue((file, index), priority);
+            else if (top.TryPeek(out _, out var lowest) && priority.CompareTo(lowest) > 0)
+            {
+                top.Dequeue();
+                top.Enqueue((file, index), priority);
+            }
+        }
+        var summaries = top.UnorderedItems
+            .Select(item => item.Element)
+            .OrderByDescending(item => item.File.Extents.Length)
+            .ThenBy(item => item.Index)
+            .Select(item => new FileSummary(item.File.Path, item.File.StreamName, item.File.Extents.Length,
+                item.File.Size, item.File.Movable ? "Eligible" : item.File.Flags.ToString()))
+            .ToArray();
+        return (fragmented, summaries);
+    }
+
     private readonly JobStore store;
     private readonly Func<JobRequest, IJobVolume> openVolume;
     private readonly Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken> runMaintenance;
@@ -50,6 +78,10 @@ public sealed class JobExecutor
         bool layoutIndexDirty = false;
         bool compressionSupported = false;
         long scannedRecords = 0;
+        FileLayout[]? summarizedFiles = null;
+        FileSummary[]? fileSummaries = null;
+        int fragmentedFileCount = 0;
+        long lastFileSummary = -5000;
         WorkProgress? scanWork = null, planningWork = null, executionWork = null;
         var executionWatch = new Stopwatch(); var moveActivity = new WorkerActivity();
         var explorer = new LayoutExplorerStore(store);
@@ -225,7 +257,7 @@ public sealed class JobExecutor
                     if (request.Resources.VerifyMoves) verifiedMoves++;
                     // Publication failures must stop dispatch, not count a verified native move as failed too.
                     store.Journal(request.Id, new(DateTimeOffset.UtcNow, request.Resources.VerifyMoves ? "verified" : "awaiting-final-scan", move));
-                    if (clock.ElapsedMilliseconds - lastPublish >= 200) MapAggregator.Build(layout, map);
+                    if (clock.ElapsedMilliseconds - lastPublish >= 1000) MapAggregator.Build(layout, map);
                     MapAggregator.Activity(map, layout.TotalClusters, move.DestinationLcn, move.Clusters, true);
                     Publish();
                 }, Checkpoint, (completed, pending, peak) =>
@@ -276,9 +308,9 @@ public sealed class JobExecutor
                     : filesBlocked > 0
                     ? $"No relocations were possible: {filesBlocked:N0} of {filesConsidered:N0} considered files were constrained or ineligible."
                     : $"No eligible extents required relocation among {filesConsidered:N0} considered files."
-                : request.Resources.VerifyMoves
+                : (request.Resources.VerifyMoves
                     ? $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. "
-                    : $"{Format.Bytes(moved)} relocated in {attemptedMoves - failedMoves:N0} moves; the final scan reconciled the resulting layout. "
+                    : $"{Format.Bytes(moved)} relocated in {attemptedMoves - failedMoves:N0} moves; the final scan reconciled the resulting layout. ")
                     + (failedMoves > 0 ? $"{failedMoves:N0} moves failed across {session.BlockedFiles.Count:N0} files; other eligible files were processed. " : "")
                     + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete."));
 
@@ -325,16 +357,21 @@ public sealed class JobExecutor
         void ScanProgress(double p, long count, string text) { progress = p; scannedRecords = count; message = $"{text} · {count:N0} records"; Publish(); }
         void Publish(bool force = false)
         {
-            if (!force && clock.ElapsedMilliseconds - lastPublish < 200) return;
+            if (!force && clock.ElapsedMilliseconds - lastPublish < 1000) return;
             var files = layout?.Files;
+            if (files != null && (!ReferenceEquals(files, summarizedFiles) || clock.ElapsedMilliseconds - lastFileSummary >= 5000 || force && state is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted))
+            {
+                (fragmentedFileCount, fileSummaries) = SummarizeFiles(files);
+                summarizedFiles = files;
+                lastFileSummary = clock.ElapsedMilliseconds;
+            }
             using var process = Process.GetCurrentProcess();
             var diagnostics = new JobDiagnostics(scanWork, planningWork, executionWork, Environment.ProcessorCount,
                 process.Threads.Count, process.PrivateMemorySize64, process.TotalProcessorTime.TotalMilliseconds,
                 System.Runtime.Intrinsics.X86.Avx2.IsSupported ? "AVX2 for aligned map ranges of at least 64 bytes; scalar tails" : "POPCNT / scalar bitmap counting");
             store.Save(new(request.Id, request.Volume, request.Operation, state, message, progress, moved,
-                state == JobState.Scanning ? scannedRecords : layout?.RecordsScanned ?? scannedRecords, files?.Count(f => f.Fragmented) ?? 0, files?.Length ?? 0, DateTimeOffset.UtcNow,
-                layout?.ObservedAt, layout == null ? null : map, files?.Where(f => f.Fragmented).OrderByDescending(f => f.Extents.Length).Take(100)
-                    .Select(f => new FileSummary(f.Path, f.StreamName, f.Extents.Length, f.Size, f.Movable ? "Eligible" : f.Flags.ToString())).ToArray(),
+                state == JobState.Scanning ? scannedRecords : layout?.RecordsScanned ?? scannedRecords, files == null ? 0 : fragmentedFileCount, files?.Length ?? 0, DateTimeOffset.UtcNow,
+                layout?.ObservedAt, layout == null ? null : map, files == null ? null : fileSummaries,
                 warnings.ToArray(), plannedBytes, layout?.Volume.SizeBytes ?? volumeInfo?.SizeBytes ?? 0, layout?.Volume.FreeBytes ?? volumeInfo?.FreeBytes ?? 0,
                 request.Resources.CpuPercent, request.Resources.MemoryMiB, request.Resources.IoMiBPerSecond,
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,

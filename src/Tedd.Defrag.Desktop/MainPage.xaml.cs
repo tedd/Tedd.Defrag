@@ -96,7 +96,7 @@ public partial class MainPage : ContentPage
         foreach (Switch toggle in new[] { IdleSwitch, AcSwitch, BackgroundSwitch })
             toggle.Toggled += OnSettingsValueChanged;
         PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
-        _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
+        _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromSeconds(1); _timer.Tick += async (_, _) => await Poll();
         Loaded += async (_, _) => { _timer.Start(); await CheckForUpdate(); await RefreshVolumes(); await AttachActiveJobs(); };
         Unloaded += (_, _) => _timer.Stop();
     }
@@ -386,11 +386,14 @@ public partial class MainPage : ContentPage
     }
     private void Apply(JobSnapshot snapshot, VolumeSession session)
     {
+        var previous = session.Snapshot?.Id == snapshot.Id ? session.Snapshot : null;
         session.Snapshot = snapshot;
         if (snapshot.ObservedAt.HasValue && snapshot.TotalBytes > 0) session.LayoutSnapshot = snapshot;
-        if (snapshot.Map != null) session.Cells = snapshot.Map;
-        if (snapshot.Files != null) session.Files = snapshot.Files.Select(f => new FileRow(f.Path, f.Extents, Format.Bytes(f.Bytes), f.Status)).ToArray();
-        if (snapshot.CompressedFiles != null) session.CompressedFiles = snapshot.CompressedFiles.Select(file => new CompressedFileRow(file.Path,
+        if (snapshot.Map != null && !snapshot.Map.AsSpan().SequenceEqual(session.Cells)) session.Cells = snapshot.Map;
+        if (snapshot.Files != null && (previous?.Files == null || !snapshot.Files.AsSpan().SequenceEqual(previous.Files)))
+            session.Files = snapshot.Files.Select(f => new FileRow(f.Path, f.Extents, Format.Bytes(f.Bytes), f.Status)).ToArray();
+        if (snapshot.CompressedFiles != null && (previous?.CompressedFiles == null || !snapshot.CompressedFiles.AsSpan().SequenceEqual(previous.CompressedFiles)))
+            session.CompressedFiles = snapshot.CompressedFiles.Select(file => new CompressedFileRow(file.Path,
             file.CompressionType, Format.Bytes(file.Size), Format.Bytes(file.BytesSaved),
             file.Size > 0 ? Math.Clamp((double)file.BytesSaved / file.Size, 0, 1).ToString("P1") : "0.0%")).ToArray();
         if (!ReferenceEquals(session, CurrentSession)) return;
@@ -404,12 +407,17 @@ public partial class MainPage : ContentPage
         // The sampled cells describe allocation, but the worker's volume geometry defines
         // the display bounds. This preserves leading and trailing free volume space.
         long totalClusters = layout?.TotalClusters > 0 ? layout.TotalClusters : session.Cells.Sum(cell => cell.Clusters);
+        bool mapChanged = !ReferenceEquals(_overview.Cells, session.Cells) || _overview.TotalClusters != totalClusters;
         _overview.Cells = session.Cells; _overview.TotalClusters = totalClusters;
         if (totalClusters > 0 && (_map.TotalClusters != totalClusters || _map.ClusterCount == 0 || _map.ClusterCount == _map.TotalClusters))
-            ApplyBaseMap(session, totalClusters);
-        else if (totalClusters > 0)
+        {
+            if (mapChanged) ApplyBaseMap(session, totalClusters);
+        }
+        else if (totalClusters > 0 && mapChanged)
+        {
+            MapOverview.Invalidate();
             _ = LoadRegion(_map.StartCluster, _map.ClusterCount);
-        DiskMap.Invalidate(); MapOverview.Invalidate(); UpdateRange();
+        }
         if (_volume != null && layout?.ObservedAt.HasValue == true)
             MapSubtitle.Text = $"{_volume.FileSystem} · {_volume.BytesPerCluster:N0}-byte clusters · observed {layout.ObservedAt.Value.ToLocalTime():HH:mm:ss}";
         if (layout?.TotalBytes > 0)
@@ -429,8 +437,8 @@ public partial class MainPage : ContentPage
         JobProgress.Progress = Math.Clamp(snapshot.Progress, 0, 1); ProgressText.Text = snapshot.IsTerminal ? snapshot.State.ToString().ToUpperInvariant() : snapshot.Progress.ToString("P0");
         ObservationText.Text = snapshot.ObservedAt.HasValue ? $"Observed {snapshot.ObservedAt.Value.ToLocalTime():HH:mm:ss} · logical volume allocation" : "Reading the current volume layout";
         PauseButton.IsEnabled = CancelButton.IsEnabled = !snapshot.IsTerminal && session.JobId != Guid.Empty; PauseButton.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
-        FileList.ItemsSource = session.Files;
-        CompressedFileList.ItemsSource = session.CompressedFiles;
+        if (!ReferenceEquals(FileList.ItemsSource, session.Files)) FileList.ItemsSource = session.Files;
+        if (!ReferenceEquals(CompressedFileList.ItemsSource, session.CompressedFiles)) CompressedFileList.ItemsSource = session.CompressedFiles;
         if (_volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) != true)
             CompressionInventorySummary.Text = "Compression inventory requires NTFS";
         else if (layout?.ObservedAt.HasValue == true)
