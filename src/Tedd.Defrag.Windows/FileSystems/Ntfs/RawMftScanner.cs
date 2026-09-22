@@ -141,9 +141,13 @@ public sealed class RawMftScanner
         if (skipped > 0) warnings.Add($"{skipped:N0} records could not be validated; their allocation remains unknown.");
         int incomplete = files.Count(f => (f.Flags & StreamFlags.Incomplete) != 0);
         if (incomplete > 0) warnings.Add($"{incomplete:N0} streams have extension attributes or unresolved ancestry and are excluded from custom moves.");
-        warnings.Add("Live NTFS observations may change during the scan. Every relocation is revalidated through the filesystem.");
+        warnings.Add(request.Resources.VerifyMoves
+            ? "Live NTFS observations may change during the scan. Every relocation is revalidated through the filesystem."
+            : "Live NTFS observations may change during the scan. Each relocation is preflight-validated; result verification is deferred to the final full scan.");
         diagnostics?.Invoke(new("Analysis complete", scanned, totalRecords, "records", workers, 0, activity.Peak, 0, activity.PeakIo,
-            bytesRead, watch.ElapsedMilliseconds, Detail: $"{files.Count:N0} streams; {skipped:N0} rejected records. Paths resolved serially; live moves are revalidated by NTFS."));
+            bytesRead, watch.ElapsedMilliseconds, Detail: request.Resources.VerifyMoves
+                ? $"{files.Count:N0} streams; {skipped:N0} rejected records. Paths resolved serially; live moves are revalidated by NTFS."
+                : $"{files.Count:N0} streams; {skipped:N0} rejected records. Paths resolved serially; move-result verification is deferred to the final full scan."));
         progress?.Invoke(1, scanned, "Analysis complete");
         return new(volume.Info, volume.TotalClusters, bitmap, files.ToArray(), DateTimeOffset.UtcNow, scanned, skipped,
             complete && skipped == 0, warnings.ToArray(), volume.MftZone);

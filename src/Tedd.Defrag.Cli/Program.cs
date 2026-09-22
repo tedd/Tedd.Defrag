@@ -137,7 +137,7 @@ internal static class Program
         resources = resources with { CpuPercent = args.Int("cpu", resources.CpuPercent), MemoryMiB = args.Int("memory", resources.MemoryMiB),
             CompressionWorkers = args.Int("compression-workers", resources.CompressionWorkers),
             ScanWorkers = args.Int("scan-workers", resources.ScanWorkers), PlanningWorkers = args.Int("planning-workers", resources.PlanningWorkers),
-            MoveQueueDepth = args.Int("move-queue", resources.MoveQueueDepth),
+            MoveQueueDepth = args.Int("move-queue", resources.MoveQueueDepth), VerifyMoves = !args.Has("defer-move-verification"),
             IoMiBPerSecond = args.Int("io", resources.IoMiBPerSecond), AffinityMask = Convert.ToUInt64(args.Get("affinity", "0").Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
             IdleOnly = args.Has("idle-only") || resources.IdleOnly, AcOnly = !args.Has("allow-battery") && resources.AcOnly, Background = !args.Has("foreground") && resources.Background };
         string[] extensionArguments = args.All("compress-exclude-ext").SelectMany(CompressionFileTypes.ParseList).ToArray();
@@ -251,6 +251,7 @@ internal static class Program
         --compression-workers 0                0 = automatic, 1–32 = explicit file-compression workers
         --scan-workers 0 --planning-workers 0  0 = automatic, 1–32 = explicit worker limit
         --move-queue 16       1–16 independent file moves in flight; Performance preset uses 16
+        --defer-move-verification  Skip per-move extent reads; the mandatory final scan reconciles the resulting layout
         --idle-only --allow-battery --foreground
         --budget-mib 0 --minutes 0 --allow-ssd   0 means unlimited
         --min-fragments 20 --min-file-mib 0 --max-file-mib 0

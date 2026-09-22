@@ -52,6 +52,24 @@ public sealed class ExecutionContinuationTests
     }
 
     [Fact]
+    public void DeferredVerificationSkipsPerMoveExtentChecksAndReconcilesWithFinalScan()
+    {
+        var volume = ManyFiles(2);
+
+        var result = Run(volume, Request(Operation.MinimumWrite) with
+        {
+            Resources = Request(Operation.MinimumWrite).Resources with { VerifyMoves = false }
+        });
+
+        Assert.Equal(JobState.Completed, result.State);
+        Assert.Equal(0, result.VerifiedMoves);
+        Assert.Equal(2, volume.Attempts.Count);
+        Assert.All(volume.VerifyResults, Assert.False);
+        Assert.Equal(2, volume.Scans);
+        Assert.Contains("final scan reconciled", result.Message);
+    }
+
+    [Fact]
     public void PackRanksFilesAndExtentsByPhysicalLocation()
     {
         var highFirstLogicalRun = File(32, [new(0, 100, 1), new(1, 10, 1)]);
@@ -586,6 +604,7 @@ public sealed class ExecutionContinuationTests
         public VolumeLayout Layout { get; } = layout;
         public VolumeInfo Info => Layout.Volume;
         public List<PlannedMove> Attempts { get; } = [];
+        public List<bool> VerifyResults { get; } = [];
         public Action<FileLayout, PlannedMove>? BeforeMove { get; set; }
         public int BitmapRefreshes { get; private set; }
         public int Scans { get; private set; }
@@ -602,11 +621,12 @@ public sealed class ExecutionContinuationTests
             if (FailBitmapRefresh) throw new IOException("Cannot refresh bitmap");
             return Layout.Bitmap.ToArray();
         }
-        public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules)
+        public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules, bool verifyResult)
         {
             lock (gate)
             {
             Attempts.Add(move);
+            VerifyResults.Add(verifyResult);
             BeforeMove?.Invoke(file, move);
             // A separate volume model detects stale sources, occupied destinations,
             // and accidental reuse of allocation after an ambiguous native result.

@@ -17,6 +17,7 @@ namespace Tedd.Defrag.Desktop;
 public partial class MainPage : ContentPage
 {
     private readonly DefragClient _client = new();
+    private readonly JobStore _store = new();
     private readonly DiskMapDrawable _map = new();
     private readonly MapOverviewDrawable _overview = new();
     private readonly Dictionary<string, VolumeSession> _volumeSessions = new(StringComparer.OrdinalIgnoreCase);
@@ -33,6 +34,8 @@ public partial class MainPage : ContentPage
     private int _shuttingDown;
     private PreparedUpdate? _updateOnExit;
     private bool _settingTheme;
+    private bool _restoringSettings;
+    private bool _settingsLoaded;
     private bool _selectingRegion, _mapDragged;
     private int _mapGestureStart = -1, _mapGestureCurrent = -1, _regionRequest;
     private long _mapGestureViewportStart, _pendingPanStart;
@@ -71,7 +74,6 @@ public partial class MainPage : ContentPage
     {
         InitializeComponent(); DiskMap.Drawable = _map; MapOverview.Drawable = _overview;
         DiskMap.HandlerChanged += OnDiskMapHandlerChanged;
-        PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
         ThemePicker.ItemsSource = new[] { "Follow Windows", "Light", "Dark" };
         _settingTheme = true;
         ThemePicker.SelectedItem = (Application.Current as App)?.ThemePreference switch
@@ -81,12 +83,19 @@ public partial class MainPage : ContentPage
             _ => "Follow Windows"
         };
         _settingTheme = false;
-        ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · responsive", "Performance · full speed" }; ResourcePreset.SelectedIndex = 2;
+        ResourcePreset.ItemsSource = new[] { "Quiet · bounded maintenance", "Balanced · responsive", "Performance · full speed" };
         FileRuleKind.ItemsSource = ExclusionRuleKind.ItemsSource = CompressionRuleKind.ItemsSource = new[] { "File", "Folder", "Wildcard", "Glob", "Regular expression" };
         FileRuleKind.SelectedIndex = ExclusionRuleKind.SelectedIndex = CompressionRuleKind.SelectedIndex = 0;
         CompressionModePicker.ItemsSource = CompressionModes.Supported.Select(CompressionModes.DisplayName).ToArray();
         CompressionModePicker.SelectedIndex = 1;
-        RenderCompressionExtensionList();
+        RestoreSettings();
+        _settingsLoaded = true;
+        foreach (Entry entry in new[] { CompressionWorkersEntry, ScanWorkersEntry, PlanningWorkersEntry, MoveQueueEntry,
+                     MemoryEntry, IoEntry, AffinityEntry, BudgetEntry, MinutesEntry, BoundaryEntry })
+            entry.TextChanged += OnSettingsValueChanged;
+        foreach (Switch toggle in new[] { IdleSwitch, AcSwitch, BackgroundSwitch })
+            toggle.Toggled += OnSettingsValueChanged;
+        PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromMilliseconds(250); _timer.Tick += async (_, _) => await Poll();
         Loaded += async (_, _) => { _timer.Start(); await CheckForUpdate(); await RefreshVolumes(); await AttachActiveJobs(); };
         Unloaded += (_, _) => _timer.Stop();
@@ -95,6 +104,7 @@ public partial class MainPage : ContentPage
     {
         if (Interlocked.Exchange(ref _shuttingDown, 1) != 0) return;
         _timer.Stop();
+        SaveDesktopSettings();
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -308,6 +318,7 @@ public partial class MainPage : ContentPage
                 CompressionWorkers = ParseInt(CompressionWorkersEntry.Text, "Compression workers"),
                 ScanWorkers = ParseInt(ScanWorkersEntry.Text, "MFT workers"), PlanningWorkers = ParseInt(PlanningWorkersEntry.Text, "Planner workers"),
                 MoveQueueDepth = ParseInt(MoveQueueEntry.Text, "Move queue depth", ResourcePolicy.Performance.MoveQueueDepth),
+                VerifyMoves = VerifyMovesSwitch.IsToggled,
                 AffinityMask = string.IsNullOrWhiteSpace(AffinityEntry.Text) ? 0 : Convert.ToUInt64(AffinityEntry.Text.Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
                 IdleOnly = IdleSwitch.IsToggled, AcOnly = AcSwitch.IsToggled, Background = BackgroundSwitch.IsToggled },
             MaxMoveBytes = ParseMiB(BudgetEntry.Text, "Write budget"), MaxMinutes = ParseInt(MinutesEntry.Text, "Time limit"),
@@ -651,7 +662,7 @@ public partial class MainPage : ContentPage
     private void OnSelectRecommendedMethod(object? sender, EventArgs e)
     {
         if (sender is not Button { CommandParameter: Operation operation } || !_recommendedOperations.Contains(operation)) return;
-        _selectedPolicy = Policy(operation); UpdateSelectedPolicy();
+        _selectedPolicy = Policy(operation); UpdateSelectedPolicy(); SaveDesktopSettings();
         FooterStatus.Text = $"●  {_selectedPolicy.Name} selected · preview or run this step";
     }
     private async void OnChooseMethod(object? sender, EventArgs e) => await ChoosePolicy();
@@ -665,7 +676,7 @@ public partial class MainPage : ContentPage
     private void OnPolicySelected(object? sender, SelectionChangedEventArgs e)
     {
         if (e.CurrentSelection.FirstOrDefault() is not PolicyOption option) return;
-        _selectedPolicy = option; UpdateSelectedPolicy(); CompletePolicyChoice(option.Operation);
+        _selectedPolicy = option; UpdateSelectedPolicy(); SaveDesktopSettings(); CompletePolicyChoice(option.Operation);
         PolicyList.SelectedItem = null;
     }
     private void OnCancelPolicy(object? sender, EventArgs e) => CompletePolicyChoice(null);
@@ -689,6 +700,104 @@ public partial class MainPage : ContentPage
         if (_settingTheme || ThemePicker.SelectedItem is not string selected || Application.Current is not App app) return;
         app.SetThemePreference(selected switch { "Light" => "Light", "Dark" => "Dark", _ => "System" });
     }
+    private void RestoreSettings()
+    {
+        _restoringSettings = true;
+        try
+        {
+            var settings = _store.DesktopSettings;
+            _selectedPolicy = Enum.IsDefined(settings.SelectedOperation) ? Policy(settings.SelectedOperation) : Policies[0];
+            ResourcePreset.SelectedIndex = Math.Clamp(settings.ResourcePresetIndex, 0, 2);
+            AdvancedPanel.IsVisible = settings.AdvancedControlsVisible;
+            AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide controls" : "Show controls";
+            CpuSlider.Value = Math.Clamp(settings.CpuPercent, 1, 100);
+            CompressionWorkersEntry.Text = ValueOrDefault(settings.CompressionWorkers, "0");
+            ScanWorkersEntry.Text = ValueOrDefault(settings.ScanWorkers, "0");
+            PlanningWorkersEntry.Text = ValueOrDefault(settings.PlanningWorkers, "0");
+            MoveQueueEntry.Text = ValueOrDefault(settings.MoveQueueDepth, "16");
+            VerifyMovesSwitch.IsToggled = settings.VerifyMoves;
+            MemoryEntry.Text = ValueOrDefault(settings.MemoryMiB, "0");
+            IoEntry.Text = ValueOrDefault(settings.IoMiBPerSecond, "0");
+            IdleSwitch.IsToggled = settings.IdleOnly;
+            AcSwitch.IsToggled = settings.AcOnly;
+            BackgroundSwitch.IsToggled = settings.Background;
+            AffinityEntry.Text = settings.AffinityMask ?? "";
+            BudgetEntry.Text = ValueOrDefault(settings.MaxMoveMiB, "0");
+            MinutesEntry.Text = ValueOrDefault(settings.MaxMinutes, "0");
+            BoundaryEntry.Text = settings.ShrinkBoundaryMiB ?? "";
+            MinFragmentsEntry.Text = ValueOrDefault(settings.MinimumFragments, "20");
+            MinFileSizeEntry.Text = settings.MinimumFileMiB ?? "";
+            MaxFileSizeEntry.Text = settings.MaximumFileMiB ?? "";
+
+            foreach (var item in settings.SelectedPaths ?? [])
+                if (item?.Rule != null) _fileRules.Add(new(item.Rule, item.Directory));
+            foreach (var item in settings.Exclusions ?? [])
+                if (item?.Rule != null) _exclusionRules.Add(new(item.Rule, item.Directory));
+            foreach (var item in settings.CompressionTargets ?? [])
+                if (item?.Target?.Rule != null) _compressionRules.Add(new(item.Target, item.Directory));
+            _compressionExcludedExtensions.Clear();
+            foreach (string extension in settings.CompressionExcludedExtensions ?? CompressionFileTypes.DefaultExcludedExtensions)
+                if (!string.IsNullOrWhiteSpace(extension)) _compressionExcludedExtensions.Add(extension);
+
+            var concurrency = _store.Settings;
+            ParallelEntry.Text = concurrency.MaxConcurrentVolumes.ToString(CultureInfo.InvariantCulture);
+            SharedSwitch.IsToggled = concurrency.AllowParallelOnSharedStorage;
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"Unable to restore desktop settings: {exception}");
+        }
+        finally
+        {
+            _restoringSettings = false;
+        }
+        RenderRuleList(FileRulesList, _fileRules, false);
+        RenderRuleList(ExclusionRulesList, _exclusionRules, true);
+        RenderCompressionRuleList();
+        RenderCompressionExtensionList();
+        RefreshScopeSummary();
+    }
+    private void SaveDesktopSettings()
+    {
+        if (!_settingsLoaded || _restoringSettings) return;
+        try
+        {
+            _store.SaveDesktopSettings(new()
+            {
+                SelectedOperation = _selectedPolicy.Operation,
+                ResourcePresetIndex = ResourcePreset.SelectedIndex,
+                AdvancedControlsVisible = AdvancedPanel.IsVisible,
+                SelectedPaths = _fileRules.Select(item => new DesktopPathRule(item.Rule, item.Directory)).ToArray(),
+                Exclusions = _exclusionRules.Select(item => new DesktopPathRule(item.Rule, item.Directory)).ToArray(),
+                CompressionTargets = _compressionRules.Select(item => new DesktopCompressionTarget(item.Target, item.Directory)).ToArray(),
+                CompressionExcludedExtensions = _compressionExcludedExtensions.ToArray(),
+                CpuPercent = (int)CpuSlider.Value,
+                CompressionWorkers = CompressionWorkersEntry.Text ?? "0",
+                ScanWorkers = ScanWorkersEntry.Text ?? "0",
+                PlanningWorkers = PlanningWorkersEntry.Text ?? "0",
+                MoveQueueDepth = MoveQueueEntry.Text ?? "16",
+                VerifyMoves = VerifyMovesSwitch.IsToggled,
+                MemoryMiB = MemoryEntry.Text ?? "0",
+                IoMiBPerSecond = IoEntry.Text ?? "0",
+                IdleOnly = IdleSwitch.IsToggled,
+                AcOnly = AcSwitch.IsToggled,
+                Background = BackgroundSwitch.IsToggled,
+                AffinityMask = AffinityEntry.Text ?? "",
+                MaxMoveMiB = BudgetEntry.Text ?? "0",
+                MaxMinutes = MinutesEntry.Text ?? "0",
+                ShrinkBoundaryMiB = BoundaryEntry.Text ?? "",
+                MinimumFragments = MinFragmentsEntry.Text ?? "20",
+                MinimumFileMiB = MinFileSizeEntry.Text ?? "",
+                MaximumFileMiB = MaxFileSizeEntry.Text ?? ""
+            });
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"Unable to save desktop settings: {exception}");
+        }
+    }
+    private static string ValueOrDefault(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private void OnSettingsValueChanged(object? sender, EventArgs e) => SaveDesktopSettings();
     private void ShowSettings(bool settings)
     {
         OverviewContent.IsVisible = ActionContent.IsVisible = !settings; SettingsContent.IsVisible = settings;
@@ -858,21 +967,26 @@ public partial class MainPage : ContentPage
         e.Handled = true;
     }
     private void OnResourceChanged(object? sender, ValueChangedEventArgs e)
-    { if (CpuValue == null || CpuSlider == null) return; CpuValue.Text = $"{(int)CpuSlider.Value}%"; }
+    { if (CpuValue == null || CpuSlider == null) return; CpuValue.Text = $"{(int)CpuSlider.Value}%"; SaveDesktopSettings(); }
     private void OnPresetChanged(object? sender, EventArgs e)
     {
-        if (ResourcePreset.SelectedIndex < 0 || CpuSlider == null) return;
+        if (_restoringSettings || ResourcePreset.SelectedIndex < 0 || CpuSlider == null) return;
         var p = ResourcePreset.SelectedIndex switch { 0 => ResourcePolicy.Quiet, 2 => ResourcePolicy.Performance, _ => ResourcePolicy.Balanced };
         CpuSlider.Value = p.CpuPercent; MemoryEntry.Text = p.MemoryMiB.ToString(CultureInfo.InvariantCulture); IoEntry.Text = p.IoMiBPerSecond.ToString(CultureInfo.InvariantCulture); IdleSwitch.IsToggled = p.IdleOnly; AcSwitch.IsToggled = p.AcOnly; BackgroundSwitch.IsToggled = p.Background;
         CompressionWorkersEntry.Text = p.CompressionWorkers.ToString(CultureInfo.InvariantCulture);
         ScanWorkersEntry.Text = p.ScanWorkers.ToString(CultureInfo.InvariantCulture);
         PlanningWorkersEntry.Text = p.PlanningWorkers.ToString(CultureInfo.InvariantCulture);
         MoveQueueEntry.Text = p.MoveQueueDepth.ToString(CultureInfo.InvariantCulture);
+        VerifyMovesSwitch.IsToggled = p.VerifyMoves;
+        SaveDesktopSettings();
     }
     private void OnToggleAdvanced(object? sender, EventArgs e)
-    { AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible; AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide controls" : "Show controls"; }
+    { AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible; AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide controls" : "Show controls"; SaveDesktopSettings(); }
     private void OnScopeChanged(object? sender, TextChangedEventArgs e)
-        => RefreshScopeSummary();
+    {
+        RefreshScopeSummary();
+        SaveDesktopSettings();
+    }
     private void RefreshScopeSummary()
     {
         if (ScopeSummary == null) return;
@@ -912,6 +1026,7 @@ public partial class MainPage : ContentPage
             EndCompressionRuleEdit();
             RenderCompressionRuleList();
             RefreshScopeSummary();
+            SaveDesktopSettings();
             if (!_volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
                 await DisplayAlertAsync("Compression target saved",
                     $"{_volume.Root} uses {_volume.FileSystem}. This target will be skipped for jobs on that volume; analysis and supported maintenance remain available.", "Close");
@@ -936,6 +1051,7 @@ public partial class MainPage : ContentPage
             EndRuleEdit(patternEntry, commitButton, cancelButton, setEditing);
             RenderRuleList(list, rules, exclusions);
             RefreshScopeSummary();
+            SaveDesktopSettings();
         }
         catch (Exception exception) { await DisplayAlertAsync(title, exception.Message, "Close"); }
     }
@@ -1040,7 +1156,7 @@ public partial class MainPage : ContentPage
             {
                 RuleEditorItem? editing = exclusions ? _editingExclusionRule : _editingFileRule;
                 if (ReferenceEquals(editing, item)) CancelRuleEdit(exclusions);
-                rules.Remove(item); RenderRuleList(list, rules, exclusions); RefreshScopeSummary();
+                rules.Remove(item); RenderRuleList(list, rules, exclusions); RefreshScopeSummary(); SaveDesktopSettings();
             };
             row.Add(remove, 3);
             list.Children.Add(row);
@@ -1076,7 +1192,7 @@ public partial class MainPage : ContentPage
             foreach (string extension in extensions)
                 if (!_compressionExcludedExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
                     _compressionExcludedExtensions.Add(extension);
-            CompressionExtensionEntry.Text = ""; RenderCompressionExtensionList(); RefreshScopeSummary();
+            CompressionExtensionEntry.Text = ""; RenderCompressionExtensionList(); RefreshScopeSummary(); SaveDesktopSettings();
         }
         catch (ArgumentException exception) { await DisplayAlertAsync("Compression file types", exception.Message, "Close"); }
     }
@@ -1084,7 +1200,7 @@ public partial class MainPage : ContentPage
     {
         _compressionExcludedExtensions.Clear();
         foreach (string extension in CompressionFileTypes.DefaultExcludedExtensions) _compressionExcludedExtensions.Add(extension);
-        RenderCompressionExtensionList(); RefreshScopeSummary();
+        RenderCompressionExtensionList(); RefreshScopeSummary(); SaveDesktopSettings();
     }
     private void RenderCompressionExtensionList()
     {
@@ -1095,7 +1211,7 @@ public partial class MainPage : ContentPage
             remove.SetDynamicResource(Button.BackgroundColorProperty, "ButtonSurface");
             remove.Clicked += (_, _) =>
             {
-                _compressionExcludedExtensions.Remove(extension); RenderCompressionExtensionList(); RefreshScopeSummary();
+                _compressionExcludedExtensions.Remove(extension); RenderCompressionExtensionList(); RefreshScopeSummary(); SaveDesktopSettings();
             };
             CompressionExtensionsList.Children.Add(remove);
         }
@@ -1124,7 +1240,7 @@ public partial class MainPage : ContentPage
             remove.Clicked += (_, _) =>
             {
                 if (ReferenceEquals(_editingCompressionRule, item)) EndCompressionRuleEdit();
-                _compressionRules.Remove(item); RenderCompressionRuleList(); RefreshScopeSummary();
+                _compressionRules.Remove(item); RenderCompressionRuleList(); RefreshScopeSummary(); SaveDesktopSettings();
             };
             row.Add(remove, 4);
             CompressionRulesList.Children.Add(row);
@@ -1245,7 +1361,7 @@ public partial class MainPage : ContentPage
         string report = $"{snapshot.State}: {snapshot.Message}\n\n" +
             $"Planned moves: {snapshot.PlannedMoves:N0}\nAttempted moves: {snapshot.AttemptedMoves:N0}\n" +
             $"Verified moves: {snapshot.VerifiedMoves:N0}\nFailed moves: {snapshot.FailedMoves:N0}\n" +
-            $"Relocated and verified: {Format.Bytes(snapshot.BytesMoved)}\n" +
+            $"Relocated: {Format.Bytes(snapshot.BytesMoved)}\n" +
             $"Compression: {snapshot.CompressionFilesChanged:N0} changed, {snapshot.CompressionFilesSkipped:N0} skipped, {snapshot.CompressionFilesFailed:N0} failed; {Format.StorageDelta(snapshot.CompressionBytesSaved)}\n" +
             $"Compressed inventory: {snapshot.CompressedFileCount:N0} files; {Format.Bytes(snapshot.CompressedBytesSaved)} saved\n" +
             $"Fragmented streams: {snapshot.InitialFragmentedFiles:N0} before, {snapshot.FragmentedFiles:N0} after\n" +
@@ -1254,7 +1370,7 @@ public partial class MainPage : ContentPage
     }
     private async void OnSaveConcurrency(object? sender, EventArgs e)
     {
-        try { await _client.Send(new("settings", Settings: new() { MaxConcurrentVolumes = int.Parse(ParallelEntry.Text), AllowParallelOnSharedStorage = SharedSwitch.IsToggled })); FooterStatus.Text = "Concurrency settings saved for subsequent jobs"; }
+        try { await _client.Send(new("settings", Settings: new() { MaxConcurrentVolumes = int.Parse(ParallelEntry.Text), AllowParallelOnSharedStorage = SharedSwitch.IsToggled })); SaveDesktopSettings(); FooterStatus.Text = "Concurrency settings saved for subsequent jobs"; }
         catch (Exception ex) { await DisplayAlertAsync("Concurrency settings", ex.Message, "Close"); }
     }
     private async void OnHistory(object? sender, EventArgs e)

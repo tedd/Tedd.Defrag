@@ -13,7 +13,7 @@ internal interface IJobVolume : IDisposable
     bool IsDirty();
     VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null);
     byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token);
-    void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules);
+    void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules, bool verifyResult);
 }
 
 /// <summary>The native relocation request was rejected before it was submitted.</summary>

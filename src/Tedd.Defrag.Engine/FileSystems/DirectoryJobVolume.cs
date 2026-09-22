@@ -11,7 +11,7 @@ internal abstract class DirectoryJobVolume(VolumeInfo info) : IJobVolume
         CancellationToken token, Action<WorkProgress>? diagnostics = null);
     public byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token)
         => throw new NotSupportedException($"{Info.FileSystem} custom relocation is unavailable.");
-    public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules)
+    public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules, bool verifyResult)
         => throw new NotSupportedException($"{Info.FileSystem} custom relocation is unavailable. Use WindowsDefrag.");
     public void Dispose() { }
 }

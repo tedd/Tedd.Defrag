@@ -198,7 +198,7 @@ public sealed class JobExecutor
                 }, move =>
                 {
                     moveActivity.Enter();
-                    try { volume.ExecuteMove(layout.Files[move.FileIndex], move, rules); }
+                    try { volume.ExecuteMove(layout.Files[move.FileIndex], move, rules, request.Resources.VerifyMoves); }
                     finally { moveActivity.Exit(); }
                 }, (move, error) =>
                 {
@@ -206,7 +206,7 @@ public sealed class JobExecutor
                     try
                     {
                         if (error != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
-                        // Native success has been verified by retrieval pointers before changing the display model.
+                        // With immediate verification disabled, the final mandatory scan reconciles this optimistic model.
                         LayoutMutation.Apply(layout, move);
                     }
                     catch (Exception e) when (e is Win32Exception or IOException or InvalidOperationException)
@@ -222,19 +222,21 @@ public sealed class JobExecutor
                     session.MoveVerified(move);
                     layoutIndexDirty = true;
                     moved += move.Clusters * layout.Volume.BytesPerCluster;
-                    verifiedMoves++;
+                    if (request.Resources.VerifyMoves) verifiedMoves++;
                     // Publication failures must stop dispatch, not count a verified native move as failed too.
-                    store.Journal(request.Id, new(DateTimeOffset.UtcNow, "verified", move));
+                    store.Journal(request.Id, new(DateTimeOffset.UtcNow, request.Resources.VerifyMoves ? "verified" : "awaiting-final-scan", move));
                     if (clock.ElapsedMilliseconds - lastPublish >= 200) MapAggregator.Build(layout, map);
                     MapAggregator.Activity(map, layout.TotalClusters, move.DestinationLcn, move.Clusters, true);
                     Publish();
                 }, Checkpoint, (completed, pending, peak) =>
                 {
                     progress = (double)completed / plan.Moves.Length;
-                    executionWork = new("Relocating and verifying", completed, plan.Moves.Length, "batch moves", depth,
+                    executionWork = new(request.Resources.VerifyMoves ? "Relocating and verifying" : "Relocating; final scan pending", completed, plan.Moves.Length, "batch moves", depth,
                         moveActivity.Active, moveActivity.Peak, moveActivity.Active, moveActivity.Peak, moved - bytesBeforeBatch, batchWatch.ElapsedMilliseconds,
-                        $"{volume.Info.FileSystem} filesystem I/O; scalar validation",
-                        $"{pending:N0} submitted requests pending (peak {peak:N0}); {verifiedMoves:N0} verified, {failedMoves:N0} failed. Per-file sequences stay serial; metadata queue depth is 1. Device scheduling remains under Windows control.");
+                        request.Resources.VerifyMoves ? $"{volume.Info.FileSystem} filesystem I/O; scalar validation" : $"{volume.Info.FileSystem} filesystem I/O; final full scan will reconcile allocation",
+                        request.Resources.VerifyMoves
+                            ? $"{pending:N0} submitted requests pending (peak {peak:N0}); {verifiedMoves:N0} verified, {failedMoves:N0} failed. Per-file sequences stay serial; metadata queue depth is 1. Device scheduling remains under Windows control."
+                            : $"{pending:N0} submitted requests pending (peak {peak:N0}); {attemptedMoves - failedMoves:N0} completed, {failedMoves:N0} failed. Per-file sequences stay serial; metadata queue depth is 1. Device scheduling remains under Windows control.");
                     Publish();
                 });
                 if (failedMoves > failuresBeforeBatch && allocationUncertain)
@@ -274,7 +276,9 @@ public sealed class JobExecutor
                     : filesBlocked > 0
                     ? $"No relocations were possible: {filesBlocked:N0} of {filesConsidered:N0} considered files were constrained or ineligible."
                     : $"No eligible extents required relocation among {filesConsidered:N0} considered files."
-                : $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. "
+                : request.Resources.VerifyMoves
+                    ? $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. "
+                    : $"{Format.Bytes(moved)} relocated in {attemptedMoves - failedMoves:N0} moves; the final scan reconciled the resulting layout. "
                     + (failedMoves > 0 ? $"{failedMoves:N0} moves failed across {session.BlockedFiles.Count:N0} files; other eligible files were processed. " : "")
                     + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete."));
 

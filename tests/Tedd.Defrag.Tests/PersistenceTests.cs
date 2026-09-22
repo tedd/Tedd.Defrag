@@ -19,6 +19,49 @@ public class PersistenceTests
         Assert.Throws<ArgumentException>(() => new JobRequest { Volume = "V:", Exclusions = [new("[", PathRuleKind.Regex)] }.Validate());
     }
 
+    [Fact]
+    public void DesktopSettingsPersistSeparatelyFromJobRecords()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new JobStore(root);
+            var expected = new DesktopSettings
+            {
+                SelectedOperation = Operation.PackAndDefrag,
+                ResourcePresetIndex = 1,
+                AdvancedControlsVisible = true,
+                SelectedPaths = [new(new PathRule(@"V:\\Data", PathRuleKind.Path), true)],
+                Exclusions = [new(new PathRule(@"V:\\Data\\cache\\*", PathRuleKind.Wildcard), false)],
+                CompressionTargets = [new(new CompressionTarget(new PathRule(@"V:\\Archive", PathRuleKind.Path), CompressionMode.Lzx), true)],
+                CompressionExcludedExtensions = [".zip", ".jpg"],
+                CpuPercent = 40,
+                VerifyMoves = false,
+                MemoryMiB = "512",
+                AffinityMask = "0F",
+                MinimumFragments = "8"
+            };
+
+            store.SaveDesktopSettings(expected);
+
+            var actual = new JobStore(root).DesktopSettings;
+            Assert.Equal(expected.SelectedOperation, actual.SelectedOperation);
+            Assert.Equal(expected.ResourcePresetIndex, actual.ResourcePresetIndex);
+            Assert.Equal(expected.AdvancedControlsVisible, actual.AdvancedControlsVisible);
+            Assert.Equal(expected.SelectedPaths, actual.SelectedPaths);
+            Assert.Equal(expected.Exclusions, actual.Exclusions);
+            Assert.Equal(expected.CompressionTargets, actual.CompressionTargets);
+            Assert.Equal(expected.CompressionExcludedExtensions, actual.CompressionExcludedExtensions);
+            Assert.Equal(expected.CpuPercent, actual.CpuPercent);
+            Assert.False(actual.VerifyMoves);
+            Assert.Equal(expected.MemoryMiB, actual.MemoryMiB);
+            Assert.Equal(expected.AffinityMask, actual.AffinityMask);
+            Assert.Equal(expected.MinimumFragments, actual.MinimumFragments);
+            Assert.True(File.Exists(Path.Combine(root, "desktop-settings.json")));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
     [Theory]
     [InlineData(JobState.Failed)]
     [InlineData(JobState.Cancelled)]

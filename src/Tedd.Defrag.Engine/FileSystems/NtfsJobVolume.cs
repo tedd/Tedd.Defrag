@@ -16,7 +16,7 @@ internal sealed class NtfsJobVolume(JobRequest request) : IJobVolume
     public byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token)
         => _volume.ReadBitmap(request.Resources.MemoryMiB, _ => checkpoint(), token);
 
-    public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules)
+    public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules, bool verifyResult)
     {
         SafeFileHandle? pendingHandle = null;
         try
@@ -41,7 +41,8 @@ internal sealed class NtfsJobVolume(JobRequest request) : IJobVolume
         if (!_moveHandles.TryTake(out var volumeHandle)) volumeHandle = NativeIo.Open(VolumeDiscovery.Device(_volume.Info.Root), write: true);
         try { _volume.Move(handle, move, volumeHandle); }
         finally { _moveHandles.Add(volumeHandle); }
-        if (!LayoutMutation.Matches(FileSystemQueries.RetrievalPointers(handle), move.Vcn, move.DestinationLcn, move.Clusters)) throw new IOException("Move result could not be verified; fresh analysis required.");
+        if (verifyResult && !LayoutMutation.Matches(FileSystemQueries.RetrievalPointers(handle), move.Vcn, move.DestinationLcn, move.Clusters))
+            throw new IOException("Move result could not be verified; fresh analysis required.");
     }
 
     public void Dispose() { while (_moveHandles.TryTake(out var handle)) handle.Dispose(); _volume.Dispose(); }

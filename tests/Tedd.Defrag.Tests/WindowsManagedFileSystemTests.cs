@@ -249,7 +249,7 @@ public abstract class WindowsManagedFileSystemTests
             return new(Info, 64, bitmap, [file], DateTimeOffset.UtcNow, 1, 0, false, [$"Partial {Info.FileSystem} file coverage"]);
         }
         public byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token) => throw new InvalidOperationException("No custom moves through Windows maintenance");
-        public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules) => throw new InvalidOperationException("No custom moves through Windows maintenance");
+        public void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules, bool verifyResult) => throw new InvalidOperationException("No custom moves through Windows maintenance");
         public void Dispose() { }
     }
 }

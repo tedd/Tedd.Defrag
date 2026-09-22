@@ -100,6 +100,8 @@ public sealed record ResourcePolicy
     public int ScanWorkers { get; init; }
     public int PlanningWorkers { get; init; }
     public int MoveQueueDepth { get; init; } = 1;
+    // When disabled, successful NTFS moves are reconciled by the mandatory final scan instead.
+    public bool VerifyMoves { get; init; } = true;
     public static ResourcePolicy Quiet => new() { MemoryMiB = 512, CpuPercent = 10, IoMiBPerSecond = 8, IdleOnly = true, CompressionWorkers = 1, ScanWorkers = 1, PlanningWorkers = 1 };
     public static ResourcePolicy Balanced => new();
     public static ResourcePolicy Performance => new() { CpuPercent = 100, Background = false, AcOnly = false, MoveQueueDepth = 16 };

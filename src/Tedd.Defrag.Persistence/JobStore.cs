@@ -71,6 +71,8 @@ public sealed class JobStore
         if (settings.MaxConcurrentVolumes is < 1 or > 32 || settings.MaxConcurrentJobsPerSharedResource is < 1 or > 8) throw new ArgumentException("Invalid concurrency limits.");
         AtomicWrite(Path.Combine(Root, "settings.json"), settings);
     }
+    public DesktopSettings DesktopSettings => Read<DesktopSettings>(Path.Combine(Root, "desktop-settings.json")) ?? new();
+    public void SaveDesktopSettings(DesktopSettings settings) => AtomicWrite(Path.Combine(Root, "desktop-settings.json"), settings);
     public static T? Read<T>(string path)
     {
         try { using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete); return JsonSerializer.Deserialize<T>(stream, Json); }

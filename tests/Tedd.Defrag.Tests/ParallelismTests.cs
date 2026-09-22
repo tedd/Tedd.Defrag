@@ -195,6 +195,7 @@ public sealed class ParallelismTests
         Assert.Equal(100, defaults.CpuPercent); Assert.Equal(16, defaults.MoveQueueDepth);
         Assert.False(defaults.Background); Assert.False(defaults.AcOnly);
         Assert.Equal(1, ResourcePolicy.Balanced.MoveQueueDepth); Assert.Equal(16, ResourcePolicy.Performance.MoveQueueDepth);
+        Assert.True(defaults.VerifyMoves);
         Assert.Equal(2, WorkerPolicy.ScanWorkers(ResourcePolicy.Performance with { MemoryMiB = 256, ScanWorkers = 32 }));
         Assert.Equal(4, WorkerPolicy.CompressionWorkers(ResourcePolicy.Performance));
         Assert.Equal(2, WorkerPolicy.CompressionWorkers(ResourcePolicy.Balanced));
@@ -204,7 +205,7 @@ public sealed class ParallelismTests
         Assert.Throws<ArgumentException>(() => new ResourcePolicy { ScanWorkers = -1 }.Validate());
         Assert.Throws<ArgumentException>(() => new ResourcePolicy { CompressionWorkers = 33 }.Validate());
         var legacy = System.Text.Json.JsonSerializer.Deserialize<ResourcePolicy>("{\"CpuPercent\":25}");
-        Assert.Equal(1, legacy!.MoveQueueDepth); Assert.Equal(0, legacy.ScanWorkers); Assert.Equal(0, legacy.CompressionWorkers);
+        Assert.Equal(1, legacy!.MoveQueueDepth); Assert.True(legacy.VerifyMoves); Assert.Equal(0, legacy.ScanWorkers); Assert.Equal(0, legacy.CompressionWorkers);
     }
 
     private static PlannedMove[] Moves() => Enumerable.Range(1, 3).SelectMany(id => Enumerable.Range(0, 3)

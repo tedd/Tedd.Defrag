@@ -26,7 +26,7 @@ public sealed class FileSystemSupportTests
         var info = Info(fileSystem);
         using var volume = JobVolume.Open(new() { Volume = info.Root }, info);
         Assert.IsType<FatJobVolume>(volume);
-        Assert.Throws<NotSupportedException>(() => volume.ExecuteMove(null!, default, new([], [])));
+        Assert.Throws<NotSupportedException>(() => volume.ExecuteMove(null!, default, new([], []), true));
     }
 
     [Fact]
