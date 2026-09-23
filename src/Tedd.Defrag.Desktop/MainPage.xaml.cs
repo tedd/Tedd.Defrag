@@ -7,6 +7,7 @@ using Tedd.Defrag.Persistence;
 using Tedd.Defrag.Update;
 using Tedd.Defrag.Visualization;
 using Tedd.Defrag.Windows;
+using Tedd.Maui;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
 using WinUIElement = Microsoft.UI.Xaml.UIElement;
@@ -20,6 +21,8 @@ public partial class MainPage : ContentPage
     private readonly JobStore _store = new();
     private readonly DiskMapDrawable _map = new();
     private readonly MapOverviewDrawable _overview = new();
+    private WriteableBitmap? _diskBitmap, _overviewBitmap;
+    private bool _mapRetryQueued, _overviewRetryQueued, _mapResizeQueued, _overviewResizeQueued;
     private readonly Dictionary<string, VolumeSession> _volumeSessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ObservableCollection<RuleEditorItem> _fileRules = [];
     private readonly ObservableCollection<RuleEditorItem> _exclusionRules = [];
@@ -38,6 +41,7 @@ public partial class MainPage : ContentPage
     private bool _settingsLoaded;
     private bool _selectingRegion, _mapDragged;
     private int _mapGestureStart = -1, _mapGestureCurrent = -1, _regionRequest;
+    private int _hoveredMapCell = -1;
     private long _mapGestureViewportStart, _pendingPanStart;
     private WinUIElement? _mapPlatformView;
     private ulong? _selectedMapFileId;
@@ -72,7 +76,10 @@ public partial class MainPage : ContentPage
     private PolicyOption _selectedPolicy = Policies[0];
     public MainPage()
     {
-        InitializeComponent(); DiskMap.Drawable = _map; MapOverview.Drawable = _overview;
+        InitializeComponent();
+        DiskMap.Drawable = MapOverview.Drawable = new InputSurfaceDrawable();
+        DiskMap.SizeChanged += (_, _) => QueueMapResize();
+        MapOverview.SizeChanged += (_, _) => QueueOverviewResize();
         DiskMap.HandlerChanged += OnDiskMapHandlerChanged;
         ThemePicker.ItemsSource = new[] { "Follow Windows", "Light", "Dark" };
         _settingTheme = true;
@@ -104,6 +111,9 @@ public partial class MainPage : ContentPage
     {
         if (Interlocked.Exchange(ref _shuttingDown, 1) != 0) return;
         _timer.Stop();
+        DiskMapBitmap.Source = MapOverviewBitmap.Source = null;
+        _diskBitmap?.Dispose(); _overviewBitmap?.Dispose();
+        _diskBitmap = _overviewBitmap = null;
         SaveDesktopSettings();
         try
         {
@@ -124,6 +134,78 @@ public partial class MainPage : ContentPage
         {
             System.Diagnostics.Debug.WriteLine(exception);
         }
+    }
+
+    private static WriteableBitmap EnsureBitmap(WriteableBitmapView view, ref WriteableBitmap? bitmap, int width, int height)
+    {
+        if (bitmap != null && bitmap.Width == width && bitmap.Height == height) return bitmap;
+        var old = bitmap;
+        bitmap = new WriteableBitmap(width, height);
+        view.Source = bitmap;
+        old?.Dispose();
+        return bitmap;
+    }
+
+    private static (int Width, int Height, int Padding) PixelSize(VisualElement view)
+    {
+        double density = DeviceDisplay.Current.MainDisplayInfo.Density;
+        return (Math.Max(1, (int)Math.Round(view.Width * density)),
+            Math.Max(1, (int)Math.Round(view.Height * density)), Math.Max(1, (int)Math.Round(density)));
+    }
+
+    private void QueueMapResize()
+    {
+        if (_mapResizeQueued) return;
+        _mapResizeQueued = true;
+        Dispatcher.DispatchDelayed(TimeSpan.FromMilliseconds(75), () => { _mapResizeQueued = false; RedrawMap(); });
+    }
+
+    private void QueueOverviewResize()
+    {
+        if (_overviewResizeQueued) return;
+        _overviewResizeQueued = true;
+        Dispatcher.DispatchDelayed(TimeSpan.FromMilliseconds(75), () => { _overviewResizeQueued = false; RedrawOverview(); });
+    }
+
+    private void RedrawMap()
+    {
+        if (DiskMap.Width <= 0 || DiskMap.Height <= 0 || Volatile.Read(ref _shuttingDown) != 0) return;
+        _map.SetViewport((float)DiskMap.Width, (float)DiskMap.Height);
+        _hoveredMapCell = -1;
+        MapEmptyMessage.Text = _map.EmptyMessage;
+        MapEmptyMessage.IsVisible = _map.Cells.Length == 0;
+        var (width, height, padding) = PixelSize(DiskMap);
+        var bitmap = EnsureBitmap(DiskMapBitmap, ref _diskBitmap, width, height);
+        if (!bitmap.TryBeginWrite(out var write))
+        {
+            if (!_mapRetryQueued)
+            {
+                _mapRetryQueued = true;
+                Dispatcher.DispatchDelayed(TimeSpan.FromMilliseconds(16), () => { _mapRetryQueued = false; RedrawMap(); });
+            }
+            return;
+        }
+        try { _map.Rasterize(write.Pixels, bitmap.Stride / sizeof(uint), width, height, padding); }
+        finally { write.Dispose(); }
+    }
+
+    private void RedrawOverview()
+    {
+        if (MapOverview.Width <= 0 || MapOverview.Height <= 0 || Volatile.Read(ref _shuttingDown) != 0) return;
+        _overview.SetViewport((float)MapOverview.Width);
+        var (width, height, _) = PixelSize(MapOverview);
+        var bitmap = EnsureBitmap(MapOverviewBitmap, ref _overviewBitmap, width, height);
+        if (!bitmap.TryBeginWrite(out var write))
+        {
+            if (!_overviewRetryQueued)
+            {
+                _overviewRetryQueued = true;
+                Dispatcher.DispatchDelayed(TimeSpan.FromMilliseconds(16), () => { _overviewRetryQueued = false; RedrawOverview(); });
+            }
+            return;
+        }
+        try { _overview.Rasterize(write.Pixels, bitmap.Stride / sizeof(uint), width, height); }
+        finally { write.Dispose(); }
     }
     private async Task CheckForUpdate()
     {
@@ -261,7 +343,7 @@ public partial class MainPage : ContentPage
         ClearFileHighlight(); ClusterOverlay.IsVisible = false; DiagnosticsOverlay.IsVisible = false;
         _map.EmptyMessage = volume == null ? "Connect a volume and refresh to begin." :
             FileSystemCapabilities.IsSupported(volume.FileSystem) ? "Analyze this volume to reveal its allocation map." : "Select an NTFS, ReFS, FAT or FAT32 volume to analyze its allocation.";
-        DiskMap.Invalidate(); MapOverview.Invalidate();
+        RedrawMap(); RedrawOverview();
         ModeBadge.Text = volume?.FileSystem.ToUpperInvariant() ?? "NO VOLUME";
         VolumeTitle.Text = volume == null ? "No volume selected" : $"{volume.Root[..2]}  {volume.Label}";
         MapSubtitle.Text = volume == null ? "Connect a volume and refresh to begin." : $"{volume.FileSystem} · {volume.BytesPerCluster:N0}-byte clusters · awaiting analysis";
@@ -415,7 +497,7 @@ public partial class MainPage : ContentPage
         }
         else if (totalClusters > 0 && mapChanged)
         {
-            MapOverview.Invalidate();
+            RedrawOverview();
             _ = LoadRegion(_map.StartCluster, _map.ClusterCount);
         }
         if (_volume != null && layout?.ObservedAt.HasValue == true)
@@ -841,7 +923,7 @@ public partial class MainPage : ContentPage
         _overview.Cells = session.Cells; _overview.TotalClusters = total;
         _overview.StartCluster = 0; _overview.ClusterCount = total;
         if (_selectedMapFile != null) _map.SetHighlight(_selectedMapFile.Ranges);
-        DiskMap.Invalidate(); MapOverview.Invalidate(); UpdateRange();
+        RedrawMap(); RedrawOverview(); UpdateRange();
         if (_selectedMapFileId.HasValue) _ = LoadRegion(0, total);
     }
     private void UpdateRange(long? previewStart = null)
@@ -882,7 +964,7 @@ public partial class MainPage : ContentPage
             if (!full) _map.SetRegion(region.StartCluster, region.ClusterCount, region.TotalClusters, region.Cells);
             _overview.StartCluster = region.StartCluster; _overview.ClusterCount = region.ClusterCount;
             ApplyFileSelection(region.Selection);
-            DiskMap.Invalidate(); MapOverview.Invalidate(); UpdateRange();
+            RedrawMap(); RedrawOverview(); UpdateRange();
             if (region.Selection != null && !region.Selection.Ranges.Any(range => RangesOverlap(range.Start, range.End, region.StartCluster, region.StartCluster + region.ClusterCount)))
             {
                 var firstRange = region.Selection.Ranges.FirstOrDefault(range => range.Length > 0);
@@ -898,21 +980,21 @@ public partial class MainPage : ContentPage
         _map.Reset(session.Cells, total); _overview.Cells = session.Cells; _overview.TotalClusters = total;
         _overview.StartCluster = 0; _overview.ClusterCount = total;
         if (_selectedMapFile != null) _map.SetHighlight(_selectedMapFile.Ranges);
-        DiskMap.Invalidate(); MapOverview.Invalidate(); UpdateRange();
+        RedrawMap(); RedrawOverview(); UpdateRange();
     }
     private void OnSelectRegion(object? sender, EventArgs e)
     {
         _selectingRegion = !_selectingRegion; _map.ClearSelection();
         RegionSelectButton.Text = _selectingRegion ? "Drag a region…" : "Select region";
         RegionSelectButton.SetDynamicResource(Button.BackgroundColorProperty, _selectingRegion ? "NavSelected" : "ButtonSurface");
-        DiskMap.Invalidate();
+        RedrawMap();
     }
     private void OnMapStart(object? sender, TouchEventArgs e)
     {
         if (e.Touches.Length == 0) return;
         _mapGestureStart = _mapGestureCurrent = _map.Hit(e.Touches[0].X, e.Touches[0].Y);
         _mapGestureViewportStart = _pendingPanStart = _map.StartCluster; _mapDragged = false;
-        if (_selectingRegion && _mapGestureStart >= 0) { _map.SetSelection(_mapGestureStart, _mapGestureStart); DiskMap.Invalidate(); }
+        if (_selectingRegion && _mapGestureStart >= 0) { _map.SetSelection(_mapGestureStart, _mapGestureStart); RedrawMap(); }
     }
     private void OnMapDrag(object? sender, TouchEventArgs e)
     {
@@ -921,12 +1003,12 @@ public partial class MainPage : ContentPage
         _mapGestureCurrent = current; _mapDragged |= current != _mapGestureStart;
         if (_selectingRegion)
         {
-            _map.SetSelection(_mapGestureStart, current); DiskMap.Invalidate(); return;
+            _map.SetSelection(_mapGestureStart, current); RedrawMap(); return;
         }
         long step = Math.Max(1, _map.CellRange(0).Length);
         _pendingPanStart = Math.Clamp(_mapGestureViewportStart + (long)(_mapGestureStart - current) * step,
             0, Math.Max(0, _map.TotalClusters - _map.ClusterCount));
-        _overview.StartCluster = _pendingPanStart; MapOverview.Invalidate(); UpdateRange(_pendingPanStart);
+        _overview.StartCluster = _pendingPanStart; RedrawOverview(); UpdateRange(_pendingPanStart);
     }
     private async void OnMapEnd(object? sender, TouchEventArgs e)
     {
@@ -936,7 +1018,7 @@ public partial class MainPage : ContentPage
         if (_selectingRegion)
         {
             _map.ClearSelection(); _selectingRegion = false; RegionSelectButton.Text = "Select region";
-            RegionSelectButton.SetDynamicResource(Button.BackgroundColorProperty, "ButtonSurface"); DiskMap.Invalidate();
+            RegionSelectButton.SetDynamicResource(Button.BackgroundColorProperty, "ButtonSurface"); RedrawMap();
             var first = _map.CellRange(Math.Min(start, end)); var last = _map.CellRange(Math.Max(start, end));
             if (first.Length > 0 && last.Length > 0) await LoadRegion(first.Start, last.End - first.Start);
             return;
@@ -949,6 +1031,8 @@ public partial class MainPage : ContentPage
     {
         if (e.Touches.Length == 0) return;
         int index = _map.Hit(e.Touches[0].X, e.Touches[0].Y); if (index < 0) return;
+        if (index == _hoveredMapCell) return;
+        _hoveredMapCell = index;
         var range = _map.CellRange(index); var c = _map.Cells[index]; double n = Math.Max(1, c.Clusters);
         CellDetail.Text = $"LCN {range.Start:N0}–{range.End - 1:N0} · {c.Clusters:N0} clusters · {c.Allocated / n:P0} allocated · {c.Fragmented / n:P0} fragmented · {c.Metadata / n:P0} metadata";
     }
@@ -959,7 +1043,7 @@ public partial class MainPage : ContentPage
     {
         long center = _overview.ClusterAt(x);
         _pendingPanStart = Math.Clamp(center - _map.ClusterCount / 2, 0, Math.Max(0, _map.TotalClusters - _map.ClusterCount));
-        _overview.StartCluster = _pendingPanStart; MapOverview.Invalidate(); UpdateRange(_pendingPanStart);
+        _overview.StartCluster = _pendingPanStart; RedrawOverview(); UpdateRange(_pendingPanStart);
     }
     private void OnDiskMapHandlerChanged(object? sender, EventArgs e)
     {
@@ -1324,7 +1408,7 @@ public partial class MainPage : ContentPage
                 if (first.Length > 0) await LoadRegion(Math.Clamp(first.Start - _map.ClusterCount / 2, 0,
                     Math.Max(0, _map.TotalClusters - _map.ClusterCount)), _map.ClusterCount);
             }
-            DiskMap.Invalidate();
+            RedrawMap();
         }
         catch (Exception exception) { await DisplayAlertAsync("File could not be located", exception.Message, "Close"); }
         finally { LocateFileButton.IsEnabled = true; }
@@ -1345,7 +1429,7 @@ public partial class MainPage : ContentPage
     {
         _regionRequest++;
         _selectedMapFileId = null; _selectedMapPath = null; _selectedMapStream = ""; _selectedMapFile = null;
-        _map.SetHighlight([]); HighlightedFile.IsVisible = false; DiskMap.Invalidate();
+        _map.SetHighlight([]); HighlightedFile.IsVisible = false; RedrawMap();
     }
     private static bool RangesOverlap(long a, long b, long c, long d) => a < d && c < b;
     private async void OnExport(object? sender, EventArgs e)
@@ -1461,4 +1545,8 @@ public partial class MainPage : ContentPage
         public string Status => File.Status;
     }
     private sealed record PolicyOption(string Icon, string Name, string Description, Operation Operation);
+    private sealed class InputSurfaceDrawable : IDrawable
+    {
+        public void Draw(ICanvas canvas, RectF dirtyRect) { }
+    }
 }

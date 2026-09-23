@@ -7,6 +7,7 @@ using Tedd.Defrag.Archive;
 using Tedd.Defrag.Core;
 using Tedd.Defrag.Planning;
 using Tedd.Defrag.Visualization;
+using Tedd.Maui;
 
 // BDN 0.15.8's SDK validator predates .NET 11. Its emit toolchain executes the actual
 // net11.0 host and preserves MemoryDiagnoser without mislabelling the runtime as .NET 10.
@@ -22,6 +23,118 @@ public class BitmapBenchmarks
     [Benchmark(Baseline = true)] public long ArchiveBitLoop() => BaselinesV1.BitByBitPopcount(_data);
     [Benchmark] public long HardwarePopcount() => BitmapOperations.CountAllocated(_data);
     [Benchmark] public long Avx2NibbleLookup() => BitmapKernel.CountAllocated(_data);
+}
+
+[MemoryDiagnoser]
+public class MapRasterBenchmarks
+{
+    [Params(8192, 65536)] public int Cells { get; set; }
+    private const int Width = 1280, Height = 276;
+    private uint[] _pixels = [];
+    private uint[] _colors = [];
+    private int _columns, _rows;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _pixels = new uint[Width * Height];
+        _colors = Enumerable.Range(0, Cells).Select(i => 0xFF000000u | (uint)(i * 7919 & 0xFFFFFF)).ToArray();
+        (_columns, _rows) = MapRasterizer.Grid(Cells, Width, Height);
+    }
+
+    [Benchmark(Baseline = true)]
+    public uint ScalarPixels()
+    {
+        MapRasterizer.DrawScalar(_pixels, Width, Width, Height, _colors, _columns, _rows, 0xFF172531, 1);
+        return _pixels[Width * Height / 2];
+    }
+
+    [Benchmark]
+    public uint SpanFill()
+    {
+        MapRasterizer.DrawSpans(_pixels, Width, Width, Height, _colors, _columns, _rows, 0xFF172531, 1);
+        return _pixels[Width * Height / 2];
+    }
+
+    [Benchmark]
+    public uint RowOriented()
+    {
+        MapRasterizer.DrawRows(_pixels, Width, Width, Height, _colors, _columns, _rows, 0xFF172531, 1);
+        return _pixels[Width * Height / 2];
+    }
+}
+
+[MemoryDiagnoser]
+public class NativeMapRasterBenchmarks
+{
+    private const int Width = 1280, Height = 276, Cells = 8192;
+    private WriteableBitmap _bitmap = null!;
+    private uint[] _colors = [];
+    private int _columns, _rows;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _bitmap = new WriteableBitmap(Width, Height);
+        _colors = Enumerable.Range(0, Cells).Select(i => 0xFF000000u | (uint)(i * 7919 & 0xFFFFFF)).ToArray();
+        (_columns, _rows) = MapRasterizer.Grid(Cells, Width, Height);
+    }
+
+    [GlobalCleanup] public void Cleanup() => _bitmap.Dispose();
+
+    [Benchmark(Baseline = true)] public uint ScalarPixels() => Draw(0);
+    [Benchmark] public uint SpanFill() => Draw(1);
+    [Benchmark] public uint RowOriented() => Draw(2);
+
+    private uint Draw(int method)
+    {
+        if (!_bitmap.TryBeginWrite(out var write)) throw new InvalidOperationException("No free bitmap buffer.");
+        uint sample;
+        try
+        {
+            Span<uint> pixels = write.Pixels;
+            switch (method)
+            {
+                case 0: MapRasterizer.DrawScalar(pixels, _bitmap.Stride / 4, Width, Height, _colors, _columns, _rows, 0xFF172531, 1); break;
+                case 1: MapRasterizer.DrawSpans(pixels, _bitmap.Stride / 4, Width, Height, _colors, _columns, _rows, 0xFF172531, 1); break;
+                default: MapRasterizer.DrawRows(pixels, _bitmap.Stride / 4, Width, Height, _colors, _columns, _rows, 0xFF172531, 1); break;
+            }
+            sample = pixels[Width * Height / 2];
+        }
+        finally { write.Dispose(); }
+        return sample;
+    }
+}
+
+[MemoryDiagnoser]
+public class OverviewRasterBenchmarks
+{
+    [Params(1280, 2560)] public int Width { get; set; }
+    private int Height => Width == 1280 ? 42 : 84;
+    private uint[] _pixels = [], _colors = [];
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _pixels = new uint[Width * Height];
+        _colors = Enumerable.Range(0, 8192).Select(i => 0xFF000000u | (uint)(i * 7919 & 0xFFFFFF)).ToArray();
+    }
+
+    [Benchmark(Baseline = true)]
+    public uint ColumnFills()
+    {
+        for (int x = 0; x < Width; x++)
+            MapRasterizer.FillRectangle(_pixels, Width, Width, Height, x, 0, x + 1, Height,
+                _colors[(int)((long)x * _colors.Length / Width)]);
+        return _pixels[Width * Height / 2];
+    }
+
+    [Benchmark]
+    public uint RowWrites()
+    {
+        MapRasterizer.DrawOverviewRows(_pixels, Width, Width, Height, _colors);
+        return _pixels[Width * Height / 2];
+    }
 }
 [MemoryDiagnoser]
 public class FreeSpaceBenchmarks

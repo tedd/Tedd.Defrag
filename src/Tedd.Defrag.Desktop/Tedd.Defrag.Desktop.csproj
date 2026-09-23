@@ -24,6 +24,7 @@
     <MauiFont Include="Resources/Fonts/*" />
     <PackageReference Include="Microsoft.Maui.Controls" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
+    <PackageReference Include="Tedd.WriteableBitmap.Maui" />
     <ProjectReference Include="../Tedd.Defrag.Client/Tedd.Defrag.Client.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Update/Tedd.Defrag.Update.csproj" />
     <ProjectReference Include="../Tedd.Defrag.Visualization/Tedd.Defrag.Visualization.csproj" />
