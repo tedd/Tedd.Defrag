@@ -14,6 +14,7 @@ public sealed class DiskMapDrawable
     public long TotalClusters { get; private set; }
     private readonly HashSet<int> _highlightedCells = [];
     private uint[] _packedCells = [];
+    private uint[] _rowTemplate = [];
     private float _width, _height;
     private int _columns, _rows;
     private int _selectionStart = -1, _selectionEnd = -1;
@@ -71,8 +72,15 @@ public sealed class DiskMapDrawable
             _packedCells = new uint[count];
             for (int i = 0; i < count; i++) _packedCells[i] = Pack(MapAggregator.Color(Cells[i]));
         }
-        MapRasterizer.DrawSpans(pixels, stride, width, height, _packedCells, _columns, _rows,
-            Pack(0xFF172531), padding);
+        if (_rows * 3 >= height)
+            MapRasterizer.DrawRows(pixels, stride, width, height, _packedCells, _columns, _rows,
+                Pack(0xFF172531), padding);
+        else
+        {
+            if (_rowTemplate.Length < width) _rowTemplate = new uint[width];
+            MapRasterizer.DrawRowTemplate(pixels, stride, width, height, _packedCells, _columns, _rows,
+                Pack(0xFF172531), padding, _rowTemplate);
+        }
         foreach (int index in _highlightedCells)
             if (index < count) MapRasterizer.Border(pixels, stride, width, height, index, _columns, _rows, Pack(0xFFFFD45A), Math.Max(1, padding));
         if (_selectionStart < 0 || count == 0) return;

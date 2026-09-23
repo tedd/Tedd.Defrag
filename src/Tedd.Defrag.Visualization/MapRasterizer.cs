@@ -64,6 +64,32 @@ public static class MapRasterizer
         }
     }
 
+    public static void DrawRowTemplate(Span<uint> pixels, int stride, int width, int height,
+        ReadOnlySpan<uint> colors, int columns, int rows, uint background, int padding, Span<uint> template)
+    {
+        Validate(pixels, stride, width, height, colors.Length, columns, rows);
+        if (template.Length < width) throw new ArgumentException("The row template is shorter than the image width.", nameof(template));
+        Clear(pixels, stride, width, height, background);
+        if (columns == 0) return;
+        template = template[..width];
+        for (int row = 0; row < rows; row++)
+        {
+            int top = row * height / rows + padding;
+            int bottom = Math.Min(height, Math.Max(top + 1, (row + 1) * height / rows - padding));
+            if (top >= height) continue;
+            template.Fill(background);
+            for (int column = 0; column < columns; column++)
+            {
+                int index = row * columns + column;
+                if (index >= colors.Length) break;
+                int left = column * width / columns + padding;
+                int right = Math.Min(width, Math.Max(left + 1, (column + 1) * width / columns - padding));
+                if (left < width) template.Slice(left, right - left).Fill(colors[index]);
+            }
+            for (int y = top; y < bottom; y++) template.CopyTo(pixels.Slice(y * stride, width));
+        }
+    }
+
     public static void Border(Span<uint> pixels, int stride, int width, int height,
         int index, int columns, int rows, uint color, int thickness = 1)
     {

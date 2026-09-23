@@ -8,6 +8,8 @@ using Tedd.Defrag.Core;
 using Tedd.Defrag.Planning;
 using Tedd.Defrag.Visualization;
 using Tedd.Maui;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 // BDN 0.15.8's SDK validator predates .NET 11. Its emit toolchain executes the actual
 // net11.0 host and preserves MemoryDiagnoser without mislabelling the runtime as .NET 10.
@@ -32,12 +34,14 @@ public class MapRasterBenchmarks
     private const int Width = 1280, Height = 276;
     private uint[] _pixels = [];
     private uint[] _colors = [];
+    private uint[] _template = [];
     private int _columns, _rows;
 
     [GlobalSetup]
     public void Setup()
     {
         _pixels = new uint[Width * Height];
+        _template = new uint[Width];
         _colors = Enumerable.Range(0, Cells).Select(i => 0xFF000000u | (uint)(i * 7919 & 0xFFFFFF)).ToArray();
         (_columns, _rows) = MapRasterizer.Grid(Cells, Width, Height);
     }
@@ -62,6 +66,116 @@ public class MapRasterBenchmarks
         MapRasterizer.DrawRows(_pixels, Width, Width, Height, _colors, _columns, _rows, 0xFF172531, 1);
         return _pixels[Width * Height / 2];
     }
+
+    [Benchmark]
+    public uint RowTemplate()
+    {
+        MapRasterizer.DrawRowTemplate(_pixels, Width, Width, Height, _colors, _columns, _rows, 0xFF172531, 1, _template);
+        return _pixels[Width * Height / 2];
+    }
+}
+
+[MemoryDiagnoser]
+public class BitPlaneMapBenchmarks
+{
+    private const int Width = 1280, Height = 276, Cells = 8192;
+    private static readonly uint[] Overrides = [0xFFFFFFFF, 0xFF70C94A, 0xFF37C3DB,
+        0xFFF3BF3E, 0xFF8295A3, 0xFF455B6B];
+    private static readonly Vector256<uint> LaneBits = Vector256.Create(1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u);
+    private uint[] _pixels = [], _colors = [], _baseColors = [], _decoded = [];
+    private ulong[][] _planes = [];
+    private int _columns, _rows;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var random = new Random(1729);
+        _pixels = new uint[Width * Height];
+        _colors = new uint[Cells];
+        _baseColors = new uint[Cells];
+        _decoded = new uint[Cells];
+        _planes = Enumerable.Range(0, Overrides.Length).Select(_ => new ulong[(Cells + 63) / 64]).ToArray();
+        (_columns, _rows) = MapRasterizer.Grid(Cells, Width, Height);
+        for (int i = 0; i < Cells; i++)
+        {
+            long allocated = random.Next(129);
+            int category = random.Next(10);
+            var cell = new MapCell(128, allocated,
+                category == 3 ? Math.Min(allocated, 32) : 0,
+                category == 2 ? Math.Min(allocated, 32) : 0,
+                category == 4 ? Math.Min(allocated, 64) : 0,
+                category == 0 ? 1 : 0,
+                category == 1 ? 1 : 0);
+            _colors[i] = MapAggregator.Color(cell);
+            _baseColors[i] = MapAggregator.Color(cell with
+            {
+                Fragmented = 0, Metadata = 0, Excluded = 0, Moving = 0, Verified = 0
+            });
+            int plane = Array.IndexOf(Overrides, _colors[i]);
+            if (plane >= 0) _planes[plane][i >> 6] |= 1UL << (i & 63);
+        }
+        DecodeScalar();
+        if (!_decoded.AsSpan().SequenceEqual(_colors)) throw new InvalidOperationException("Bit-plane fixture differs from map colors.");
+        if (Avx2.IsSupported)
+        {
+            DecodeAvx2();
+            if (!_decoded.AsSpan().SequenceEqual(_colors)) throw new InvalidOperationException("AVX2 decode differs from map colors.");
+        }
+    }
+
+    [Benchmark(Baseline = true)]
+    public uint CachedColors()
+    {
+        MapRasterizer.DrawSpans(_pixels, Width, Width, Height, _colors, _columns, _rows, 0xFF172531, 1);
+        return _pixels[Width * Height / 2];
+    }
+
+    [Benchmark]
+    public uint ScalarBitPlanes()
+    {
+        DecodeScalar();
+        MapRasterizer.DrawSpans(_pixels, Width, Width, Height, _decoded, _columns, _rows, 0xFF172531, 1);
+        return _pixels[Width * Height / 2];
+    }
+
+    [Benchmark]
+    public uint Avx2BitPlanes()
+    {
+        if (!Avx2.IsSupported) return ScalarBitPlanes();
+        DecodeAvx2();
+        MapRasterizer.DrawSpans(_pixels, Width, Width, Height, _decoded, _columns, _rows, 0xFF172531, 1);
+        return _pixels[Width * Height / 2];
+    }
+
+    private void DecodeScalar()
+    {
+        for (int i = 0; i < Cells; i++)
+        {
+            uint color = _baseColors[i];
+            ulong bit = 1UL << (i & 63);
+            for (int plane = 0; plane < Overrides.Length; plane++)
+                if ((_planes[plane][i >> 6] & bit) != 0) { color = Overrides[plane]; break; }
+            _decoded[i] = color;
+        }
+    }
+
+    private void DecodeAvx2()
+    {
+        ref uint source = ref _baseColors[0];
+        ref uint destination = ref _decoded[0];
+        for (int i = 0; i < Cells; i += 8)
+        {
+            var colors = Vector256.LoadUnsafe(ref source, (nuint)i);
+            int word = i >> 6, shift = i & 63;
+            for (int plane = 0; plane < Overrides.Length; plane++)
+            {
+                uint bits = (uint)((_planes[plane][word] >> shift) & 0xFF);
+                var mask = Avx2.CompareEqual(Avx2.And(LaneBits, Vector256.Create(bits)), LaneBits);
+                colors = Avx2.Or(Avx2.And(mask, Vector256.Create(Overrides[plane])), Avx2.AndNot(mask, colors));
+            }
+            colors.StoreUnsafe(ref destination, (nuint)i);
+        }
+    }
 }
 
 [MemoryDiagnoser]
@@ -70,6 +184,7 @@ public class NativeMapRasterBenchmarks
     private const int Width = 1280, Height = 276, Cells = 8192;
     private WriteableBitmap _bitmap = null!;
     private uint[] _colors = [];
+    private uint[] _template = [];
     private int _columns, _rows;
 
     [GlobalSetup]
@@ -77,6 +192,7 @@ public class NativeMapRasterBenchmarks
     {
         _bitmap = new WriteableBitmap(Width, Height);
         _colors = Enumerable.Range(0, Cells).Select(i => 0xFF000000u | (uint)(i * 7919 & 0xFFFFFF)).ToArray();
+        _template = new uint[Width];
         (_columns, _rows) = MapRasterizer.Grid(Cells, Width, Height);
     }
 
@@ -85,6 +201,7 @@ public class NativeMapRasterBenchmarks
     [Benchmark(Baseline = true)] public uint ScalarPixels() => Draw(0);
     [Benchmark] public uint SpanFill() => Draw(1);
     [Benchmark] public uint RowOriented() => Draw(2);
+    [Benchmark] public uint RowTemplate() => Draw(3);
 
     private uint Draw(int method)
     {
@@ -97,7 +214,8 @@ public class NativeMapRasterBenchmarks
             {
                 case 0: MapRasterizer.DrawScalar(pixels, _bitmap.Stride / 4, Width, Height, _colors, _columns, _rows, 0xFF172531, 1); break;
                 case 1: MapRasterizer.DrawSpans(pixels, _bitmap.Stride / 4, Width, Height, _colors, _columns, _rows, 0xFF172531, 1); break;
-                default: MapRasterizer.DrawRows(pixels, _bitmap.Stride / 4, Width, Height, _colors, _columns, _rows, 0xFF172531, 1); break;
+                case 2: MapRasterizer.DrawRows(pixels, _bitmap.Stride / 4, Width, Height, _colors, _columns, _rows, 0xFF172531, 1); break;
+                default: MapRasterizer.DrawRowTemplate(pixels, _bitmap.Stride / 4, Width, Height, _colors, _columns, _rows, 0xFF172531, 1, _template); break;
             }
             sample = pixels[Width * Height / 2];
         }

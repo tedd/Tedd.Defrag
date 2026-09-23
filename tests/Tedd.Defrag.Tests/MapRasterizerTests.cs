@@ -15,16 +15,20 @@ public sealed class MapRasterizerTests
     {
         uint[] colors = Enumerable.Range(0, cellCount).Select(i => 0xFF000000u | (uint)i).ToArray();
         var (columns, rows) = MapRasterizer.Grid(cellCount, width, height);
-        var scalar = new uint[width * height];
-        var spans = new uint[width * height];
-        var rowOriented = new uint[width * height];
+        int stride = width + 3;
+        var scalar = new uint[stride * height];
+        var spans = new uint[stride * height];
+        var rowOriented = new uint[stride * height];
+        var rowTemplate = new uint[stride * height];
 
-        MapRasterizer.DrawScalar(scalar, width, width, height, colors, columns, rows, 0xFF172531, 1);
-        MapRasterizer.DrawSpans(spans, width, width, height, colors, columns, rows, 0xFF172531, 1);
-        MapRasterizer.DrawRows(rowOriented, width, width, height, colors, columns, rows, 0xFF172531, 1);
+        MapRasterizer.DrawScalar(scalar, stride, width, height, colors, columns, rows, 0xFF172531, 1);
+        MapRasterizer.DrawSpans(spans, stride, width, height, colors, columns, rows, 0xFF172531, 1);
+        MapRasterizer.DrawRows(rowOriented, stride, width, height, colors, columns, rows, 0xFF172531, 1);
+        MapRasterizer.DrawRowTemplate(rowTemplate, stride, width, height, colors, columns, rows, 0xFF172531, 1, new uint[width]);
 
         Assert.Equal(scalar, spans);
         Assert.Equal(scalar, rowOriented);
+        Assert.Equal(scalar, rowTemplate);
     }
 
     [Theory]
