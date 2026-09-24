@@ -51,3 +51,20 @@ dotnet run -c Release --no-build --project benchmarks/Tedd.Defrag.Benchmarks/Ted
 ```
 
 The generated BenchmarkDotNet reports are under `artifacts/benchmarks/` locally and are ignored by Git. The raster figures exclude color preparation; the bit-plane figures include decoding but exclude encoding. All figures exclude overlays, MAUI dispatch, CPU-to-GPU upload, GPU rendering, and pointer handling. No measured application frame-rate or private-byte improvement follows from these CPU results. The prior GraphicsView path was not timed under an equivalent on-screen workload.
+
+## Dirty-frame feasibility — 2026-09-24
+
+`Tedd.WriteableBitmap.Maui` selects any free back buffer. Its write-lease contract states that a selected buffer may hold an older frame and must be filled completely before publication. The lease exposes neither a stable slot identifier nor its last frame version. Thus a cell dirty-bit map alone cannot safely update only changed pixels in the current integration. The view draws the complete `SKImage` onto its GL surface, so a CPU-side dirty map would not by itself establish a partial GPU upload.
+
+As a safe estimate of the CPU benefit for selection and highlight changes, `OverlayRedrawBenchmarks` compares a full native-buffer row-template redraw with copying a pre-rendered base frame into the leased buffer and drawing only the selection borders. Setup checks pixel equality. Both methods include lease acquisition and publication and allocate no managed memory per frame. The cached variant requires another 1,413,120-byte base frame at 1,280 × 276 (plus any row padding).
+
+| Selected cells | Full redraw | Copy base and overlay |
+| ---: | ---: | ---: |
+| 1 | 84.53 µs | 70.46 µs |
+| 128 | 101.64 µs | 82.10 µs |
+
+These are eight-iteration means on the same workstation and runtime as above. The one-cell full-redraw result varied (9.80 µs standard deviation); the two methods' 99.9% error ranges overlap. At 128 cells, the copy saved about 20 µs in this CPU-only benchmark. The extra retained frame and unchanged whole-image presentation do not justify adding this cache for the current workload without on-screen frame and memory measurements. A true partial-update design would require per-buffer version tracking in the bitmap library and evidence that GPU presentation can use dirty rectangles.
+
+```powershell
+dotnet run -c Release --no-build --project benchmarks/Tedd.Defrag.Benchmarks/Tedd.Defrag.Benchmarks.csproj -- --filter '*OverlayRedrawBenchmarks*' --iterationCount 8 --warmupCount 4 --artifacts artifacts/benchmarks/overlay-redraw
+```

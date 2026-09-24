@@ -225,6 +225,67 @@ public class NativeMapRasterBenchmarks
 }
 
 [MemoryDiagnoser]
+public class OverlayRedrawBenchmarks
+{
+    private const int Width = 1280, Height = 276, Cells = 8192;
+    [Params(1, 128)] public int SelectedCells { get; set; }
+    private WriteableBitmap _bitmap = null!;
+    private uint[] _colors = [], _basePixels = [], _template = [];
+    private int _columns, _rows;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _bitmap = new WriteableBitmap(Width, Height);
+        _colors = Enumerable.Range(0, Cells).Select(i => 0xFF000000u | (uint)(i * 7919 & 0xFFFFFF)).ToArray();
+        _template = new uint[Width];
+        _basePixels = new uint[_bitmap.Stride / 4 * Height];
+        (_columns, _rows) = MapRasterizer.Grid(Cells, Width, Height);
+        MapRasterizer.DrawRowTemplate(_basePixels, _bitmap.Stride / 4, Width, Height,
+            _colors, _columns, _rows, 0xFF172531, 1, _template);
+        uint[] expected = new uint[_basePixels.Length], actual = new uint[_basePixels.Length];
+        DrawFull(expected);
+        _basePixels.CopyTo(actual, 0);
+        DrawSelection(actual);
+        if (!expected.AsSpan().SequenceEqual(actual)) throw new InvalidOperationException("Cached-base overlay differs from a full redraw.");
+    }
+
+    [GlobalCleanup] public void Cleanup() => _bitmap.Dispose();
+
+    [Benchmark(Baseline = true)] public uint FullRedraw() => Draw(false);
+    [Benchmark] public uint CopyBaseAndOverlay() => Draw(true);
+
+    private uint Draw(bool copyBase)
+    {
+        if (!_bitmap.TryBeginWrite(out var write)) throw new InvalidOperationException("No free bitmap buffer.");
+        uint sample;
+        try
+        {
+            Span<uint> pixels = write.Pixels;
+            if (copyBase) { _basePixels.CopyTo(pixels); DrawSelection(pixels); }
+            else DrawFull(pixels);
+            sample = pixels[Width * Height / 2];
+        }
+        finally { write.Dispose(); }
+        return sample;
+    }
+
+    private void DrawFull(Span<uint> pixels)
+    {
+        MapRasterizer.DrawRowTemplate(pixels, _bitmap.Stride / 4, Width, Height,
+            _colors, _columns, _rows, 0xFF172531, 1, _template);
+        DrawSelection(pixels);
+    }
+
+    private void DrawSelection(Span<uint> pixels)
+    {
+        for (int i = 0; i < SelectedCells; i++)
+            MapRasterizer.Border(pixels, _bitmap.Stride / 4, Width, Height,
+                1000 + i, _columns, _rows, 0xFFFFFFFF);
+    }
+}
+
+[MemoryDiagnoser]
 public class OverviewRasterBenchmarks
 {
     [Params(1280, 2560)] public int Width { get; set; }
