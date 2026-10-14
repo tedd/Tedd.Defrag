@@ -35,7 +35,7 @@
             </FlexLayout>
             <Label Text="Red intensity shows the share of each cell occupied by fragmented files. Movement and verified moves override file colors; metadata and immovable files take precedence in mixed cells." FontSize="10" TextColor="{DynamicResource Muted}" />
             <Label x:Name="CellDetail" Text="Hover to inspect a cluster range. Click for files; drag to pan." FontSize="11" TextColor="{DynamicResource SubtleText}" LineBreakMode="MiddleTruncation" MaxLines="1" />
-            <Label x:Name="HighlightedFile" IsVisible="False" FontSize="11" TextColor="{DynamicResource Highlight}" LineBreakMode="MiddleTruncation" MaxLines="1" />
+            <Label x:Name="HighlightedFile" IsVisible="False" FontSize="11" TextColor="{DynamicResource HighlightText}" LineBreakMode="MiddleTruncation" MaxLines="1" />
           </VerticalStackLayout></Border>
           <Border Style="{StaticResource Card}" Padding="18,16"><VerticalStackLayout Spacing="12">
             <Grid ColumnDefinitions="*,Auto"><Label x:Name="JobTitle" Text="Ready when you are" FontSize="15" FontFamily="OpenSansSemibold" /><Label x:Name="ProgressText" Grid.Column="1" Text="READY" FontSize="10" TextColor="{DynamicResource Accent}" CharacterSpacing="1" /></Grid>
@@ -190,7 +190,17 @@
       <Border Style="{StaticResource Card}" WidthRequest="760" MaximumHeightRequest="680" HorizontalOptions="Center" VerticalOptions="Center" Stroke="{DynamicResource ModalLine}" Background="{DynamicResource ModalSurface}" Padding="22">
         <Grid RowDefinitions="Auto,*,Auto" RowSpacing="14">
           <VerticalStackLayout Spacing="6"><Label Text="FILES IN CLUSTER RANGE" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="ClusterTitle" Text="Cluster contents" FontSize="24" FontAttributes="Bold" /><Label x:Name="ClusterSubtitle" FontSize="11" TextColor="{DynamicResource Muted}" /></VerticalStackLayout>
-          <CollectionView x:Name="ClusterFilesList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnClusterFileSelected"><CollectionView.ItemTemplate><DataTemplate><Border Stroke="{DynamicResource OptionStroke}" Background="{DynamicResource OptionSurface}" StrokeShape="RoundRectangle 8" Padding="12" Margin="0,0,0,7"><Grid ColumnDefinitions="*,100,110" RowDefinitions="Auto,Auto" ColumnSpacing="10"><Label Text="{Binding DisplayPath}" FontSize="12" LineBreakMode="MiddleTruncation" MaxLines="1" /><Label Grid.Row="1" Text="{Binding Status}" FontSize="9" TextColor="{DynamicResource SubtleText}" /><Label Grid.Column="1" Text="{Binding ClusterLabel}" FontSize="11" HorizontalOptions="End" /><Label Grid.Column="2" Text="{Binding BytesLabel}" FontSize="11" HorizontalOptions="End" /></Grid></Border></DataTemplate></CollectionView.ItemTemplate><CollectionView.EmptyView><Label Text="No file-backed streams overlap this range." Padding="20" HorizontalTextAlignment="Center" TextColor="{DynamicResource Muted}" /></CollectionView.EmptyView></CollectionView>
+          <CollectionView x:Name="ClusterFilesList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnClusterFileSelected"><CollectionView.ItemTemplate><DataTemplate><Border Stroke="{DynamicResource OptionStroke}" Background="{DynamicResource OptionSurface}" StrokeShape="RoundRectangle 8" Padding="12" Margin="0,0,0,7">
+            <VisualStateManager.VisualStateGroups>
+              <VisualStateGroup Name="CommonStates">
+                <VisualState Name="Normal" />
+                <VisualState Name="Selected"><VisualState.Setters>
+                  <Setter Property="Background" Value="{DynamicResource SelectionSurface}" />
+                  <Setter Property="Stroke" Value="{DynamicResource HighlightText}" />
+                </VisualState.Setters></VisualState>
+              </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+            <Grid ColumnDefinitions="*,100,110" RowDefinitions="Auto,Auto" ColumnSpacing="10"><Label Text="{Binding DisplayPath}" FontSize="12" LineBreakMode="MiddleTruncation" MaxLines="1" /><Label Grid.Row="1" Text="{Binding Status}" FontSize="9" TextColor="{DynamicResource SubtleText}" /><Label Grid.Column="1" Text="{Binding ClusterLabel}" FontSize="11" HorizontalOptions="End" /><Label Grid.Column="2" Text="{Binding BytesLabel}" FontSize="11" HorizontalOptions="End" /></Grid></Border></DataTemplate></CollectionView.ItemTemplate><CollectionView.EmptyView><Label Text="No file-backed streams overlap this range." Padding="20" HorizontalTextAlignment="Center" TextColor="{DynamicResource Muted}" /></CollectionView.EmptyView></CollectionView>
           <HorizontalStackLayout Grid.Row="2" HorizontalOptions="End" Spacing="8"><Button x:Name="HighlightClusterFileButton" Text="Highlight selected" Clicked="OnHighlightClusterFile" IsEnabled="False" BackgroundColor="{DynamicResource ActionButton}" /><Button Text="Close" Clicked="OnCloseClusterFiles" /></HorizontalStackLayout>
         </Grid>
       </Border>

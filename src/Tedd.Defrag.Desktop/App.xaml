@@ -28,6 +28,7 @@
       <Color x:Key="FreeSpace">#FFFFFF</Color><Color x:Key="Activity">#FFD54A</Color>
       <Color x:Key="FragmentedLow">#F6B6B6</Color><Color x:Key="Verified">#37C9BE</Color>
       <Color x:Key="Highlight">#D2A3FF</Color>
+      <Color x:Key="HighlightText">#663399</Color><Color x:Key="SelectionSurface">#E8DFF3</Color>
 
       <Style TargetType="Label"><Setter Property="TextColor" Value="{DynamicResource Ink}" /><Setter Property="FontFamily" Value="OpenSansRegular" /><Setter Property="FontSize" Value="13" /></Style>
       <Style TargetType="Button"><Setter Property="BackgroundColor" Value="{DynamicResource ButtonSurface}" /><Setter Property="TextColor" Value="{DynamicResource Ink}" /><Setter Property="CornerRadius" Value="9" /><Setter Property="FontFamily" Value="OpenSansSemibold" /><Setter Property="FontSize" Value="12" /><Setter Property="Padding" Value="16,11" /><Setter Property="MinimumHeightRequest" Value="38" /></Style>

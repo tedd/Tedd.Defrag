@@ -113,6 +113,7 @@ public sealed class MapOverviewDrawable
     public long TotalClusters { get; set; }
     public long StartCluster { get; set; }
     public long ClusterCount { get; set; }
+    public IReadOnlyList<ClusterRange> HighlightedRanges { get; set; } = [];
     private float _width;
     private MapCell[]? _packedSource;
     private uint[] _packedCells = [];
@@ -143,6 +144,19 @@ public sealed class MapOverviewDrawable
         MapRasterizer.FillRectangle(pixels, stride, width, height, 0, 0, left, height, shade);
         MapRasterizer.FillRectangle(pixels, stride, width, height, right, 0, width, height, shade);
         uint accent = DiskMapDrawable.Pack(Palette.Selection);
+        // Show tracked extents across the whole volume, including outside the
+        // current viewport. Small extents retain a visible three-pixel marker.
+        foreach (var range in HighlightedRanges)
+        {
+            long start = Math.Clamp(range.Start, 0, TotalClusters);
+            long end = Math.Clamp(range.End, 0, TotalClusters);
+            if (end <= start) continue;
+            int x = (int)((double)start / TotalClusters * width);
+            int extentRight = (int)Math.Ceiling((double)end / TotalClusters * width);
+            MapRasterizer.FillRectangle(pixels, stride, width, height,
+                Math.Min(x, Math.Max(0, width - 3)), Math.Max(0, height / 2 - 2),
+                Math.Max(x + 3, extentRight), Math.Min(height, height / 2 + 3), accent);
+        }
         MapRasterizer.FillRectangle(pixels, stride, width, height, left, 0, Math.Max(left + 2, right), 2, accent);
         MapRasterizer.FillRectangle(pixels, stride, width, height, left, height - 2, Math.Max(left + 2, right), height, accent);
         MapRasterizer.FillRectangle(pixels, stride, width, height, left, 0, left + 2, height, accent);

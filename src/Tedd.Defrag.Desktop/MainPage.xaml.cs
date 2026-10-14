@@ -1368,9 +1368,14 @@ public partial class MainPage : ContentPage
             ClusterSubtitle.Text = reply.Region.FileCount > reply.Region.Files.Length
                 ? $"{reply.Region.FileCount:N0} streams overlap this range; showing the first {reply.Region.Files.Length:N0}."
                 : $"{reply.Region.FileCount:N0} streams overlap this range.";
-            ClusterFilesList.ItemsSource = reply.Region.Files.OrderByDescending(file => file.ClustersInRegion)
+            var rows = reply.Region.Files.OrderByDescending(file => file.ClustersInRegion)
                 .Select(file => new ClusterHitRow(file)).ToArray();
-            ClusterFilesList.SelectedItem = null; _selectedClusterHit = null; HighlightClusterFileButton.IsEnabled = false;
+            ClusterFilesList.ItemsSource = rows;
+            ClusterFilesList.SelectedItem = rows.FirstOrDefault(row =>
+                row.File.FileId == _selectedMapFileId && row.File.Stream == _selectedMapStream &&
+                string.Equals(row.File.Path, _selectedMapPath, StringComparison.OrdinalIgnoreCase));
+            _selectedClusterHit = ClusterFilesList.SelectedItem as ClusterHitRow;
+            HighlightClusterFileButton.IsEnabled = _selectedClusterHit != null;
             ClusterOverlay.IsVisible = true;
         }
         catch (Exception exception) { await DisplayAlertAsync("Cluster contents unavailable", exception.Message, "Close"); }
@@ -1414,7 +1419,7 @@ public partial class MainPage : ContentPage
                 if (first.Length > 0) await LoadRegion(Math.Clamp(first.Start - _map.ClusterCount / 2, 0,
                     Math.Max(0, _map.TotalClusters - _map.ClusterCount)), _map.ClusterCount);
             }
-            RedrawMap();
+            RedrawMap(); RedrawOverview();
         }
         catch (Exception exception) { await DisplayAlertAsync("File could not be located", exception.Message, "Close"); }
         finally { LocateFileButton.IsEnabled = true; }
@@ -1422,6 +1427,7 @@ public partial class MainPage : ContentPage
     private void ApplyFileSelection(MapFileSelection? selection)
     {
         _selectedMapFile = selection;
+        _overview.HighlightedRanges = selection?.Ranges ?? [];
         if (selection == null)
         {
             _map.SetHighlight([]); HighlightedFile.IsVisible = _selectedMapFileId.HasValue;
@@ -1435,7 +1441,8 @@ public partial class MainPage : ContentPage
     {
         _regionRequest++;
         _selectedMapFileId = null; _selectedMapPath = null; _selectedMapStream = ""; _selectedMapFile = null;
-        _map.SetHighlight([]); HighlightedFile.IsVisible = false; RedrawMap();
+        _map.SetHighlight([]); _overview.HighlightedRanges = [];
+        HighlightedFile.IsVisible = false; RedrawMap(); RedrawOverview();
     }
     private static bool RangesOverlap(long a, long b, long c, long d) => a < d && c < b;
     private async void OnExport(object? sender, EventArgs e)

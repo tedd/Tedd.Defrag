@@ -19,6 +19,7 @@ public partial class App : Application
         ["ActionButton"] = "#C7DED1", ["PrimaryText"] = "#FFFFFF", ["HeaderSurface"] = "#E2E9EC", ["Overlay"] = "#9917232D",
         ["ModalSurface"] = "#FAFBFB", ["ModalLine"] = "#7EAD94", ["OptionSurface"] = "#F1F4F5", ["OptionStroke"] = "#CCD7DC",
         ["OptionIconSurface"] = "#D7EADF", ["OptionIconStroke"] = "#A5CBB5", ["Chevron"] = "#657A86",
+        ["HighlightText"] = "#663399", ["SelectionSurface"] = "#E8DFF3",
     };
 
     private static readonly IReadOnlyDictionary<string, string> DarkPalette = new Dictionary<string, string>
@@ -33,6 +34,7 @@ public partial class App : Application
         ["ActionButton"] = "#29404D", ["PrimaryText"] = "#07150D", ["HeaderSurface"] = "#243643", ["Overlay"] = "#D917232D",
         ["ModalSurface"] = "#1B2A37", ["ModalLine"] = "#367353", ["OptionSurface"] = "#20313E", ["OptionStroke"] = "#304552",
         ["OptionIconSurface"] = "#1E4437", ["OptionIconStroke"] = "#2C684D", ["Chevron"] = "#7F929D",
+        ["HighlightText"] = "#D2A3FF", ["SelectionSurface"] = "#3B2F50",
     };
 
     public MapPalette ClusterPalette { get; private set; } = MapPalette.Light;
