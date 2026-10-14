@@ -1,0 +1,25 @@
+Generation method: built-in imagegen
+Screenshot source: ntfs-app-light-analysis.png
+Style reference: ntfs-research-cover-light-v5.png
+The source screenshot shows completed partial analysis, not active defragmentation.
+
+Use case: compositing.
+Asset type: a polished landscape LinkedIn article cover, approximately 16:9, high resolution.
+Input images:
+Image 1 is the user's REAL Tedd.Defrag light-mode screenshot. It is a protected supporting insert and must appear as the actual screenshot, not a generated imitation.
+Image 2 is the previous article cover, used ONLY as a reference for the light visual identity and cover copy.
+
+Create a new version of the cover that replaces the illustrative cluster-map graphic with the ENTIRE supplied real app screenshot from Image 1. Make the screenshot the dominant visual: a large front-facing rectangular image centered in the lower portion, framed by a very thin pale-sage border and a restrained soft shadow. Preserve the screenshot's original aspect ratio and complete content, including its sidebar, allocation map, navigator, right-hand controls and recommendation panel, and bottom analysis status. Do not crop important parts. Do not add a fake monitor, perspective distortion, or browser chrome.
+
+Critical authenticity constraint: treat Image 1 as a literal photograph/bitmap pasted into the composition. Preserve its internal appearance, all interface labels, numbers, layout, colors, and status. Do not redraw, recolor, simplify, invent, or replace its UI or data. It shows completed analysis ("Analyze · Partial" and "Analysis complete; file coverage is partial"), not a running move operation; keep this genuine displayed state. Do not invent progress percentages or moved-byte figures.
+
+Surrounding design: clean off-white #f7faf9 background with an extremely faint pale technical grid, dark blue-green #13282f headline and deep teal #087f78 accents, restrained gray supporting copy. Keep the visual language of Image 2 and the light GitHub Pages site. Use generous, balanced margins. Place the cover copy in a compact header band above the screenshot so it remains large and readable. The screenshot should be as large as practical without overlapping any cover text.
+Exact cover text:
+Top left, small gray: "Buy vs Build with Sol"
+Main headline, large: "Tedd.Defrag", dark "Tedd." and deep teal "Defrag", on one line.
+Directly beneath headline: "When building becomes cheaper than buying."
+Lower right, small gray, two lines BOTH right-aligned to the same right edge:
+"github.com/tedd/Tedd.Defrag"
+"tedd.no"
+
+Do not include the redundant author line, the old "Research. Defragmentation. Performance." subtitle, any separate illustrative disk map, any added MFT/Runlists/Free space annotations, or the "Illustrative cluster map" caption. No extra copy, badges, logos, watermarks, invented charts, glows, or decorative objects. Opaque background.
