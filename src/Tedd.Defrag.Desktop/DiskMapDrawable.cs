@@ -7,6 +7,8 @@ namespace Tedd.Defrag.Desktop;
 /// <summary>Map geometry, hit testing, selection and reusable pixel rendering.</summary>
 public sealed class DiskMapDrawable
 {
+    public MapPalette Palette { get; set; } = MapPalette.Dark;
+    private MapPalette? _packedPalette;
     public MapCell[] Cells { get; set; } = [];
     public string EmptyMessage { get; set; } = "Select a volume to begin.";
     public long StartCluster { get; private set; }
@@ -67,27 +69,28 @@ public sealed class DiskMapDrawable
         int count = Cells.Length;
         while (count > 0 && Cells[count - 1].Clusters == 0) count--;
         (_columns, _rows) = MapRasterizer.Grid(count, width, height);
-        if (_packedCells.Length != count)
+        if (_packedCells.Length != count || _packedPalette != Palette)
         {
+            _packedPalette = Palette;
             _packedCells = new uint[count];
-            for (int i = 0; i < count; i++) _packedCells[i] = Pack(MapAggregator.Color(Cells[i]));
+            for (int i = 0; i < count; i++) _packedCells[i] = Pack(MapAggregator.Color(Cells[i], Palette));
         }
         if (_rows * 3 >= height)
             MapRasterizer.DrawRows(pixels, stride, width, height, _packedCells, _columns, _rows,
-                Pack(0xFF172531), padding);
+                Pack(Palette.Canvas), padding);
         else
         {
             if (_rowTemplate.Length < width) _rowTemplate = new uint[width];
             MapRasterizer.DrawRowTemplate(pixels, stride, width, height, _packedCells, _columns, _rows,
-                Pack(0xFF172531), padding, _rowTemplate);
+                Pack(Palette.Canvas), padding, _rowTemplate);
         }
         foreach (int index in _highlightedCells)
-            if (index < count) MapRasterizer.Border(pixels, stride, width, height, index, _columns, _rows, Pack(0xFFFFD45A), Math.Max(1, padding));
+            if (index < count) MapRasterizer.Border(pixels, stride, width, height, index, _columns, _rows, Pack(Palette.Selection), Math.Max(1, padding));
         if (_selectionStart < 0 || count == 0) return;
         int first = Math.Max(0, Math.Min(_selectionStart, _selectionEnd));
         int last = Math.Min(count - 1, Math.Max(_selectionStart, _selectionEnd));
         for (int index = first; index <= last; index++)
-            MapRasterizer.Border(pixels, stride, width, height, index, _columns, _rows, Pack(0xFFFFFFFF));
+            MapRasterizer.Border(pixels, stride, width, height, index, _columns, _rows, Pack(Palette.Selection));
     }
 
     internal static uint Pack(uint argb) => WriteableBitmap.FromRgba(
@@ -104,6 +107,8 @@ public sealed class DiskMapDrawable
 /// <summary>A linear whole-volume navigator; horizontal position always corresponds to LCN.</summary>
 public sealed class MapOverviewDrawable
 {
+    public MapPalette Palette { get; set; } = MapPalette.Dark;
+    private MapPalette? _packedPalette;
     public MapCell[] Cells { get; set; } = [];
     public long TotalClusters { get; set; }
     public long StartCluster { get; set; }
@@ -118,25 +123,26 @@ public sealed class MapOverviewDrawable
     {
         if (Cells.Length == 0 || TotalClusters <= 0)
         {
-            uint background = DiskMapDrawable.Pack(0xFF172531);
+            uint background = DiskMapDrawable.Pack(Palette.Canvas);
             for (int y = 0; y < height; y++) pixels.Slice(y * stride, width).Fill(background);
             _packedSource = null;
             _packedCells = [];
             return;
         }
-        if (!ReferenceEquals(_packedSource, Cells))
+        if (!ReferenceEquals(_packedSource, Cells) || _packedPalette != Palette)
         {
+            _packedPalette = Palette;
             _packedSource = Cells;
             _packedCells = new uint[Cells.Length];
-            for (int i = 0; i < Cells.Length; i++) _packedCells[i] = DiskMapDrawable.Pack(MapAggregator.Color(Cells[i]));
+            for (int i = 0; i < Cells.Length; i++) _packedCells[i] = DiskMapDrawable.Pack(MapAggregator.Color(Cells[i], Palette));
         }
         MapRasterizer.DrawOverviewRows(pixels, stride, width, height, _packedCells);
         int left = (int)((double)StartCluster / TotalClusters * width);
         int right = (int)((double)(StartCluster + ClusterCount) / TotalClusters * width);
-        uint shade = DiskMapDrawable.Pack(0xFF111B24);
+        uint shade = DiskMapDrawable.Pack(Palette.Canvas);
         MapRasterizer.FillRectangle(pixels, stride, width, height, 0, 0, left, height, shade);
         MapRasterizer.FillRectangle(pixels, stride, width, height, right, 0, width, height, shade);
-        uint accent = DiskMapDrawable.Pack(0xFFFFD45A);
+        uint accent = DiskMapDrawable.Pack(Palette.Selection);
         MapRasterizer.FillRectangle(pixels, stride, width, height, left, 0, Math.Max(left + 2, right), 2, accent);
         MapRasterizer.FillRectangle(pixels, stride, width, height, left, height - 2, Math.Max(left + 2, right), height, accent);
         MapRasterizer.FillRectangle(pixels, stride, width, height, left, 0, left + 2, height, accent);

@@ -1,4 +1,5 @@
 using Microsoft.Maui.Storage;
+using Tedd.Defrag.Visualization;
 
 namespace Tedd.Defrag.Desktop;
 
@@ -13,13 +14,11 @@ public partial class App : Application
         ["Placeholder"] = "#71838E", ["SwitchThumb"] = "#FFFFFF", ["Track"] = "#CDD8DC", ["Sidebar"] = "#E1E8EA",
         ["SidebarLine"] = "#C6D2D7", ["SidebarText"] = "#485D69", ["NavSelected"] = "#CDE5D7", ["NoticeSurface"] = "#DFEDE5",
         ["NoticeLine"] = "#BAD5C6", ["NoticeText"] = "#426456", ["BadgeSurface"] = "#DDE7EA", ["BadgeLine"] = "#C4D1D7",
-        ["BadgeText"] = "#435D69", ["MapCanvas"] = "#172531", ["SubtleText"] = "#71848F", ["DangerSurface"] = "#F2E5E8",
+        ["BadgeText"] = "#435D69", ["SubtleText"] = "#71848F", ["DangerSurface"] = "#F2E5E8",
         ["DangerText"] = "#98495B", ["ActionSurface"] = "#DFEDE5", ["ActionLine"] = "#B1CEBE", ["ActionInner"] = "#F1F6F3",
         ["ActionButton"] = "#C7DED1", ["PrimaryText"] = "#FFFFFF", ["HeaderSurface"] = "#E2E9EC", ["Overlay"] = "#9917232D",
         ["ModalSurface"] = "#FAFBFB", ["ModalLine"] = "#7EAD94", ["OptionSurface"] = "#F1F4F5", ["OptionStroke"] = "#CCD7DC",
         ["OptionIconSurface"] = "#D7EADF", ["OptionIconStroke"] = "#A5CBB5", ["Chevron"] = "#657A86",
-        ["Allocated"] = "#1D8BEB", ["Fragmented"] = "#F3BF3E", ["Metadata"] = "#37C3DB", ["Excluded"] = "#526772",
-        ["FreeSpace"] = "#455B6B", ["Activity"] = "#EDF2F4", ["Highlight"] = "#FFD45A"
     };
 
     private static readonly IReadOnlyDictionary<string, string> DarkPalette = new Dictionary<string, string>
@@ -29,14 +28,15 @@ public partial class App : Application
         ["Placeholder"] = "#7F929E", ["SwitchThumb"] = "#F5F8F6", ["Track"] = "#344755", ["Sidebar"] = "#243645",
         ["SidebarLine"] = "#314553", ["SidebarText"] = "#A8B5BE", ["NavSelected"] = "#2B4651", ["NoticeSurface"] = "#1D3C35",
         ["NoticeLine"] = "#2D5A49", ["NoticeText"] = "#A1B6AD", ["BadgeSurface"] = "#273947", ["BadgeLine"] = "#354958",
-        ["BadgeText"] = "#B9C6CE", ["MapCanvas"] = "#172531", ["SubtleText"] = "#7F919D", ["DangerSurface"] = "#453039",
+        ["BadgeText"] = "#B9C6CE", ["SubtleText"] = "#7F919D", ["DangerSurface"] = "#453039",
         ["DangerText"] = "#F0BAC2", ["ActionSurface"] = "#1B303B", ["ActionLine"] = "#31505A", ["ActionInner"] = "#192934",
         ["ActionButton"] = "#29404D", ["PrimaryText"] = "#07150D", ["HeaderSurface"] = "#243643", ["Overlay"] = "#D917232D",
         ["ModalSurface"] = "#1B2A37", ["ModalLine"] = "#367353", ["OptionSurface"] = "#20313E", ["OptionStroke"] = "#304552",
         ["OptionIconSurface"] = "#1E4437", ["OptionIconStroke"] = "#2C684D", ["Chevron"] = "#7F929D",
-        ["Allocated"] = "#1D8BEB", ["Fragmented"] = "#F3BF3E", ["Metadata"] = "#37C3DB", ["Excluded"] = "#8295A3",
-        ["FreeSpace"] = "#455B6B", ["Activity"] = "#EDF2F4", ["Highlight"] = "#FFD45A"
     };
+
+    public MapPalette ClusterPalette { get; private set; } = MapPalette.Light;
+    public event EventHandler? PaletteChanged;
 
     public string ThemePreference { get; private set; } = "System";
 
@@ -73,6 +73,17 @@ public partial class App : Application
         var palette = theme == AppTheme.Dark ? DarkPalette : LightPalette;
         foreach (var (key, value) in palette)
             Resources[key] = Color.FromArgb(value);
+        ClusterPalette = theme == AppTheme.Dark ? MapPalette.Dark : MapPalette.Light;
+        var map = ClusterPalette;
+        foreach (var (key, value) in new Dictionary<string, uint>
+        {
+            ["MapCanvas"] = map.Canvas, ["Allocated"] = map.Allocated, ["Excluded"] = map.Excluded,
+            ["Metadata"] = map.Metadata, ["FragmentedLow"] = map.FragmentedLow, ["Fragmented"] = map.Fragmented,
+            ["FreeSpace"] = map.FreeSpace, ["Activity"] = map.Moving, ["Verified"] = map.Verified,
+            ["Highlight"] = map.Selection
+        })
+            Resources[key] = Color.FromArgb($"#{value:X8}");
+        PaletteChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override Window CreateWindow(IActivationState? activationState)

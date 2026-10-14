@@ -54,18 +54,27 @@ public static class MapAggregator
             cells[i] = verified ? cells[i] with { Verified = n, Moving = 0 } : cells[i] with { Moving = n };
         }
     }
-    public static uint Color(in MapCell c)
+    public static uint Color(in MapCell c) => Color(c, MapPalette.Dark);
+
+    public static uint Color(in MapCell c, MapPalette palette)
     {
-        if (c.Clusters == 0) return 0xFF172531;
-        if (c.Moving > 0) return 0xFFFFFFFF;
-        if (c.Verified > 0) return 0xFF70C94A;
-        if (c.Metadata > c.Clusters / 8) return 0xFF37C3DB;
-        if (c.Fragmented > c.Clusters / 8) return 0xFFF3BF3E;
-        if (c.Excluded > c.Clusters / 3) return 0xFF8295A3;
-        // Keep unallocated cells visibly distinct from the map canvas so free
-        // space before and after the occupied range remains part of the bitmap.
-        if (c.Allocated == 0) return 0xFF455B6B;
-        float fill = (float)c.Allocated / c.Clusters;
-        return 0xFF000000 | (uint)(27 + 2 * fill) << 16 | (uint)(72 + 67 * fill) << 8 | (uint)(105 + 130 * fill);
+        if (c.Clusters == 0) return palette.Canvas;
+        if (c.Moving > 0) return palette.Moving;
+        if (c.Verified > 0) return palette.Verified;
+        if (c.Allocated == 0) return palette.FreeSpace;
+        if (c.Metadata > c.Clusters / 8) return palette.Metadata;
+        if (c.Excluded > c.Clusters / 3) return palette.Excluded;
+        if (c.Fragmented > 0)
+        {
+            // Density of fragmented-file clusters in this cell, not extent count
+            // or predicted performance. Keep ordinary allocation a separate hue.
+            double density = Math.Clamp((double)c.Fragmented / c.Clusters, 0, 1);
+            uint low = palette.FragmentedLow, high = palette.Fragmented;
+            uint r = (uint)Math.Round((low >> 16 & 255) * (1 - density) + (high >> 16 & 255) * density);
+            uint g = (uint)Math.Round((low >> 8 & 255) * (1 - density) + (high >> 8 & 255) * density);
+            uint b = (uint)Math.Round((low & 255) * (1 - density) + (high & 255) * density);
+            return 0xFF000000 | r << 16 | g << 8 | b;
+        }
+        return palette.Allocated;
     }
 }

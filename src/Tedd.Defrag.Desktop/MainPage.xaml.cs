@@ -104,8 +104,8 @@ public partial class MainPage : ContentPage
             toggle.Toggled += OnSettingsValueChanged;
         PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromSeconds(1); _timer.Tick += async (_, _) => await Poll();
-        Loaded += async (_, _) => { _timer.Start(); await CheckForUpdate(); await RefreshVolumes(); await AttachActiveJobs(); };
-        Unloaded += (_, _) => _timer.Stop();
+        Loaded += async (_, _) => { if (Application.Current is App app) app.PaletteChanged += OnMapPaletteChanged; OnMapPaletteChanged(this, EventArgs.Empty); _timer.Start(); await CheckForUpdate(); await RefreshVolumes(); await AttachActiveJobs(); };
+        Unloaded += (_, _) => { _timer.Stop(); if (Application.Current is App app) app.PaletteChanged -= OnMapPaletteChanged; };
     }
     internal void Shutdown()
     {
@@ -785,6 +785,12 @@ public partial class MainPage : ContentPage
     private async void OnRefreshVolumes(object? sender, EventArgs e) => await RefreshVolumes();
     private void OnOverview(object? sender, EventArgs e) { ShowSettings(false); OnResetZoom(sender, e); }
     private void OnSettings(object? sender, EventArgs e) => ShowSettings(true);
+    private void OnMapPaletteChanged(object? sender, EventArgs e)
+    {
+        if (Application.Current is not App app) return;
+        _map.Palette = _overview.Palette = app.ClusterPalette;
+        RedrawMap(); RedrawOverview();
+    }
     private void OnThemeChanged(object? sender, EventArgs e)
     {
         if (_settingTheme || ThemePicker.SelectedItem is not string selected || Application.Current is not App app) return;
@@ -1034,7 +1040,7 @@ public partial class MainPage : ContentPage
         if (index == _hoveredMapCell) return;
         _hoveredMapCell = index;
         var range = _map.CellRange(index); var c = _map.Cells[index]; double n = Math.Max(1, c.Clusters);
-        CellDetail.Text = $"LCN {range.Start:N0}–{range.End - 1:N0} · {c.Clusters:N0} clusters · {c.Allocated / n:P0} allocated · {c.Fragmented / n:P0} fragmented · {c.Metadata / n:P0} metadata";
+        CellDetail.Text = $"LCN {range.Start:N0}–{range.End - 1:N0} · {c.Clusters:N0} clusters · {c.Allocated / n:P0} allocated · {c.Fragmented / n:P0} fragmented · {c.Metadata / n:P0} metadata · {c.Excluded / n:P0} immovable / excluded";
     }
     private void OnOverviewStart(object? sender, TouchEventArgs e) { if (e.Touches.Length > 0) PreviewOverview(e.Touches[0].X); }
     private void OnOverviewDrag(object? sender, TouchEventArgs e) { if (e.Touches.Length > 0) PreviewOverview(e.Touches[0].X); }

@@ -184,9 +184,9 @@ public class CorrectnessTests
 
         Assert.Equal(1024, cells.Sum(cell => cell.Clusters));
         Assert.Equal(0, cells[0].Allocated);
-        Assert.Equal(0xFF455B6Bu, MapAggregator.Color(cells[0]));
+        Assert.Equal(0xFFFFFFFFu, MapAggregator.Color(cells[0]));
         Assert.Equal(0, cells[^1].Allocated);
-        Assert.Equal(0xFF455B6Bu, MapAggregator.Color(cells[^1]));
+        Assert.Equal(0xFFFFFFFFu, MapAggregator.Color(cells[^1]));
         Assert.Contains(cells, cell => cell.Allocated > 0);
     }
     [Fact]
