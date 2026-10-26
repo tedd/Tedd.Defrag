@@ -26,9 +26,12 @@ internal static class Program
             }
             catch (Exception e) { Console.Error.WriteLine(e); return 1; }
         }
-        var store = new JobStore();
-        if (args.Length == 2 && args[0] == "--execute" && Guid.TryParse(args[1], out var id))
+        var store = new JobStore(retainDetails: args.FirstOrDefault() == "--execute");
+        if (args.Length is 2 or 4 && args[0] == "--execute" && Guid.TryParse(args[1], out var id))
         {
+            using var owner = args.Length == 4 && args[2] == "--owner" ? Process.GetProcessById(int.Parse(args[3], CultureInfo.InvariantCulture)) : null;
+            using var memoryStop = new CancellationTokenSource();
+            var memoryServer = Task.Run(() => JobMemoryServer.Listen(store, id, memoryStop.Token));
             var request = store.ReadRequest(id);
             try
             {
@@ -49,7 +52,12 @@ internal static class Program
                 File.WriteAllText(Path.Combine(store.JobDirectory(id), "worker-error.txt"), e.ToString());
                 store.Save(new(id, request.Volume, request.Operation, e is OperationCanceledException ? JobState.Cancelled : JobState.Failed, e.Message, 0, 0, 0, 0, 0, DateTimeOffset.UtcNow));
             }
-            return store.ReadSnapshot(id)?.State == JobState.Failed ? 1 : 0;
+            int exitCode = store.ReadSnapshot(id)?.State == JobState.Failed ? 1 : 0;
+            // Keep bounded completed results queryable without holding volume handles or resource leases.
+            DateTime expires = DateTime.UtcNow.AddMinutes(10);
+            while (owner is { HasExited: false } && DateTime.UtcNow < expires) await Task.Delay(500);
+            memoryStop.Cancel(); await memoryServer;
+            return exitCode;
         }
         if (args is not ["--broker"]) { Console.WriteLine("Tedd.Defrag.Worker --broker | --execute <job-id> | --probe <volume>"); return 2; }
         using var mutex = new Mutex(true, "Local\\" + BrokerProtocol.PipeName, out bool owns);
@@ -69,6 +77,7 @@ internal sealed class Broker
     private readonly object _sync = new();
     private readonly Queue<JobRequest> _queue = new();
     private readonly Dictionary<Guid, Process> _active = [];
+    private readonly Dictionary<Guid, (Process Process, string Volume)> _cached = [];
     private readonly Dictionary<Guid, string[]> _resources = [];
     private readonly ResourceArbiter _arbiter = new();
     private readonly Action _requestStop;
@@ -86,6 +95,7 @@ internal sealed class Broker
             }
             else store.Save(snapshot with { State = JobState.Interrupted, Message = "Worker restarted. Reanalyze before resubmitting; saved cluster addresses are never replayed.", UpdatedAt = DateTimeOffset.UtcNow });
         }
+        JobHistoryRetention.Prune(store, new HashSet<Guid>(), DateTimeOffset.UtcNow);
     }
     public async Task Listen(CancellationToken token)
     {
@@ -107,7 +117,18 @@ internal sealed class Broker
             {
                 var command = await BrokerProtocol.Read<BrokerCommand>(pipe, JobStore.Json, timeout.Token);
                 BrokerReply reply;
-                try { lock (_sync) reply = Handle(command); }
+                try
+                {
+                    bool hasMemory;
+                    lock (_sync) hasMemory = _active.ContainsKey(command.Id) || _cached.ContainsKey(command.Id);
+                    if (hasMemory && command.Action is "get" or "explore")
+                    {
+                        try { reply = await JobMemoryServer.Query(command, timeout.Token); }
+                        catch (Exception e) when (e is TimeoutException or IOException)
+                        { lock (_sync) reply = Handle(command); }
+                    }
+                    else { lock (_sync) reply = Handle(command); }
+                }
                 catch (Exception e) { reply = new(false, e.Message); }
                 await BrokerProtocol.Write(pipe, reply, JobStore.Json, timeout.Token);
             }
@@ -130,10 +151,7 @@ internal sealed class Broker
                 Submit(job); return new(true, Id: job.Id);
             case "list": return new(true, Jobs: _store.List().Take(200).Select(j => j with { Map = null, Files = null, CompressedFiles = null }).ToArray());
             case "get": return new(true, Snapshot: _store.ReadSnapshot(command.Id));
-            case "explore":
-                var region = new LayoutExplorerStore(_store).Explore(command.Id, command.StartCluster, command.ClusterCount,
-                    command.MapCells, command.IncludeFiles, command.Path, command.FileId, command.Stream);
-                return new(true, Region: region);
+            case "explore": throw new InvalidOperationException("The detailed map is no longer in memory. Analyze the volume again.");
             case "pause": case "resume": case "cancel": _store.Control(command.Id, command.Action); return new(true);
             case "settings":
                 if (command.Settings != null)
@@ -145,6 +163,7 @@ internal sealed class Broker
             case "stop":
                 if (_active.Count != 0 || _queue.Count != 0) throw new InvalidOperationException("Cancel or finish active and queued jobs before stopping the worker.");
                 if (_stopping) return new(true);
+                ClearCached();
                 _stopping = true;
                 _ = Task.Run(async () => { await Task.Delay(500); _requestStop(); }); return new(true);
             case "shutdown":
@@ -161,6 +180,7 @@ internal sealed class Broker
     }
     public async Task Pump(CancellationToken token)
     {
+        DateTime pruneAfter = DateTime.UtcNow;
         while (!token.IsCancellationRequested)
         {
             lock (_sync)
@@ -168,10 +188,24 @@ internal sealed class Broker
                 if (_stopping) return;
                 foreach (var (id, process) in _active.ToArray())
                 {
-                    if (!process.HasExited) continue;
                     var snapshot = _store.ReadSnapshot(id);
+                    if (!process.HasExited && snapshot is { IsTerminal: true })
+                    {
+                        foreach (var old in _cached.Where(item => item.Value.Volume == snapshot.Volume).Select(item => item.Key).ToArray()) RetireCached(old);
+                        while (_cached.Count >= 2) RetireCached(_cached.Keys.First());
+                        _cached[id] = (process, snapshot.Volume);
+                        _active.Remove(id); _arbiter.Release(id); _resources.Remove(id);
+                        continue;
+                    }
+                    if (!process.HasExited) continue;
                     if (snapshot != null && !snapshot.IsTerminal) _store.Save(snapshot with { State = JobState.Interrupted, Message = $"Execution process exited ({process.ExitCode}); reanalysis required.", UpdatedAt = DateTimeOffset.UtcNow });
                     process.Dispose(); _active.Remove(id); _arbiter.Release(id); _resources.Remove(id);
+                }
+                foreach (var id in _cached.Where(item => item.Value.Process.HasExited).Select(item => item.Key).ToArray()) RetireCached(id);
+                if (DateTime.UtcNow >= pruneAfter)
+                {
+                    JobHistoryRetention.Prune(_store, _active.Keys.Concat(_cached.Keys).ToHashSet(), DateTimeOffset.UtcNow);
+                    pruneAfter = DateTime.UtcNow.AddMinutes(1);
                 }
                 var settings = _store.Settings;
                 int queued = _queue.Count;
@@ -197,6 +231,7 @@ internal sealed class Broker
                         var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = elevate, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
                         if (elevate) info.Verb = "runas";
                         info.ArgumentList.Add("--execute"); info.ArgumentList.Add(job.Id.ToString());
+                        info.ArgumentList.Add("--owner"); info.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
                         if (!elevate && job.Resources.MemoryMiB > 0)
                         {
                             info.Environment["DOTNET_GCHeapHardLimit"] = ((long)job.Resources.MemoryMiB * 1024 * 1024 * 55 / 100).ToString("X", CultureInfo.InvariantCulture);
@@ -222,6 +257,7 @@ internal sealed class Broker
     private void BeginShutdown()
     {
         _stopping = true;
+        ClearCached();
         while (_queue.TryDequeue(out var job))
         {
             var snapshot = _store.ReadSnapshot(job.Id);
@@ -281,5 +317,18 @@ internal sealed class Broker
     {
         try { return process.HasExited; }
         catch (Exception e) when (e is InvalidOperationException or Win32Exception) { return true; }
+    }
+
+    private void RetireCached(Guid id)
+    {
+        if (!_cached.Remove(id, out var cached)) return;
+        try { if (!cached.Process.HasExited) cached.Process.Kill(entireProcessTree: true); }
+        catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { }
+        cached.Process.Dispose();
+    }
+
+    private void ClearCached()
+    {
+        foreach (var id in _cached.Keys.ToArray()) RetireCached(id);
     }
 }

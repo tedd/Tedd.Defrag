@@ -166,7 +166,7 @@ public sealed class JobExecutor
                     moved = VirtualDiskPreparation.Zero(request, volume!.Info, b => { Pace(b - moved); moved = b; Publish(); }, Checkpoint, token);
                 else runMaintenance(request, volume!.Info, line =>
                 {
-                    File.AppendAllText(Path.Combine(store.JobDirectory(request.Id), "maintenance.log"), line + Environment.NewLine);
+                    store.AppendMaintenanceLog(request.Id, line);
                     message = line; Publish();
                 }, ExternalCheckpoint, token);
                 state = JobState.Scanning; progress = 0; scanWork = null;
@@ -430,6 +430,7 @@ public sealed class JobExecutor
             // A full layout may consume most of the configured process budget. It must not
             // remain live while the post-operation scan constructs its replacement.
             layout = null;
+            explorer.Clear(request.Id);
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
             GC.WaitForPendingFinalizers();
         }

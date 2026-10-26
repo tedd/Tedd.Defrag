@@ -1,15 +1,21 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Collections.Concurrent;
 using Tedd.Defrag.Core;
 
 namespace Tedd.Defrag.Persistence;
 
 public sealed class JobStore
 {
+    private readonly ConcurrentDictionary<Guid, JobSnapshot> _snapshots = new();
+    private readonly bool _retainDetails;
+    internal ConcurrentDictionary<Guid, LayoutExplorerStore> Layouts { get; } = new();
+    public void Forget(Guid id) { _snapshots.TryRemove(id, out _); Layouts.TryRemove(id, out _); }
     public static JsonSerializerOptions Json { get; } = new() { WriteIndented = false, PropertyNameCaseInsensitive = true, Converters = { new JsonStringEnumConverter() } };
     public string Root { get; }
-    public JobStore(string? root = null)
+    public JobStore(string? root = null, bool retainDetails = true)
     {
+        _retainDetails = retainDetails;
         Root = root ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tedd.Defrag");
         Directory.CreateDirectory(Path.Combine(Root, "jobs"));
     }
@@ -25,14 +31,16 @@ public sealed class JobStore
     public string ReportPath(Guid id) => Path.Combine(JobDirectory(id), "report.json");
     public void Save(JobSnapshot snapshot)
     {
-        AtomicWrite(Path.Combine(JobDirectory(snapshot.Id), "snapshot.json"), snapshot);
-        // A terminal report is immutable in intent and deliberately omits the large drawing map.
-        // Save it automatically so completion evidence does not depend on the UI remaining open.
-        if (snapshot.IsTerminal) AtomicWrite(ReportPath(snapshot.Id), snapshot with { Map = null });
+        if (_retainDetails) _snapshots[snapshot.Id] = snapshot with { Map = snapshot.Map?.ToArray() };
+        var compact = Compact(snapshot);
+        AtomicWrite(Path.Combine(JobDirectory(snapshot.Id), "snapshot.json"), compact);
+        if (snapshot.IsTerminal) AtomicWrite(ReportPath(snapshot.Id), compact);
     }
-    public JobSnapshot? ReadReport(Guid id) => Read<JobSnapshot>(ReportPath(id));
+    public JobSnapshot? ReadReport(Guid id) => _snapshots.TryGetValue(id, out var snapshot) && snapshot.IsTerminal
+        ? snapshot with { Map = null } : Read<JobSnapshot>(ReportPath(id));
     public JobSnapshot? ReadSnapshot(Guid id)
     {
+        if (_snapshots.TryGetValue(id, out var current)) return current;
         string path = Path.Combine(JobDirectory(id), "snapshot.json");
         for (int attempt = 0; attempt < 8; attempt++)
         {
@@ -61,9 +69,22 @@ public sealed class JobStore
     public string? ReadControl(Guid id) => Read<string>(Path.Combine(JobDirectory(id), "control.json"));
     public void Journal(Guid id, MoveJournalEntry entry)
     {
-        string path = Path.Combine(JobDirectory(id), "moves.jsonl");
-        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough);
-        JsonSerializer.Serialize(stream, entry, Json); stream.WriteByte((byte)'\n'); stream.Flush(true);
+        if (entry.Phase == "verified" && Layouts.TryGetValue(id, out var layout)) layout.Apply(entry.Move);
+    }
+    internal static JobSnapshot Compact(JobSnapshot snapshot) => snapshot with
+    {
+        Map = null, Files = null, CompressedFiles = null,
+        Message = Clip(snapshot.Message), CompressionCurrentPath = null,
+        Warnings = snapshot.Warnings?.Take(16).Select(Clip).ToArray()
+    };
+    private static string Clip(string value) => value.Length <= 512 ? value : value[..512];
+    public void AppendMaintenanceLog(Guid id, string line)
+    {
+        string path = Path.Combine(JobDirectory(id), "maintenance.log");
+        string text = (line.Length <= 4096 ? line : line[..4096]) + Environment.NewLine;
+        if (File.Exists(path) && new FileInfo(path).Length + System.Text.Encoding.UTF8.GetByteCount(text) > 64 * 1024)
+            File.WriteAllText(path, text);
+        else File.AppendAllText(path, text);
     }
     public ConcurrencySettings Settings => Read<ConcurrencySettings>(Path.Combine(Root, "settings.json")) ?? new();
     public void SaveSettings(ConcurrencySettings settings)

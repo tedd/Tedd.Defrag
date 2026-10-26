@@ -40,8 +40,7 @@ public sealed class DefragClient
             {
                 "list" => new(true, Jobs: store.List().Select(s => s with { Map = null, Files = null, CompressedFiles = null }).ToArray()),
                 "get" => new(true, Snapshot: store.ReadSnapshot(command.Id)),
-                "explore" => new(true, Region: new LayoutExplorerStore(store).Explore(command.Id, command.StartCluster,
-                    command.ClusterCount, command.MapCells, command.IncludeFiles, command.Path, command.FileId, command.Stream)),
+                "explore" => throw new InvalidOperationException("The detailed map is no longer in memory. Analyze the volume again."),
                 _ => PersistSettings(store, command.Settings)
             };
         }

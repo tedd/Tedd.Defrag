@@ -22,6 +22,8 @@ The dashboard requests administrator access when starting its worker, lists real
 
 Synthetic volume fixtures are compiled only into tests and benchmarks.
 
+Detailed layouts, disk maps, file inventories, and relocation tracking stay in worker memory. Completed results remain queryable for up to ten minutes, with the latest result retained for at most two volumes; restarting the worker requires another analysis for map exploration. The profile stores compact job summaries and reports. Completed history is pruned to 20 jobs, seven days, and 8 MiB; legacy layout caches and relocation journals are removed during pruning. Active jobs are preserved. Maintenance logs are limited to 64 KiB per job.
+
 Before submitting work, the client confirms the worker build. Active or queued jobs must finish or be cancelled before a different worker build is started. Development worker discovery matches the client build and prefers its Debug/Release configuration. `worker status --json` reports the broker build and executable path; `worker start` starts or refreshes an idle broker without submitting a disk job. Job reports include `WorkerBuild` to identify the code that actually executed them. `scripts/Test-WorkerStartup.ps1 -WorkerPath <exe>` verifies volume discovery and dependency loading without relocation; publishing runs this check for the host architecture.
 
 Publish versioned, self-contained Windows distributions. The Desktop, CLI, and isolated worker are each single-file ReadyToRun executables. WiX packages the same payload as an MSI, an EXE bootstrapper, and a stand-alone ZIP:

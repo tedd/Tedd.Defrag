@@ -7,6 +7,28 @@ namespace Tedd.Defrag.Tests;
 public sealed class LayoutExplorerTests
 {
     [Fact]
+    public void DetailedLayoutAndMovesNeverCreateDiskCaches()
+    {
+        string root = TemporaryRoot();
+        try
+        {
+            Guid id = Guid.NewGuid(); var store = new JobStore(root); var explorer = new LayoutExplorerStore(store);
+            var layout = Layout(); explorer.Save(id, layout);
+            // Executor mutations must not race with published queries.
+            BitmapOperations.SetRange(layout.Bitmap, 10, 4, false);
+            Assert.Equal(4, explorer.Explore(id, 10, 4, 4, false).Cells.Sum(c => c.Allocated));
+            store.Journal(id, new(DateTimeOffset.UtcNow, "verified", new(42, 0, 0, 10, 30, 4)));
+            Assert.Empty(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories));
+            var query = new LayoutExplorerStore(store).Explore(id, 30, 4, 4, true);
+            Assert.Single(query.Files);
+            Assert.Throws<InvalidOperationException>(() => new LayoutExplorerStore(new JobStore(root)).Explore(id, 0, 0, 1, false));
+            explorer.Clear(id);
+            Assert.Throws<InvalidOperationException>(() => explorer.Explore(id, 0, 0, 1, false));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void SelectedRegionIsReaggregatedAtClusterResolutionAndListsItsFiles()
     {
         string root = TemporaryRoot();

@@ -93,12 +93,13 @@ public class PersistenceTests
         var store = new JobStore(root); var request = new JobRequest { Volume = "V:" }; store.SaveRequest(request);
         var initial = new JobSnapshot(request.Id, "V:", Operation.Analyze, JobState.Running, "test", 0, 0, 0, 0, 0, DateTimeOffset.UtcNow);
         store.Save(initial);
+        var diskReader = new JobStore(root, retainDetails: false);
         using var stop = new CancellationTokenSource();
         var readers = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
         {
             while (!stop.IsCancellationRequested)
             {
-                var snapshot = store.ReadSnapshot(request.Id);
+                var snapshot = diskReader.ReadSnapshot(request.Id);
                 Assert.NotNull(snapshot); Assert.Equal(request.Id, snapshot.Id);
             }
         })).ToArray();

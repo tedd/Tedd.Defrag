@@ -46,6 +46,9 @@ jobs:
           }
           if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw "Invalid semantic version: $version" }
           "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Run regression tests
+        shell: pwsh
+        run: dotnet test tests/Tedd.Defrag.Tests/Tedd.Defrag.Tests.csproj -c Release --filter 'Category!=Native' -p:Version='${{ steps.version.outputs.version }}'
       - name: Install WiX Toolset
         shell: pwsh
         run: |
