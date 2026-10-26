@@ -197,8 +197,8 @@ public sealed class ParallelismTests
         Assert.Equal(1, ResourcePolicy.Balanced.MoveQueueDepth); Assert.Equal(16, ResourcePolicy.Performance.MoveQueueDepth);
         Assert.True(defaults.VerifyMoves);
         Assert.Equal(2, WorkerPolicy.ScanWorkers(ResourcePolicy.Performance with { MemoryMiB = 256, ScanWorkers = 32 }));
-        Assert.Equal(4, WorkerPolicy.CompressionWorkers(ResourcePolicy.Performance));
-        Assert.Equal(2, WorkerPolicy.CompressionWorkers(ResourcePolicy.Balanced));
+        Assert.Equal(Math.Min(4, Environment.ProcessorCount), WorkerPolicy.CompressionWorkers(ResourcePolicy.Performance));
+        Assert.Equal(Math.Min(2, (int)Math.Ceiling(Environment.ProcessorCount * .25)), WorkerPolicy.CompressionWorkers(ResourcePolicy.Balanced));
         Assert.Equal(1, WorkerPolicy.CompressionWorkers(ResourcePolicy.Quiet));
         Assert.Equal(1, WorkerPolicy.CpuWorkers(new() { CpuPercent = 100, AffinityMask = 1 }));
         Assert.Throws<ArgumentException>(() => new ResourcePolicy { MoveQueueDepth = 17 }.Validate());

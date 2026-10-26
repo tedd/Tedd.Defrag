@@ -13,7 +13,7 @@ public sealed class LayoutExplorerStore(JobStore store)
 
     public void Save(Guid id, VolumeLayout layout)
     {
-        var target = store.Layouts.GetOrAdd(id, _ => this);
+        var target = store.Layouts.GetOrAdd(id, _ => new LayoutExplorerStore(store));
         lock (target._sync)
         {
             // Records and extent arrays are immutable. The executor replaces entries and bitmap bits.

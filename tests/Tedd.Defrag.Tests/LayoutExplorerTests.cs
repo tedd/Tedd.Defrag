@@ -7,6 +7,22 @@ namespace Tedd.Defrag.Tests;
 public sealed class LayoutExplorerTests
 {
     [Fact]
+    public void JobLayoutsRemainIndependentInTheSameStore()
+    {
+        string root = TemporaryRoot();
+        try
+        {
+            var store = new JobStore(root); var explorer = new LayoutExplorerStore(store);
+            Guid first = Guid.NewGuid(), second = Guid.NewGuid();
+            explorer.Save(first, Layout()); explorer.Save(second, Layout());
+            store.Journal(second, new(DateTimeOffset.UtcNow, "verified", new(42, 0, 0, 10, 30, 4)));
+            Assert.Equal(4, explorer.Explore(first, 10, 4, 4, false).Cells.Sum(c => c.Allocated));
+            Assert.Equal(0, explorer.Explore(second, 10, 4, 4, false).Cells.Sum(c => c.Allocated));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void DetailedLayoutAndMovesNeverCreateDiskCaches()
     {
         string root = TemporaryRoot();
