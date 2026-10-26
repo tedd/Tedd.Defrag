@@ -83,6 +83,13 @@ try {
     $manifest = [ordered]@{ version = $Version; runtime = $Runtime; assetName = $assetName; installType = 'portable' }
     $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle 'release-manifest.json') -Encoding utf8NoBOM
 
+    # Native dependencies can copy their own symbols despite DebugType=None.
+    foreach ($symbol in Get-ChildItem -LiteralPath $bundle -Recurse -File -Filter '*.pdb') {
+        if (!$symbol.FullName.StartsWith($bundle + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Symbol path is outside the release bundle: $($symbol.FullName)"
+        }
+        Remove-Item -LiteralPath $symbol.FullName -Force
+    }
     $unexpected = Get-ChildItem -LiteralPath $bundle -Recurse -File | Where-Object { $_.Extension -in '.pdb', '.xml', '.deps.json', '.runtimeconfig.json' }
     if ($unexpected) { throw "Single-file publish left unexpected build files: $($unexpected.Name -join ', ')" }
     foreach ($required in 'Tedd.Defrag.Desktop.exe','Tedd.Defrag.Cli.exe','Tedd.Defrag.Worker.exe','release-manifest.json','README.md','LICENSE') {
