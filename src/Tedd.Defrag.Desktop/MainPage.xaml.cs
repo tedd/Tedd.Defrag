@@ -104,7 +104,7 @@ public partial class MainPage : ContentPage
             toggle.Toggled += OnSettingsValueChanged;
         PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
         _timer = Dispatcher.CreateTimer(); _timer.Interval = TimeSpan.FromSeconds(1); _timer.Tick += async (_, _) => await Poll();
-        Loaded += async (_, _) => { if (Application.Current is App app) app.PaletteChanged += OnMapPaletteChanged; OnMapPaletteChanged(this, EventArgs.Empty); _timer.Start(); await CheckForUpdate(); await RefreshVolumes(); await AttachActiveJobs(); };
+        Loaded += async (_, _) => { if (Application.Current is App app) app.PaletteChanged += OnMapPaletteChanged; OnMapPaletteChanged(this, EventArgs.Empty); _timer.Start(); _ = CheckForUpdate(); await RefreshVolumes(); await AttachActiveJobs(); };
         Unloaded += (_, _) => { _timer.Stop(); if (Application.Current is App app) app.PaletteChanged -= OnMapPaletteChanged; };
     }
     internal void Shutdown()
@@ -215,28 +215,10 @@ public partial class MainPage : ContentPage
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             AvailableRelease? release = await ReleaseUpdater.CheckForUpdateAsync(timeout.Token);
-            if (release is null) return;
-            const string updateNow = "Update now";
-            const string updateOnExit = "Update when Tedd.Defrag exits";
-            string? choice = await DisplayActionSheetAsync(
-                $"Tedd.Defrag {release.DisplayVersion} is available. The download is verified before setup starts.",
-                "Delay until next start", null, updateNow, updateOnExit);
-            if (choice == updateNow)
-            {
-                try { await _client.Send(new("stop")); }
-                catch (TimeoutException) { }
-                catch (InvalidOperationException exception)
-                {
-                    await DisplayAlertAsync("Update postponed", exception.Message, "Close");
-                    return;
-                }
-                FooterStatus.Text = $"Downloading and verifying Tedd.Defrag {release.DisplayVersion}…";
-                PreparedUpdate prepared = await ReleaseUpdater.PrepareUpdateAsync(release);
-                ReleaseUpdater.LaunchPreparedUpdate(prepared, "Tedd.Defrag.Desktop.exe", []);
-                Environment.Exit(0);
-            }
-            if (choice != updateOnExit) return;
+            if (release is null || Volatile.Read(ref _shuttingDown) != 0) return;
             _ = PrepareUpdateForExit(release);
+            await DisplayAlertAsync("Update available",
+                $"Tedd.Defrag {release.DisplayVersion} is available. The update is downloading and will be installed when the application exits.", "OK");
         }
         catch (OperationCanceledException) { }
         catch (Exception exception)
@@ -250,10 +232,10 @@ public partial class MainPage : ContentPage
         try
         {
             FooterStatus.Text = $"Downloading and verifying Tedd.Defrag {release.DisplayVersion}…";
-            _updateOnExit = await ReleaseUpdater.PrepareUpdateAsync(release);
+            PreparedUpdate prepared = await ReleaseUpdater.PrepareUpdateAsync(release);
+            if (Volatile.Read(ref _shuttingDown) != 0) return;
+            _updateOnExit = prepared;
             FooterStatus.Text = $"Tedd.Defrag {release.DisplayVersion} is ready and will install when the application exits";
-            await DisplayAlertAsync("Update ready",
-                $"Tedd.Defrag {release.DisplayVersion} will start setup after the application exits.", "Close");
         }
         catch (OperationCanceledException) { }
         catch (Exception exception)
