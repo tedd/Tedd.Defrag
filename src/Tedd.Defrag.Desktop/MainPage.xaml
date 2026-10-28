@@ -39,7 +39,12 @@
           </VerticalStackLayout></Border>
           <Border Style="{StaticResource Card}" Padding="18,16"><VerticalStackLayout Spacing="12">
             <Grid ColumnDefinitions="*,Auto"><Label x:Name="JobTitle" Text="Ready when you are" FontSize="15" FontFamily="OpenSansSemibold" /><Label x:Name="ProgressText" Grid.Column="1" Text="READY" FontSize="10" TextColor="{DynamicResource Accent}" CharacterSpacing="1" /></Grid>
-            <ProgressBar x:Name="JobProgress" Progress="0" ProgressColor="{DynamicResource Accent}" BackgroundColor="{DynamicResource Track}" HeightRequest="5" /><Label x:Name="JobMessage" Text="Analyze a volume before making changes." FontSize="12" TextColor="{DynamicResource Muted}" MaxLines="3" LineBreakMode="TailTruncation" />
+            <ProgressBar x:Name="JobProgress" Progress="0" ProgressColor="{DynamicResource Accent}" BackgroundColor="{DynamicResource Track}" HeightRequest="5" />
+            <VerticalStackLayout x:Name="PhaseProgressPanel" IsVisible="False" Spacing="4">
+              <Label x:Name="PhaseProgressText" FontSize="10" TextColor="{DynamicResource Muted}" HorizontalTextAlignment="End" />
+              <ProgressBar x:Name="PhaseProgress" Progress="0" ProgressColor="{DynamicResource Accent}" BackgroundColor="{DynamicResource Track}" HeightRequest="3" />
+            </VerticalStackLayout>
+            <Label x:Name="JobMessage" Text="Analyze a volume before making changes." FontSize="12" TextColor="{DynamicResource Muted}" MaxLines="3" LineBreakMode="TailTruncation" />
             <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8"><Label x:Name="ObservationText" Text="No disk operations running" FontSize="10" TextColor="{DynamicResource SubtleText}" VerticalOptions="Center" /><Button Grid.Column="1" Text="Performance details" Clicked="OnPerformanceDetails" Padding="14,7" /><Button x:Name="PauseButton" Grid.Column="2" Text="Pause" Clicked="OnPause" IsEnabled="False" Padding="14,7" /><Button x:Name="CancelButton" Grid.Column="3" Text="Cancel" Clicked="OnCancel" IsEnabled="False" Padding="14,7" BackgroundColor="{DynamicResource DangerSurface}" TextColor="{DynamicResource DangerText}" /></Grid>
           </VerticalStackLayout></Border>
           <Grid ColumnDefinitions="*,Auto"><Label Text="Files worth a closer look" FontSize="17" FontFamily="OpenSansSemibold" /><Button Grid.Column="1" Text="Export report ↗" Clicked="OnExport" BackgroundColor="Transparent" TextColor="{DynamicResource Accent}" Padding="8,0" /></Grid>

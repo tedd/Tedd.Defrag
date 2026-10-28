@@ -62,6 +62,8 @@ public sealed class JobExecutor
     {
         request.Validate();
         var clock = Stopwatch.StartNew(); long moved = 0, plannedBytes = 0, lastPublish = -1000;
+        double? totalProgress = null;
+        long estimatedMoveBytes = 0;
         long pacedBytes = 0; var pacing = Stopwatch.StartNew();
         VolumeLayout? layout = null; MapCell[] map = new MapCell[request.Resources.MapCells];
         ScanMapBuilder? scanMap = null;
@@ -156,7 +158,7 @@ public sealed class JobExecutor
                 SaveLayoutIndex();
             }
             Publish(true);
-            if (request.Operation == Operation.Analyze) { state = layout!.Complete && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; message = CompressionSummary() + (layout.Complete ? "Analysis complete" : "Analysis complete; file coverage is partial"); progress = 1; return; }
+            if (request.Operation == Operation.Analyze) { state = layout!.Complete && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; message = CompressionSummary() + (layout.Complete ? "Analysis complete" : "Analysis complete; file coverage is partial"); progress = 1; totalProgress = 1; return; }
             if (external || request.Operation == Operation.ZeroFreeSpace)
             {
                 if (request.Preview) { state = JobState.Completed; progress = 1; message = external
@@ -176,13 +178,15 @@ public sealed class JobExecutor
                 UpdateConditionMetrics();
                 layoutIndexDirty = true;
                 if (layout != null) AddWarnings(layout.Warnings);
-                state = layout?.Complete == true && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; progress = 1;
+                state = layout?.Complete == true && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; progress = 1; totalProgress = 1;
                 message = CompressionSummary() + (layout == null ? "Windows maintenance completed; allocation map unavailable (see warnings)"
                     : layout.Complete ? "Maintenance completed; allocation map refreshed" : "Windows maintenance completed; allocation map refreshed, file coverage is partial");
                 return;
             }
             if (layout == null) throw new IOException("The allocation layout is unavailable.");
             var rules = new PathRules(request.SelectedPaths, request.Exclusions);
+            estimatedMoveBytes = JobProgressEstimate.MoveBytes(layout, request, rules, Checkpoint);
+            totalProgress = 0;
             bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
             using var session = new PlanningSession();
             var planner = new LayoutPlanner();
@@ -217,6 +221,9 @@ public sealed class JobExecutor
                     ? 1 : request.Resources.MoveQueueDepth;
                 if (!executionWatch.IsRunning) { executionWatch.Start(); pacing.Restart(); }
                 var batchWatch = Stopwatch.StartNew(); long bytesBeforeBatch = moved;
+                progress = 0;
+                executionWork = new("Starting batch", 0, plan.Moves.Length, "batch moves", depth);
+                Publish(true);
                 MoveScheduler.Run(plan.Moves, depth, move =>
                 {
                     Checkpoint(); var file = layout.Files[move.FileIndex];
@@ -270,7 +277,7 @@ public sealed class JobExecutor
                         request.Resources.VerifyMoves
                             ? $"{pending:N0} submitted requests pending (peak {peak:N0}); {verifiedMoves:N0} verified, {failedMoves:N0} failed. Per-file sequences stay serial; metadata queue depth is 1. Device scheduling remains under Windows control."
                             : $"{pending:N0} submitted requests pending (peak {peak:N0}); {attemptedMoves - failedMoves:N0} completed, {failedMoves:N0} failed. Per-file sequences stay serial; metadata queue depth is 1. Device scheduling remains under Windows control.");
-                    Publish();
+                    Publish(completed == plan.Moves.Length);
                 });
                 if (failedMoves > failuresBeforeBatch && allocationUncertain)
                 {
@@ -288,6 +295,7 @@ public sealed class JobExecutor
                     layoutIndexDirty = true; MapAggregator.Build(layout, map); SaveLayoutIndex();
                 }
             }
+            totalProgress = .99;
             state = JobState.Scanning; progress = 0; scanWork = null;
             message = "Reconciling actual allocation after execution"; Publish(true);
             session.ResetPhysicalPlan();
@@ -301,7 +309,7 @@ public sealed class JobExecutor
                 && (request.Operation is not (Operation.MinimumWrite or Operation.FilesOnly) || f.Extents.Length >= request.MinimumFragments));
             bool budgetReached = request.MaxMoveBytes > 0 && request.MaxMoveBytes - moved < layout.Volume.BytesPerCluster;
             state = compression.FilesFailed > 0 || failedMoves > 0 || filesBlocked > 0 || !layout.Complete || budgetReached || ordered || remainingFragmentation ? JobState.Partial : JobState.Completed;
-            progress = 1;
+            progress = 1; totalProgress = 1;
             message = CompressionSummary() + (noMovesPlanned
                 ? filesConsidered == 0
                     ? "No files met the selected path, size, and fragmentation thresholds; no relocation changes were required."
@@ -384,6 +392,9 @@ public sealed class JobExecutor
         void Publish(bool force = false)
         {
             if (!force && clock.ElapsedMilliseconds - lastPublish < 1000) return;
+            if (state == JobState.Completed) totalProgress = 1;
+            else if (totalProgress.HasValue && estimatedMoveBytes > 0)
+                totalProgress = Math.Max(totalProgress.Value, Math.Min(.99, (double)moved / estimatedMoveBytes));
             var files = layout?.Files;
             if (files != null && (!ReferenceEquals(files, summarizedFiles) || clock.ElapsedMilliseconds - lastFileSummary >= 5000 || force && state is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted))
             {
@@ -408,7 +419,7 @@ public sealed class JobExecutor
                 compressionInventory.TotalFiles, compressionInventory.TotalSize, compressionInventory.BytesSaved,
                 compressionProgress.FilesProcessed, compressionProgress.FilesWaiting, compressionProgress.BytesTotal,
                 compressionProgress.BytesProcessed, compressionProgress.BytesWaiting, compressionProgress.Status,
-                compressionProgress.Path));
+                compressionProgress.Path, totalProgress));
             lastPublish = clock.ElapsedMilliseconds;
         }
         void UpdateConditionMetrics()

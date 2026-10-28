@@ -183,7 +183,8 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
     long CompressedLogicalBytes = 0, long CompressedBytesSaved = 0,
     int CompressionFilesProcessed = 0, int CompressionFilesWaiting = 0,
     long CompressionBytesTotal = 0, long CompressionBytesProcessed = 0, long CompressionBytesWaiting = 0,
-    string? CompressionStatus = null, string? CompressionCurrentPath = null)
+    string? CompressionStatus = null, string? CompressionCurrentPath = null,
+    double? TotalProgress = null)
 {
     public bool IsTerminal => State is JobState.Completed or JobState.Partial or JobState.Cancelled or JobState.Failed or JobState.Interrupted;
     public JobSnapshot Transition(JobState state, string message)

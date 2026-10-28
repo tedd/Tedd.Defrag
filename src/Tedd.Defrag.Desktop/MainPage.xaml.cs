@@ -341,6 +341,7 @@ public partial class MainPage : ContentPage
             ? "Awaiting analysis" : "Compression inventory requires NTFS";
         JobTitle.Text = "Ready when you are"; JobMessage.Text = "Analyze this volume before planning changes.";
         JobProgress.Progress = 0; ProgressText.Text = "READY"; WarningsText.Text = ""; PauseButton.IsEnabled = CancelButton.IsEnabled = false;
+        PhaseProgressPanel.IsVisible = false;
         ObservationText.Text = "Awaiting analysis"; BudgetDetail.Text = "No relocation limit";
         CellDetail.Text = "Hover to inspect a cluster range. Click for files; drag to pan."; UpdateRange();
         RenderRecommendation(null);
@@ -504,7 +505,12 @@ public partial class MainPage : ContentPage
             _ => "Relocation payload, not NAND writes"
         };
         JobTitle.Text = snapshot.Operation + " · " + snapshot.State; JobMessage.Text = snapshot.Message;
-        JobProgress.Progress = Math.Clamp(snapshot.Progress, 0, 1); ProgressText.Text = snapshot.IsTerminal ? snapshot.State.ToString().ToUpperInvariant() : snapshot.Progress.ToString("P0");
+        JobProgress.Progress = Math.Clamp(snapshot.TotalProgress ?? 0, 0, 1);
+        ProgressText.Text = TotalProgressLabel(snapshot);
+        PhaseProgressPanel.IsVisible = !snapshot.IsTerminal;
+        PhaseProgress.Progress = Math.Clamp(snapshot.Progress, 0, 1);
+        bool batch = snapshot.State == JobState.Running && snapshot.Diagnostics?.Execution != null;
+        PhaseProgressText.Text = $"{(batch ? "This batch" : "This phase")}: {snapshot.Progress:P0}";
         ObservationText.Text = snapshot.ObservedAt.HasValue ? $"Observed {snapshot.ObservedAt.Value.ToLocalTime():HH:mm:ss} · logical volume allocation" :
             buildingMap ? $"{(snapshot.IsTerminal ? "Partial allocation map" : "Building allocation map")} · unread regions are blank · classifications provisional" : "Reading the current volume layout";
         PauseButton.IsEnabled = CancelButton.IsEnabled = !snapshot.IsTerminal && session.JobId != Guid.Empty; PauseButton.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
@@ -533,6 +539,9 @@ public partial class MainPage : ContentPage
         RenderDiagnostics(snapshot); DiagnosticsOverlay.IsVisible = true;
     }
     private void OnClosePerformanceDetails(object? sender, EventArgs e) => DiagnosticsOverlay.IsVisible = false;
+    private static string TotalProgressLabel(JobSnapshot snapshot) => snapshot.TotalProgress is { } total
+        ? $"Total{(total < 1 ? " (estimated)" : "")}: {Math.Clamp(total, 0, 1):P0}"
+        : snapshot.IsTerminal ? "Total: unavailable" : "Total: calculating…";
     private void RenderDiagnostics(JobSnapshot snapshot)
     {
         var d = snapshot.Diagnostics;
@@ -545,8 +554,10 @@ public partial class MainPage : ContentPage
         };
         DiagnosticsTitle.Text = snapshot.IsTerminal || current == null ? $"{snapshot.Operation} · {snapshot.State}" : current.Phase;
         DiagnosticsBusy.IsRunning = !snapshot.IsTerminal && snapshot.State is not (JobState.Paused or JobState.WaitingForIdle);
-        DiagnosticsProgress.Progress = current?.Total > 0 ? Math.Clamp((double)current.Completed / current.Total, 0, 1) : Math.Clamp(snapshot.Progress, 0, 1);
-        DiagnosticsCount.Text = current?.Total > 0 ? $"{current.Completed:N0} / {current.Total:N0} {current.Unit} · phase progress" : snapshot.Message;
+        DiagnosticsProgress.Progress = Math.Clamp(snapshot.TotalProgress ?? 0, 0, 1);
+        DiagnosticsCount.Text = TotalProgressLabel(snapshot) + (current?.Total > 0
+            ? $" · {current.Completed:N0} / {current.Total:N0} {current.Unit} · this phase: {snapshot.Progress:P0}"
+            : $" · {snapshot.Message}");
         DiagnosticsPause.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
         DiagnosticsPause.IsEnabled = DiagnosticsCancel.IsEnabled = !snapshot.IsTerminal;
         UpdateElapsed(snapshot, CurrentSession);

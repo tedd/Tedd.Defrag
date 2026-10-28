@@ -14,6 +14,91 @@ public sealed class ExecutionContinuationTests
     [InlineData(Operation.Pack)]
     [InlineData(Operation.PackAndDefrag)]
     [InlineData(Operation.MinimumWrite)]
+    [InlineData(Operation.Alphabetical)]
+    public void TotalProgressPersistsAcrossBatchesAndWaitsForFinalReconciliation(Operation operation)
+    {
+        var volume = ManyFiles(1100);
+        var request = Request(operation);
+        var batches = new List<JobSnapshot>();
+        JobSnapshot? reconciliation = null;
+        var result = Run(volume, request, observe: store =>
+        {
+            volume.BeforeMove = (_, _) =>
+            {
+                var snapshot = store.ReadSnapshot(request.Id)!;
+                if (batches.Count == 0 || batches[^1].PlannedMoves != snapshot.PlannedMoves) batches.Add(snapshot);
+            };
+            volume.BeforeScan = () =>
+            {
+                if (volume.Scans > 0) reconciliation = store.ReadSnapshot(request.Id);
+            };
+        });
+
+        Assert.True(batches.Count > 1);
+        Assert.Equal(0d, batches[0].TotalProgress);
+        for (int i = 1; i < batches.Count; i++)
+        {
+            Assert.Equal(0, batches[i].Progress);
+            Assert.True(batches[i].TotalProgress > batches[i - 1].TotalProgress);
+            Assert.InRange(batches[i].TotalProgress!.Value, .001, .99);
+        }
+        Assert.NotNull(reconciliation);
+        Assert.Equal(JobState.Scanning, reconciliation.State);
+        Assert.Equal(.99, reconciliation.TotalProgress);
+        Assert.Equal(1d, result.TotalProgress);
+    }
+
+    [Fact]
+    public void CancellationRetainsIncompleteTotalProgress()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var volume = ManyFiles(1100);
+        volume.BeforeMove = (_, _) =>
+        {
+            if (volume.Attempts.Count > 1024) cancellation.Cancel();
+        };
+
+        var result = Run(volume, Request(Operation.MinimumWrite), cancellation.Token);
+
+        Assert.Equal(JobState.Cancelled, result.State);
+        Assert.InRange(result.TotalProgress!.Value, .001, .99);
+    }
+
+    [Fact]
+    public void TotalEstimateHonorsEligibilityPathsSizesAndByteBudget()
+    {
+        var volume = ManyFiles(6);
+        volume.Layout.Files[0] = volume.Layout.Files[0] with { Flags = StreamFlags.Excluded };
+        volume.Layout.Files[1] = volume.Layout.Files[1] with { Flags = StreamFlags.Metadata };
+        volume.Layout.Files[2] = volume.Layout.Files[2] with { Flags = StreamFlags.Directory };
+        volume.Layout.Files[3] = volume.Layout.Files[3] with { Size = 1 };
+        var request = Request(Operation.MinimumWrite) with
+        {
+            MinimumFileBytes = 4096,
+            Exclusions = [new(volume.Layout.Files[4].Path)]
+        };
+        var rules = new PathRules(request.SelectedPaths, request.Exclusions);
+
+        Assert.Equal(8192, JobProgressEstimate.MoveBytes(volume.Layout, request, rules));
+        Assert.Equal(4096, JobProgressEstimate.MoveBytes(volume.Layout, request with { MaxMoveBytes = 4096 }, rules));
+        Assert.Equal(0, JobProgressEstimate.MoveBytes(volume.Layout, request with { MinimumFragments = 3 }, rules));
+        Assert.Equal(0, JobProgressEstimate.MoveBytes(volume.Layout, request with { MaximumFileBytes = 4096 }, rules));
+        Assert.Equal(0, JobProgressEstimate.MoveBytes(volume.Layout, request, new([new(@"V:\Other")], [])));
+    }
+
+    [Fact]
+    public void ShrinkEstimateCountsOnlyAllocationBeyondTheBoundary()
+    {
+        var volume = Volume(100, [File(32, [new(0, 10, 20), new(20, 60, 20)])]);
+        var request = Request(Operation.PrepareShrink) with { ShrinkBoundaryBytes = 70L * 4096 };
+
+        Assert.Equal(10L * 4096, JobProgressEstimate.MoveBytes(volume.Layout, request, new([], [])));
+    }
+
+    [Theory]
+    [InlineData(Operation.Pack)]
+    [InlineData(Operation.PackAndDefrag)]
+    [InlineData(Operation.MinimumWrite)]
     [InlineData(Operation.FilesOnly)]
     [InlineData(Operation.Alphabetical)]
     public void FileFailureDoesNotStopWorkInLaterBatches(Operation operation)
@@ -570,13 +655,14 @@ public sealed class ExecutionContinuationTests
         Resources = new() { AcOnly = false, MapCells = 256 }
     };
 
-    private static JobSnapshot Run(TestVolume volume, JobRequest request, CancellationToken token = default)
+    private static JobSnapshot Run(TestVolume volume, JobRequest request, CancellationToken token = default, Action<JobStore>? observe = null)
     {
         string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
         try
         {
             var store = new JobStore(root);
             store.SaveRequest(request);
+            observe?.Invoke(store);
             new JobExecutor(store, _ => volume).Run(request, token);
             return Assert.IsType<JobSnapshot>(store.ReadReport(request.Id));
         }
@@ -606,13 +692,14 @@ public sealed class ExecutionContinuationTests
         public List<PlannedMove> Attempts { get; } = [];
         public List<bool> VerifyResults { get; } = [];
         public Action<FileLayout, PlannedMove>? BeforeMove { get; set; }
+        public Action? BeforeScan { get; set; }
         public int BitmapRefreshes { get; private set; }
         public int Scans { get; private set; }
         public bool FailBitmapRefresh { get; set; }
         public bool IsDirty() => false;
         public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null, Action<ScanMapUpdate>? mapProgress = null)
         {
-            checkpoint(); Scans++;
+            checkpoint(); BeforeScan?.Invoke(); Scans++;
             return Layout with { Bitmap = Layout.Bitmap.ToArray(), Files = Layout.Files.ToArray() };
         }
         public byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token)
