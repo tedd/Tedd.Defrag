@@ -435,6 +435,7 @@ public partial class MainPage : ContentPage
     private async Task Poll()
     {
         var session = CurrentSession;
+        if (session?.Snapshot is { } snapshot) UpdateElapsed(snapshot, session);
         if (_polling || session == null || session.JobId == Guid.Empty) return;
         _polling = true;
         try
@@ -452,6 +453,7 @@ public partial class MainPage : ContentPage
     {
         var previous = session.Snapshot?.Id == snapshot.Id ? session.Snapshot : null;
         session.Snapshot = snapshot;
+        session.SnapshotReceivedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         if (snapshot.ObservedAt.HasValue && snapshot.TotalBytes > 0) session.LayoutSnapshot = snapshot;
         if (snapshot.Map != null && !snapshot.Map.AsSpan().SequenceEqual(session.Cells)) session.Cells = snapshot.Map;
         if (snapshot.Files != null && (previous?.Files == null || !snapshot.Files.AsSpan().SequenceEqual(previous.Files)))
@@ -547,7 +549,7 @@ public partial class MainPage : ContentPage
         DiagnosticsCount.Text = current?.Total > 0 ? $"{current.Completed:N0} / {current.Total:N0} {current.Unit} · phase progress" : snapshot.Message;
         DiagnosticsPause.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
         DiagnosticsPause.IsEnabled = DiagnosticsCancel.IsEnabled = !snapshot.IsTerminal;
-        DiagnosticsElapsed.Text = FormatElapsed(snapshot.ElapsedMilliseconds);
+        UpdateElapsed(snapshot, CurrentSession);
         DiagnosticsProcessors.Text = d?.LogicalProcessors.ToString("N0") ?? "Not reported";
         DiagnosticsThreads.Text = d?.ProcessThreads.ToString("N0") ?? "Not reported";
         DiagnosticsCpu.Text = d == null ? "Not reported" : $"{d.CpuMilliseconds / 1000:N1} s / {snapshot.CpuPercent}%";
@@ -582,6 +584,13 @@ public partial class MainPage : ContentPage
         workers.Text = progress == null ? "—" : $"{progress.ActiveWorkers:N0} / {progress.WorkerLimit:N0} · peak {progress.PeakWorkers:N0}";
         requests.Text = progress == null ? "—" : $"{progress.InFlightIo:N0} active · peak {progress.PeakIo:N0}";
         if (bytes != null) bytes.Text = progress == null || progress.BytesProcessed <= 0 ? "—" : Format.Bytes(progress.BytesProcessed);
+    }
+    private void UpdateElapsed(JobSnapshot snapshot, VolumeSession? session)
+    {
+        long elapsed = snapshot.ElapsedMilliseconds;
+        if (!snapshot.IsTerminal && session?.Snapshot == snapshot && session.SnapshotReceivedAt != 0)
+            elapsed += (long)System.Diagnostics.Stopwatch.GetElapsedTime(session.SnapshotReceivedAt).TotalMilliseconds;
+        DiagnosticsElapsed.Text = FormatElapsed(elapsed);
     }
     private static string FormatElapsed(long milliseconds)
     {
@@ -1542,6 +1551,7 @@ public partial class MainPage : ContentPage
         public Guid AwaitingReport { get; set; }
         public bool AttachedExistingJob { get; set; }
         public JobSnapshot? Snapshot { get; set; }
+        public long SnapshotReceivedAt { get; set; }
         public JobSnapshot? LayoutSnapshot { get; set; }
         public MapCell[] Cells { get; set; } = [];
         public FileRow[]? Files { get; set; }

@@ -43,7 +43,7 @@ public sealed class JobExecutor
     private readonly Func<JobRequest, IJobVolume> openVolume;
     private readonly Action<JobRequest, VolumeInfo, Action<string>, Action, CancellationToken> runMaintenance;
     private readonly Func<JobRequest, VolumeInfo, Action<CompressionProgress>, Action, CancellationToken, CompressionResult> runCompression;
-    private readonly Func<VolumeLayout, Action, CancellationToken, CompressionInventoryResult> readCompressionInventory;
+    private readonly Func<VolumeLayout, Action, CancellationToken, CompressionInventoryResult>? readCompressionInventory;
 
     public JobExecutor(JobStore store) : this(store, JobVolume.Open) { }
     internal JobExecutor(JobStore store, Func<JobRequest, IJobVolume> openVolume,
@@ -55,7 +55,7 @@ public sealed class JobExecutor
         this.openVolume = openVolume;
         this.runMaintenance = runMaintenance ?? WindowsMaintenance.Run;
         this.runCompression = runCompression ?? NtfsCompression.Run;
-        this.readCompressionInventory = readCompressionInventory ?? CompressionInventory.Read;
+        this.readCompressionInventory = readCompressionInventory;
     }
 
     public void Run(JobRequest request, CancellationToken token)
@@ -338,16 +338,30 @@ public sealed class JobExecutor
             }
             VolumeLayout InspectCompression(VolumeLayout observed)
             {
+                message = "Building allocation map"; progress = 0;
+                scanWork = new(message, 0, 0, "streams", ActiveWorkers: 1, PeakWorkers: 1);
+                Publish(true);
                 MapAggregator.Build(observed, map);
                 if (!observed.Volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
                 {
                     compressionInventory = CompressionInventoryResult.Empty;
                     return observed;
                 }
-                message = "Inspecting compressed files"; progress = 1; Publish(true);
-                compressionInventory = readCompressionInventory(observed, Checkpoint, token);
+                message = "Inspecting compressed files"; progress = 0;
+                scanWork = new(message, 0, 0, "files", ActiveWorkers: 1, PeakWorkers: 1);
+                Publish(true);
+                compressionInventory = readCompressionInventory != null
+                    ? readCompressionInventory(observed, InventoryCheckpoint, token)
+                    : CompressionInventory.Read(observed, InventoryCheckpoint, token, p =>
+                    {
+                        scanWork = p; message = p.Phase;
+                        progress = p.Total > 0 ? (double)p.Completed / p.Total : 0;
+                        Publish(p.Completed == 0 || p.Completed == p.Total);
+                    });
                 AddWarnings(compressionInventory.Warnings);
                 return observed;
+
+                void InventoryCheckpoint() { Checkpoint(); Publish(); }
             }
         }
         catch (OperationCanceledException e) { state = JobState.Cancelled; message = string.IsNullOrEmpty(e.Message) ? "Cancelled at a safe boundary" : e.Message; }

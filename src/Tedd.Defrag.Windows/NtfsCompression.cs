@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Microsoft.Win32.SafeHandles;
@@ -281,21 +282,30 @@ public static class CompressionInventory
 {
     internal const int MaximumFiles = 500;
 
-    public static CompressionInventoryResult Read(VolumeLayout layout, Action checkpoint, CancellationToken token)
+    public static CompressionInventoryResult Read(VolumeLayout layout, Action checkpoint, CancellationToken token,
+        Action<WorkProgress>? progress = null)
     {
         if (!layout.Volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) || !layout.Files.Any(IsCandidate))
+        {
+            progress?.Invoke(new("Compression inventory complete", 0, 0, "files"));
             return CompressionInventoryResult.Empty;
+        }
         var platform = new NativeCompressionPlatform(layout.Volume.Root);
-        return Read(layout, platform.InspectState, platform.GetAllocatedSize, checkpoint, token);
+        return Read(layout, platform.InspectState, platform.GetAllocatedSize, checkpoint, token, progress);
     }
 
     internal static CompressionInventoryResult Read(VolumeLayout layout, Func<string, CompressionFileState> getState,
-        Func<string, long> getAllocatedSize, Action checkpoint, CancellationToken token)
+        Func<string, long> getAllocatedSize, Action checkpoint, CancellationToken token, Action<WorkProgress>? progress = null)
     {
+        var watch = Stopwatch.StartNew();
+        var candidates = layout.Files.Where(IsCandidate).DistinctBy(file => file.FileId).ToArray();
+        int completed = 0;
+        long lastReport = -1000;
         var files = new List<CompressedFileSummary>();
         var warnings = new List<string>();
         long totalSize = 0, totalSaved = 0;
-        foreach (var file in layout.Files.Where(IsCandidate).DistinctBy(file => file.FileId))
+        Report(true);
+        foreach (var file in candidates)
         {
             token.ThrowIfCancellationRequested(); checkpoint();
             try
@@ -312,9 +322,20 @@ public static class CompressionInventory
             {
                 if (warnings.Count < 50) warnings.Add($"{file.Path}: compressed-size inspection failed: {error.Message}");
             }
+            finally { completed++; Report(completed == candidates.Length); }
         }
         return new(files.OrderByDescending(file => file.BytesSaved).ThenBy(file => file.Path, StringComparer.OrdinalIgnoreCase)
             .Take(MaximumFiles).ToArray(), files.Count, totalSize, totalSaved, warnings.ToArray());
+
+        void Report(bool force = false)
+        {
+            if (!force && watch.ElapsedMilliseconds - lastReport < 200) return;
+            bool finished = completed == candidates.Length;
+            progress?.Invoke(new(finished ? "Compression inventory complete" : "Inspecting compressed files", completed,
+                candidates.Length, "files", ActiveWorkers: finished ? 0 : 1, PeakWorkers: candidates.Length > 0 ? 1 : 0,
+                ElapsedMilliseconds: watch.ElapsedMilliseconds));
+            lastReport = watch.ElapsedMilliseconds;
+        }
     }
 
     private static bool IsCandidate(FileLayout file) => file.StreamName.Length == 0 &&
