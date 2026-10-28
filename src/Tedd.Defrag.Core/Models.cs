@@ -202,7 +202,7 @@ public sealed record ClusterFile(ulong FileId, string Path, string Stream, long 
 public sealed record MapFileSelection(ulong FileId, string Path, string Stream, long Bytes, long Clusters,
     int Extents, string Status, ClusterRange[] Ranges);
 public sealed record MapRegion(long StartCluster, long ClusterCount, long TotalClusters, MapCell[] Cells,
-    ClusterFile[] Files, int FileCount, MapFileSelection? Selection = null);
+    ClusterFile[] Files, int FileCount, MapFileSelection? Selection = null, bool IsLive = false);
 public sealed record MoveJournalEntry(DateTimeOffset At, string Phase, PlannedMove Move, string? Detail = null);
 public static class Format
 {

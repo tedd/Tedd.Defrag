@@ -14,6 +14,7 @@ public sealed record BrokerReply(bool Success, string? Error = null, Guid Id = d
 public sealed record WorkerIdentity(string Build, int ProcessId, string ExecutablePath, bool Stopping = false);
 public static class BrokerProtocol
 {
+    public const string LayoutUnavailableMessage = "The detailed map is no longer in memory. Analyze the volume again.";
     public static string BuildVersion { get; } = typeof(BrokerProtocol).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? typeof(BrokerProtocol).Assembly.GetName().Version?.ToString() ?? "unknown";
     public static string PipeName => "Tedd.Defrag." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Environment.UserDomainName + "\\" + Environment.UserName)))[..24];

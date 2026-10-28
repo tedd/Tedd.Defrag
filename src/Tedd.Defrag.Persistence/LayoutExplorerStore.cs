@@ -30,7 +30,7 @@ public sealed class LayoutExplorerStore(JobStore store)
         if (id == Guid.Empty || cellCount is < 0 or > 65536 || selectedPath?.Length > 32760)
             throw new ArgumentException("Invalid layout query.");
         if (!store.Layouts.TryGetValue(id, out var target))
-            throw new InvalidOperationException("The detailed map is no longer in memory. Analyze the volume again.");
+            throw new InvalidOperationException(BrokerProtocol.LayoutUnavailableMessage);
         lock (target._sync)
             return Query(target._layout!, target._activity, start, length, cellCount, includeFiles, selectedPath, selectedFileId, selectedStream);
     }

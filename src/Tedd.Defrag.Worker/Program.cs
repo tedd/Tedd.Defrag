@@ -116,12 +116,19 @@ internal sealed class Broker
             try
             {
                 var command = await BrokerProtocol.Read<BrokerCommand>(pipe, JobStore.Json, timeout.Token);
+                if (command.Action == "lookup-clusters") timeout.CancelAfter(TimeSpan.FromMinutes(2));
                 BrokerReply reply;
                 try
                 {
                     bool hasMemory;
                     lock (_sync) hasMemory = _active.ContainsKey(command.Id) || _cached.ContainsKey(command.Id);
-                    if (hasMemory && command.Action is "get" or "explore")
+                    if (command.Action == "lookup-clusters")
+                    {
+                        var request = _store.ReadRequest(command.Id);
+                        reply = new(true, Region: await Task.Run(() => ClusterLookup.Query(request.Volume,
+                            command.StartCluster, command.ClusterCount, timeout.Token), timeout.Token));
+                    }
+                    else if (hasMemory && command.Action is "get" or "explore")
                     {
                         try { reply = await JobMemoryServer.Query(command, timeout.Token); }
                         catch (Exception e) when (e is TimeoutException or IOException)
@@ -151,7 +158,7 @@ internal sealed class Broker
                 Submit(job); return new(true, Id: job.Id);
             case "list": return new(true, Jobs: _store.List().Take(200).Select(j => j with { Map = null, Files = null, CompressedFiles = null }).ToArray());
             case "get": return new(true, Snapshot: _store.ReadSnapshot(command.Id));
-            case "explore": throw new InvalidOperationException("The detailed map is no longer in memory. Analyze the volume again.");
+            case "explore": throw new InvalidOperationException(BrokerProtocol.LayoutUnavailableMessage);
             case "pause": case "resume": case "cancel": _store.Control(command.Id, command.Action); return new(true);
             case "settings":
                 if (command.Settings != null)

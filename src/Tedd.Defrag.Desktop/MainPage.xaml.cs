@@ -1376,40 +1376,65 @@ public partial class MainPage : ContentPage
     private async Task ShowClusterFiles(ClusterRange range)
     {
         var session = CurrentSession; if (session == null || session.JobId == Guid.Empty) return;
+        if (_clusterLookupInProgress) return;
         if (session.Snapshot?.ObservedAt == null)
         {
             CellDetail.Text = "File details become available when analysis finishes.";
             return;
         }
+        _clusterLookupInProgress = true;
+        _selectedClusterHit = null;
+        _clusterFilesAreLive = false;
+        HighlightClusterFileButton.IsEnabled = false;
+        ClusterFilesList.ItemsSource = Array.Empty<ClusterHitRow>();
+        ClusterFilesList.IsVisible = false;
+        ClusterLookupSpinner.IsVisible = ClusterLookupSpinner.IsRunning = true;
+        ClusterTitle.Text = range.Length == 1 ? $"Cluster {range.Start:N0}" : $"Clusters {range.Start:N0}–{range.End - 1:N0}";
+        ClusterSubtitle.Text = "Looking up cluster contents…";
+        ClusterOverlay.IsVisible = true;
         try
         {
-            var reply = await _client.Send(new("explore", Id: session.JobId, StartCluster: range.Start,
-                ClusterCount: range.Length, IncludeFiles: true));
-            if (reply.Region == null || !ReferenceEquals(session, CurrentSession)) return;
-            ClusterTitle.Text = range.Length == 1 ? $"Cluster {range.Start:N0}" : $"Clusters {range.Start:N0}–{range.End - 1:N0}";
-            ClusterSubtitle.Text = reply.Region.FileCount > reply.Region.Files.Length
-                ? $"{reply.Region.FileCount:N0} streams overlap this range; showing the first {reply.Region.Files.Length:N0}."
-                : $"{reply.Region.FileCount:N0} streams overlap this range.";
-            var rows = reply.Region.Files.OrderByDescending(file => file.ClustersInRegion)
+            var region = await _client.LookupClusterFiles(session.JobId, range.Start, range.Length);
+            if (!ReferenceEquals(session, CurrentSession) || !ClusterOverlay.IsVisible) return;
+            if (region == null) throw new InvalidOperationException("The worker returned no cluster lookup results.");
+            _clusterFilesAreLive = region.IsLive;
+            ClusterSubtitle.Text = region.FileCount > region.Files.Length
+                ? $"{region.FileCount:N0} streams overlap this range; showing the first {region.Files.Length:N0}."
+                : $"{region.FileCount:N0} streams overlap this range.";
+            if (region.IsLive) ClusterSubtitle.Text += " Current disk contents; the analyzed map may differ. Analyze again to highlight files.";
+            var rows = region.Files.OrderByDescending(file => file.ClustersInRegion)
                 .Select(file => new ClusterHitRow(file)).ToArray();
             ClusterFilesList.ItemsSource = rows;
             ClusterFilesList.SelectedItem = rows.FirstOrDefault(row =>
                 row.File.FileId == _selectedMapFileId && row.File.Stream == _selectedMapStream &&
                 string.Equals(row.File.Path, _selectedMapPath, StringComparison.OrdinalIgnoreCase));
             _selectedClusterHit = ClusterFilesList.SelectedItem as ClusterHitRow;
-            HighlightClusterFileButton.IsEnabled = _selectedClusterHit != null;
-            ClusterOverlay.IsVisible = true;
+            HighlightClusterFileButton.IsEnabled = _selectedClusterHit != null && !_clusterFilesAreLive;
         }
-        catch (Exception exception) { await DisplayAlertAsync("Cluster contents unavailable", exception.Message, "Close"); }
+        catch (Exception exception)
+        {
+            if (ReferenceEquals(session, CurrentSession) && ClusterOverlay.IsVisible)
+            {
+                ClusterOverlay.IsVisible = false;
+                await DisplayAlertAsync("Cluster contents unavailable", exception.Message, "Close");
+            }
+        }
+        finally
+        {
+            _clusterLookupInProgress = false;
+            ClusterLookupSpinner.IsVisible = ClusterLookupSpinner.IsRunning = false;
+            ClusterFilesList.IsVisible = true;
+        }
     }
+    private bool _clusterLookupInProgress, _clusterFilesAreLive;
     private void OnClusterFileSelected(object? sender, SelectionChangedEventArgs e)
     {
         _selectedClusterHit = e.CurrentSelection.FirstOrDefault() as ClusterHitRow;
-        HighlightClusterFileButton.IsEnabled = _selectedClusterHit != null;
+        HighlightClusterFileButton.IsEnabled = _selectedClusterHit != null && !_clusterFilesAreLive;
     }
     private async void OnHighlightClusterFile(object? sender, EventArgs e)
     {
-        if (_selectedClusterHit == null) return;
+        if (_selectedClusterHit == null || _clusterFilesAreLive) return;
         _selectedMapFileId = _selectedClusterHit.File.FileId; _selectedMapPath = _selectedClusterHit.File.Path; _selectedMapStream = _selectedClusterHit.File.Stream;
         ClusterOverlay.IsVisible = false; await LoadRegion(_map.StartCluster, _map.ClusterCount);
     }
@@ -1575,8 +1600,8 @@ public partial class MainPage : ContentPage
     private sealed record ClusterHitRow(ClusterFile File)
     {
         public string DisplayPath => File.Path + File.Stream;
-        public string BytesLabel => Format.Bytes(File.Bytes);
-        public string ClusterLabel => File.ClustersInRegion == File.Clusters
+        public string BytesLabel => File.Bytes < 0 ? "Unavailable" : Format.Bytes(File.Bytes);
+        public string ClusterLabel => File.Clusters < 0 ? $"{File.ClustersInRegion:N0} in range" : File.ClustersInRegion == File.Clusters
             ? $"{File.Clusters:N0} clusters" : $"{File.ClustersInRegion:N0} / {File.Clusters:N0}";
         public string Status => File.Status;
     }

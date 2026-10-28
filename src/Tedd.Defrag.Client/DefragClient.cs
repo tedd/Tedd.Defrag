@@ -35,14 +35,27 @@ public sealed class DefragClient
         try { return await _connect(command, token); }
         catch (TimeoutException) when (!startBroker && command.Action is "list" or "get" or "explore" or "settings")
         {
+            if (command.Action == "explore") throw new InvalidOperationException(BrokerProtocol.LayoutUnavailableMessage);
             var store = _openStore();
             return command.Action switch
             {
                 "list" => new(true, Jobs: store.List().Select(s => s with { Map = null, Files = null, CompressedFiles = null }).ToArray()),
                 "get" => new(true, Snapshot: store.ReadSnapshot(command.Id)),
-                "explore" => throw new InvalidOperationException("The detailed map is no longer in memory. Analyze the volume again."),
                 _ => PersistSettings(store, command.Settings)
             };
+        }
+    }
+
+    public async Task<MapRegion?> LookupClusterFiles(Guid id, long start, long length, CancellationToken token = default)
+    {
+        try
+        {
+            return (await Send(new("explore", Id: id, StartCluster: start, ClusterCount: length, IncludeFiles: true), token: token)).Region;
+        }
+        catch (InvalidOperationException e) when (e.Message == BrokerProtocol.LayoutUnavailableMessage)
+        {
+            return (await Send(new("lookup-clusters", Id: id, StartCluster: start, ClusterCount: length),
+                startBroker: true, token: token)).Region;
         }
     }
 

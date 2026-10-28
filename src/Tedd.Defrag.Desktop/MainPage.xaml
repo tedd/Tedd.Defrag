@@ -195,6 +195,7 @@
       <Border Style="{StaticResource Card}" WidthRequest="760" MaximumHeightRequest="680" HorizontalOptions="Center" VerticalOptions="Center" Stroke="{DynamicResource ModalLine}" Background="{DynamicResource ModalSurface}" Padding="22">
         <Grid RowDefinitions="Auto,*,Auto" RowSpacing="14">
           <VerticalStackLayout Spacing="6"><Label Text="FILES IN CLUSTER RANGE" Style="{StaticResource Caption}" TextColor="{DynamicResource Accent}" /><Label x:Name="ClusterTitle" Text="Cluster contents" FontSize="24" FontAttributes="Bold" /><Label x:Name="ClusterSubtitle" FontSize="11" TextColor="{DynamicResource Muted}" /></VerticalStackLayout>
+          <ActivityIndicator x:Name="ClusterLookupSpinner" Grid.Row="1" IsVisible="False" IsRunning="False" HorizontalOptions="Center" VerticalOptions="Center" />
           <CollectionView x:Name="ClusterFilesList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnClusterFileSelected"><CollectionView.ItemTemplate><DataTemplate><Border Stroke="{DynamicResource OptionStroke}" Background="{DynamicResource OptionSurface}" StrokeShape="RoundRectangle 8" Padding="12" Margin="0,0,0,7">
             <VisualStateManager.VisualStateGroups>
               <VisualStateGroup Name="CommonStates">
