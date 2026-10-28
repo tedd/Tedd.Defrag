@@ -240,7 +240,7 @@ public abstract class WindowsManagedFileSystemTests
         public int Scans { get; private set; }
         public Exception? ScanError { get; init; }
         public bool IsDirty() => throw new InvalidOperationException("Windows validates filesystem health");
-        public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null)
+        public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null, Action<ScanMapUpdate>? mapProgress = null)
         {
             Scans++; checkpoint();
             if (ScanError != null) throw ScanError;

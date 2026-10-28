@@ -11,7 +11,7 @@ internal interface IJobVolume : IDisposable
     VolumeInfo Info { get; }
     FileSystemSupport FileSystem => FileSystemCapabilities.Get(Info.FileSystem);
     bool IsDirty();
-    VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null);
+    VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null, Action<ScanMapUpdate>? mapProgress = null);
     byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token);
     void ExecuteMove(FileLayout file, PlannedMove move, PathRules rules, bool verifyResult);
 }

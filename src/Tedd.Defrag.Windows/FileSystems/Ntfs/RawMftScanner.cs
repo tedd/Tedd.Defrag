@@ -9,7 +9,7 @@ namespace Tedd.Defrag.Windows;
 public sealed class RawMftScanner
 {
     public VolumeLayout Scan(NtfsVolume volume, JobRequest request, Action<double, long, string>? progress, Action? checkpoint, CancellationToken token,
-        Action<WorkProgress>? diagnostics = null)
+        Action<WorkProgress>? diagnostics = null, Action<ScanMapUpdate>? mapProgress = null)
     {
         var watch = Stopwatch.StartNew(); long lastUpdate = -1000;
         byte[] bitmap = volume.ReadBitmap(request.Resources.MemoryMiB, p =>
@@ -19,7 +19,7 @@ public sealed class RawMftScanner
                 ActiveWorkers: 1, PeakWorkers: 1, ElapsedMilliseconds: watch.ElapsedMilliseconds,
                 Detail: "Windows allocation bitmap query; raw MFT reads follow."));
             progress?.Invoke(p * .1, 0, "Reading allocation bitmap");
-        }, token);
+        }, token, mapProgress);
         var warnings = new List<string>();
         var records = new Dictionary<ulong, NtfsRecord>();
         long skipped = 0, scanned = 0; bool complete = true;
@@ -59,7 +59,19 @@ public sealed class RawMftScanner
             (batch, result) =>
             {
                 scanned += batch.Count / volume.RecordSize; skipped += result.Skipped;
-                foreach (var record in result.Records) records[record.FileId] = record;
+                foreach (var record in result.Records)
+                {
+                    records[record.FileId] = record;
+                    if (mapProgress == null) continue;
+                    foreach (var stream in record.Streams)
+                    {
+                        if (stream.Type == 0x20) continue;
+                        bool mftData = (record.FileId & 0xFFFFFFFFFFFF) == 0 && stream.Type == 0x80 && stream.Name == "";
+                        var flags = mftData ? record.Flags & ~StreamFlags.Incomplete : record.Flags | (stream.Incomplete ? StreamFlags.Incomplete : 0);
+                        mapProgress(new(volume.TotalClusters, File: new(record.FileId, "", stream.Name, flags,
+                            stream.Size, record.Created, record.Modified, MergeAdjacent(mftData ? runs : stream.Extents))));
+                    }
+                }
                 ReportScan();
             },
             () => { token.ThrowIfCancellationRequested(); checkpoint?.Invoke(); ReportScan(); }, CanSchedule);

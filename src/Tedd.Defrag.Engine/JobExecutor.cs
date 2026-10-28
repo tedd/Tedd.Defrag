@@ -64,6 +64,7 @@ public sealed class JobExecutor
         var clock = Stopwatch.StartNew(); long moved = 0, plannedBytes = 0, lastPublish = -1000;
         long pacedBytes = 0; var pacing = Stopwatch.StartNew();
         VolumeLayout? layout = null; MapCell[] map = new MapCell[request.Resources.MapCells];
+        ScanMapBuilder? scanMap = null;
         VolumeInfo? volumeInfo = null;
         var warnings = new List<string>();
         JobState state = JobState.Scanning; double progress = 0; string message = "Preparing analysis";
@@ -152,7 +153,7 @@ public sealed class JobExecutor
             {
                 warnings.AddRange(layout.Warnings);
                 initialFragmentedFiles = layout.Files.Count(f => f.Fragmented);
-                MapAggregator.Build(layout, map); SaveLayoutIndex();
+                SaveLayoutIndex();
             }
             Publish(true);
             if (request.Operation == Operation.Analyze) { state = layout!.Complete && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; message = CompressionSummary() + (layout.Complete ? "Analysis complete" : "Analysis complete; file coverage is partial"); progress = 1; return; }
@@ -174,7 +175,7 @@ public sealed class JobExecutor
                 layout = ScanVolume();
                 UpdateConditionMetrics();
                 layoutIndexDirty = true;
-                if (layout != null) { AddWarnings(layout.Warnings); MapAggregator.Build(layout, map); }
+                if (layout != null) AddWarnings(layout.Warnings);
                 state = layout?.Complete == true && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; progress = 1;
                 message = CompressionSummary() + (layout == null ? "Windows maintenance completed; allocation map unavailable (see warnings)"
                     : layout.Complete ? "Maintenance completed; allocation map refreshed" : "Windows maintenance completed; allocation map refreshed, file coverage is partial");
@@ -291,11 +292,10 @@ public sealed class JobExecutor
             message = "Reconciling actual allocation after execution"; Publish(true);
             session.ResetPhysicalPlan();
             ReleaseLayoutForRescan();
-            layout = InspectCompression(volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p));
+            layout = InspectCompression(ReadScan());
             UpdateConditionMetrics();
             layoutIndexDirty = true;
             AddWarnings(layout.Warnings);
-            MapAggregator.Build(layout, map);
             bool remainingFragmentation = request.Operation is not (Operation.Pack or Operation.PrepareShrink) && layout.Files.Any(f => f.Fragmented && f.Movable && rules.IsSelected(f.Path) && !rules.IsExcluded(f.Path)
                 && f.Size >= request.MinimumFileBytes && (request.MaximumFileBytes == 0 || f.Size <= request.MaximumFileBytes)
                 && (request.Operation is not (Operation.MinimumWrite or Operation.FilesOnly) || f.Extents.Length >= request.MinimumFragments));
@@ -316,7 +316,7 @@ public sealed class JobExecutor
 
             VolumeLayout? ScanVolume()
             {
-                try { return InspectCompression(volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p)); }
+                try { return InspectCompression(ReadScan()); }
                 catch (Exception e) when (external && volume.FileSystem.UsesDirectoryScan &&
                     e is IOException or Win32Exception or UnauthorizedAccessException)
                 {
@@ -325,8 +325,20 @@ public sealed class JobExecutor
                     return null;
                 }
             }
+            VolumeLayout ReadScan()
+            {
+                scanMap = null;
+                return volume.Scan(request, ScanProgress, Checkpoint, token, p => scanWork = p, update =>
+                {
+                    bool first = scanMap == null;
+                    scanMap ??= new ScanMapBuilder(update.TotalClusters, map);
+                    scanMap.Apply(update);
+                    Publish(first);
+                });
+            }
             VolumeLayout InspectCompression(VolumeLayout observed)
             {
+                MapAggregator.Build(observed, map);
                 if (!observed.Volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
                 {
                     compressionInventory = CompressionInventoryResult.Empty;
@@ -371,13 +383,13 @@ public sealed class JobExecutor
                 System.Runtime.Intrinsics.X86.Avx2.IsSupported ? "AVX2 for aligned map ranges of at least 64 bytes; scalar tails" : "POPCNT / scalar bitmap counting");
             store.Save(new(request.Id, request.Volume, request.Operation, state, message, progress, moved,
                 state == JobState.Scanning ? scannedRecords : layout?.RecordsScanned ?? scannedRecords, files == null ? 0 : fragmentedFileCount, files?.Length ?? 0, DateTimeOffset.UtcNow,
-                layout?.ObservedAt, layout == null ? null : map, files == null ? null : fileSummaries,
+                layout?.ObservedAt, layout == null && scanMap == null ? null : map, files == null ? null : fileSummaries,
                 warnings.ToArray(), plannedBytes, layout?.Volume.SizeBytes ?? volumeInfo?.SizeBytes ?? 0, layout?.Volume.FreeBytes ?? volumeInfo?.FreeBytes ?? 0,
                 request.Resources.CpuPercent, request.Resources.MemoryMiB, request.Resources.IoMiBPerSecond,
                 plannedMoves, attemptedMoves, verifiedMoves, failedMoves, filesConsidered, filesBlocked,
                 initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics,
                 request.MinimumFragments, streamsAtThreshold, eligibleStreamsAtThreshold, mftExtents, fragmentedDirectoryIndexes,
-                directoryIndexesAtThreshold, layout?.TotalClusters ?? 0, compressionProgress.FilesTotal, compressionProgress.FilesChanged,
+                directoryIndexesAtThreshold, layout?.TotalClusters ?? scanMap?.TotalClusters ?? 0, compressionProgress.FilesTotal, compressionProgress.FilesChanged,
                 compressionProgress.FilesSkipped, compressionProgress.FilesFailed, compressionProgress.BytesSaved, compressionInventory.Files,
                 compressionInventory.TotalFiles, compressionInventory.TotalSize, compressionInventory.BytesSaved,
                 compressionProgress.FilesProcessed, compressionProgress.FilesWaiting, compressionProgress.BytesTotal,

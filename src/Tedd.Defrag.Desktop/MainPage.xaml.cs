@@ -470,7 +470,9 @@ public partial class MainPage : ContentPage
         var layout = session.LayoutSnapshot;
         // The sampled cells describe allocation, but the worker's volume geometry defines
         // the display bounds. This preserves leading and trailing free volume space.
-        long totalClusters = layout?.TotalClusters > 0 ? layout.TotalClusters : session.Cells.Sum(cell => cell.Clusters);
+        bool buildingMap = snapshot.ObservedAt == null && snapshot.Map != null;
+        long totalClusters = snapshot.TotalClusters > 0 ? snapshot.TotalClusters :
+            layout?.TotalClusters > 0 ? layout.TotalClusters : session.Cells.Sum(cell => cell.Clusters);
         bool mapChanged = !ReferenceEquals(_overview.Cells, session.Cells) || _overview.TotalClusters != totalClusters;
         _overview.Cells = session.Cells; _overview.TotalClusters = totalClusters;
         if (totalClusters > 0 && (_map.TotalClusters != totalClusters || _map.ClusterCount == 0 || _map.ClusterCount == _map.TotalClusters))
@@ -482,7 +484,9 @@ public partial class MainPage : ContentPage
             RedrawOverview();
             _ = LoadRegion(_map.StartCluster, _map.ClusterCount);
         }
-        if (_volume != null && layout?.ObservedAt.HasValue == true)
+        if (_volume != null && buildingMap)
+            MapSubtitle.Text = $"{_volume.FileSystem} · {_volume.BytesPerCluster:N0}-byte clusters · {(snapshot.IsTerminal ? "partial analysis" : "analyzing")} · classifications provisional";
+        else if (_volume != null && layout?.ObservedAt.HasValue == true)
             MapSubtitle.Text = $"{_volume.FileSystem} · {_volume.BytesPerCluster:N0}-byte clusters · observed {layout.ObservedAt.Value.ToLocalTime():HH:mm:ss}";
         if (layout?.TotalBytes > 0)
         {
@@ -499,7 +503,8 @@ public partial class MainPage : ContentPage
         };
         JobTitle.Text = snapshot.Operation + " · " + snapshot.State; JobMessage.Text = snapshot.Message;
         JobProgress.Progress = Math.Clamp(snapshot.Progress, 0, 1); ProgressText.Text = snapshot.IsTerminal ? snapshot.State.ToString().ToUpperInvariant() : snapshot.Progress.ToString("P0");
-        ObservationText.Text = snapshot.ObservedAt.HasValue ? $"Observed {snapshot.ObservedAt.Value.ToLocalTime():HH:mm:ss} · logical volume allocation" : "Reading the current volume layout";
+        ObservationText.Text = snapshot.ObservedAt.HasValue ? $"Observed {snapshot.ObservedAt.Value.ToLocalTime():HH:mm:ss} · logical volume allocation" :
+            buildingMap ? $"{(snapshot.IsTerminal ? "Partial allocation map" : "Building allocation map")} · unread regions are blank · classifications provisional" : "Reading the current volume layout";
         PauseButton.IsEnabled = CancelButton.IsEnabled = !snapshot.IsTerminal && session.JobId != Guid.Empty; PauseButton.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
         if (!ReferenceEquals(FileList.ItemsSource, session.Files)) FileList.ItemsSource = session.Files;
         if (!ReferenceEquals(CompressedFileList.ItemsSource, session.CompressedFiles)) CompressedFileList.ItemsSource = session.CompressedFiles;
@@ -935,6 +940,11 @@ public partial class MainPage : ContentPage
     {
         var session = CurrentSession;
         if (session == null || session.JobId == Guid.Empty || _map.TotalClusters <= 0) return;
+        if (session.Snapshot?.ObservedAt == null)
+        {
+            ApplyBaseMapWithoutRefresh(session, _map.TotalClusters);
+            return;
+        }
         int request = ++_regionRequest;
         long total = _map.TotalClusters;
         start = Math.Clamp(start, 0, total - 1); length = Math.Clamp(length, 1, total - start);
@@ -1022,6 +1032,11 @@ public partial class MainPage : ContentPage
         if (index == _hoveredMapCell) return;
         _hoveredMapCell = index;
         var range = _map.CellRange(index); var c = _map.Cells[index]; double n = Math.Max(1, c.Clusters);
+        if (c.Unknown > 0)
+        {
+            CellDetail.Text = $"LCN {range.Start:N0}–{range.End - 1:N0} · {c.Unknown:N0} clusters awaiting allocation data";
+            return;
+        }
         CellDetail.Text = $"LCN {range.Start:N0}–{range.End - 1:N0} · {c.Clusters:N0} clusters · {c.Allocated / n:P0} allocated · {c.Fragmented / n:P0} fragmented · {c.Metadata / n:P0} metadata · {c.Excluded / n:P0} immovable / excluded";
     }
     private void OnOverviewStart(object? sender, TouchEventArgs e) { if (e.Touches.Length > 0) PreviewOverview(e.Touches[0].X); }
@@ -1341,6 +1356,11 @@ public partial class MainPage : ContentPage
     private async Task ShowClusterFiles(ClusterRange range)
     {
         var session = CurrentSession; if (session == null || session.JobId == Guid.Empty) return;
+        if (session.Snapshot?.ObservedAt == null)
+        {
+            CellDetail.Text = "File details become available when analysis finishes.";
+            return;
+        }
         try
         {
             var reply = await _client.Send(new("explore", Id: session.JobId, StartCluster: range.Start,

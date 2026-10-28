@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.ComponentModel;
 using Microsoft.Win32.SafeHandles;
 using Windows.Win32;
+using Tedd.Defrag.Core;
 
 namespace Tedd.Defrag.Windows;
 
@@ -20,7 +21,8 @@ public static class VolumeBitmap
         return clusters;
     }
 
-    public static byte[] Read(SafeFileHandle handle, long totalClusters, int memoryMiB, Action<double>? progress, CancellationToken token)
+    public static byte[] Read(SafeFileHandle handle, long totalClusters, int memoryMiB, Action<double>? progress, CancellationToken token,
+        Action<ScanMapUpdate>? mapProgress = null)
     {
         long bytes = checked((totalClusters + 7) / 8);
         if ((memoryMiB > 0 && bytes > memoryMiB * 1024L * 1024 / 4) || bytes > Array.MaxLength)
@@ -36,6 +38,7 @@ public static class VolumeBitmap
             if (error != 0 && error != 234) throw new Win32Exception(error);
             if (n <= 16) throw new IOException("Volume bitmap query did not advance.");
             next = CopyPage(buffer.AsSpan(0, n), next, totalClusters, bitmap);
+            mapProgress?.Invoke(new(totalClusters, bitmap, next));
         }
         progress?.Invoke(1);
         return bitmap;

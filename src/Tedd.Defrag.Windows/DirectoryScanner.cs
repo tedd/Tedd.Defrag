@@ -7,7 +7,7 @@ namespace Tedd.Defrag.Windows;
 internal sealed class DirectoryScanner
 {
     public VolumeLayout Scan(VolumeInfo volume, JobRequest request, Action<double, long, string> progress,
-        Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null)
+        Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null, Action<ScanMapUpdate>? mapProgress = null)
     {
         var fileSystem = FileSystemCapabilities.Get(volume.FileSystem);
         if (!fileSystem.UsesDirectoryScan) throw new NotSupportedException("This filesystem requires its native scanner.");
@@ -18,7 +18,7 @@ internal sealed class DirectoryScanner
         {
             checkpoint();
             progress(p * .1, 0, $"Reading {volume.FileSystem} allocation bitmap");
-        }, token);
+        }, token, mapProgress);
         var files = new List<FileLayout>();
         var warnings = new List<string>
         {
@@ -61,6 +61,7 @@ internal sealed class DirectoryScanner
                     pending.Pop().Dispose(); Skip(e); continue;
                 }
                 scanned++;
+                FileLayout? observed = null;
                 try
                 {
                     if ((entry.Attributes & FileAttributes.ReparsePoint) != 0) { skipped++; continue; }
@@ -76,10 +77,12 @@ internal sealed class DirectoryScanner
                     var flags = StreamFlags.AnalysisOnly;
                     if (rules.IsExcluded(entry.FullName)) flags |= StreamFlags.Excluded;
                     if (extents.Any(e => e.IsSparse)) flags |= StreamFlags.Sparse;
-                    files.Add(new(nextId++, entry.FullName, "", flags, ((FileInfo)entry).Length,
-                        entry.CreationTimeUtc.Ticks, entry.LastWriteTimeUtc.Ticks, extents));
+                    observed = new(nextId++, entry.FullName, "", flags, ((FileInfo)entry).Length,
+                        entry.CreationTimeUtc.Ticks, entry.LastWriteTimeUtc.Ticks, extents);
+                    files.Add(observed);
                 }
                 catch (Exception e) when (IsScanError(e)) { Skip(e); }
+                if (observed != null) mapProgress?.Invoke(new(totalClusters, File: observed));
             }
         }
         finally { while (pending.TryPop(out var enumerator)) enumerator.Dispose(); }

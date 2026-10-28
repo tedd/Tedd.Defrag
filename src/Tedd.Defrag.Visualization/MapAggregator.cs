@@ -22,25 +22,33 @@ public static class MapAggregator
             cells[i] = new(count, occupied, 0, 0, 0, 0, 0);
         }
         foreach (var file in layout.Files)
+            AddFile(file, cells, layout.TotalClusters, start, length);
+    }
+
+    /// <summary>Add one observed stream's classifications to an existing allocation map.</summary>
+    public static void AddFile(FileLayout file, Span<MapCell> cells, long totalClusters, long start = 0, long length = 0)
+    {
+        if (cells.IsEmpty) return;
+        if (length == 0) length = totalClusters - start;
+        if (start < 0 || length < 0 || start > totalClusters - length) throw new ArgumentOutOfRangeException(nameof(start));
+        long step = Math.Max(1, (length + cells.Length - 1) / cells.Length), end = start + length;
+        bool fragmented = file.Fragmented, metadata = (file.Flags & (StreamFlags.Metadata | StreamFlags.Directory)) != 0,
+            excluded = !file.Movable || (file.Flags & StreamFlags.Excluded) != 0;
+        if (!fragmented && !metadata && !excluded) return;
+        foreach (var extent in file.Extents)
         {
-            bool fragmented = file.Fragmented, metadata = (file.Flags & (StreamFlags.Metadata | StreamFlags.Directory)) != 0,
-                excluded = !file.Movable || (file.Flags & StreamFlags.Excluded) != 0;
-            if (!fragmented && !metadata && !excluded) continue;
-            foreach (var extent in file.Extents)
+            if (extent.IsSparse) continue;
+            long a = Math.Max(start, extent.Lcn), b = Math.Min(end, extent.End);
+            if (a >= b) continue;
+            int first = (int)((a - start) / step), last = (int)((b - 1 - start) / step);
+            for (int i = first; i <= last && i < cells.Length; i++)
             {
-                if (extent.IsSparse) continue;
-                long a = Math.Max(start, extent.Lcn), b = Math.Min(end, extent.End);
-                if (a >= b) continue;
-                int first = (int)((a - start) / step), last = (int)((b - 1 - start) / step);
-                for (int i = first; i <= last && i < cells.Length; i++)
-                {
-                    long overlap = Math.Min(b, start + (i + 1) * step) - Math.Max(a, start + i * step);
-                    ref var cell = ref cells[i];
-                    cell = cell with {
-                        Fragmented = Math.Min(cell.Allocated, cell.Fragmented + (fragmented ? overlap : 0)),
-                        Metadata = Math.Min(cell.Allocated, cell.Metadata + (metadata ? overlap : 0)),
-                        Excluded = Math.Min(cell.Allocated, cell.Excluded + (excluded ? overlap : 0)) };
-                }
+                long overlap = Math.Min(b, start + (i + 1) * step) - Math.Max(a, start + i * step);
+                ref var cell = ref cells[i];
+                cell = cell with {
+                    Fragmented = Math.Min(cell.Allocated, cell.Fragmented + (fragmented ? overlap : 0)),
+                    Metadata = Math.Min(cell.Allocated, cell.Metadata + (metadata ? overlap : 0)),
+                    Excluded = Math.Min(cell.Allocated, cell.Excluded + (excluded ? overlap : 0)) };
             }
         }
     }
@@ -58,7 +66,7 @@ public static class MapAggregator
 
     public static uint Color(in MapCell c, MapPalette palette)
     {
-        if (c.Clusters == 0) return palette.Canvas;
+        if (c.Clusters == 0 || c.Unknown > 0) return palette.Canvas;
         if (c.Moving > 0) return palette.Moving;
         if (c.Verified > 0) return palette.Verified;
         if (c.Allocated == 0) return palette.FreeSpace;

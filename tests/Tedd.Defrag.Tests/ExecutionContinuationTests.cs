@@ -610,7 +610,7 @@ public sealed class ExecutionContinuationTests
         public int Scans { get; private set; }
         public bool FailBitmapRefresh { get; set; }
         public bool IsDirty() => false;
-        public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null)
+        public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null, Action<ScanMapUpdate>? mapProgress = null)
         {
             checkpoint(); Scans++;
             return Layout with { Bitmap = Layout.Bitmap.ToArray(), Files = Layout.Files.ToArray() };

@@ -44,8 +44,8 @@ public sealed unsafe class NtfsVolume : IDisposable
         if (n < 4) throw new IOException("Cannot determine volume dirty state.");
         return (BinaryPrimitives.ReadUInt32LittleEndian(output) & 1) != 0;
     }
-    public byte[] ReadBitmap(int memoryMiB, Action<double>? progress, CancellationToken token)
-        => VolumeBitmap.Read(Handle, TotalClusters, memoryMiB, progress, token);
+    public byte[] ReadBitmap(int memoryMiB, Action<double>? progress, CancellationToken token, Action<ScanMapUpdate>? mapProgress = null)
+        => VolumeBitmap.Read(Handle, TotalClusters, memoryMiB, progress, token, mapProgress);
     /// <summary>Read a filesystem-restored record. Use TryParseFileSystemRecord, never raw-record fixups.</summary>
     public byte[] ReadRecord(long number)
     {

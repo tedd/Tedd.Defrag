@@ -11,8 +11,8 @@ internal sealed class NtfsJobVolume(JobRequest request) : IJobVolume
     private readonly ConcurrentBag<SafeFileHandle> _moveHandles = [];
     public VolumeInfo Info => _volume.Info;
     public bool IsDirty() => _volume.IsDirty();
-    public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null)
-        => new RawMftScanner().Scan(_volume, request, progress, checkpoint, token, diagnostics);
+    public VolumeLayout Scan(JobRequest request, Action<double, long, string> progress, Action checkpoint, CancellationToken token, Action<WorkProgress>? diagnostics = null, Action<ScanMapUpdate>? mapProgress = null)
+        => new RawMftScanner().Scan(_volume, request, progress, checkpoint, token, diagnostics, mapProgress);
     public byte[] ReadBitmap(JobRequest request, Action checkpoint, CancellationToken token)
         => _volume.ReadBitmap(request.Resources.MemoryMiB, _ => checkpoint(), token);
 

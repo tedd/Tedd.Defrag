@@ -192,7 +192,8 @@ public sealed record JobSnapshot(Guid Id, string Volume, Operation Operation, Jo
         return this with { State = state, Message = message, UpdatedAt = now > UpdatedAt ? now : UpdatedAt.AddTicks(1) };
     }
 }
-public readonly record struct MapCell(long Clusters, long Allocated, long Fragmented, long Metadata, long Excluded, long Moving, long Verified);
+public readonly record struct MapCell(long Clusters, long Allocated, long Fragmented, long Metadata, long Excluded, long Moving, long Verified,
+    long Unknown = 0);
 public sealed record FileSummary(string Path, string Stream, int Extents, long Bytes, string Status);
 public sealed record CompressedFileSummary(string Path, string CompressionType, long Size, long BytesSaved);
 public sealed record ClusterFile(ulong FileId, string Path, string Stream, long Bytes, long Clusters,
