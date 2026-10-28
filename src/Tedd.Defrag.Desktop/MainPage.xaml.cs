@@ -428,7 +428,7 @@ public partial class MainPage : ContentPage
                 AffinityMask = AffinityEntry.Value,
                 IdleOnly = IdleSwitch.IsToggled, AcOnly = AcSwitch.IsToggled, Background = BackgroundSwitch.IsToggled },
             MaxMoveBytes = InputBytes(BudgetEntry), MaxMinutes = (int)MinutesEntry.Value,
-            MinimumFragments = operation is Operation.MinimumWrite or Operation.FilesOnly ? (int)MinFragmentsEntry.Value : 20,
+            MinimumFragments = MinFragmentsEntry.IsInputValid ? (int)MinFragmentsEntry.Value : 20,
             MinimumFileBytes = InputBytes(MinFileSizeEntry), MaximumFileBytes = InputBytes(MaxFileSizeEntry),
             ShrinkBoundaryBytes = operation == Operation.PrepareShrink ? InputBytes(BoundaryEntry) : 0,
             ConfirmVirtualDiskZeroing = operation == Operation.ZeroFreeSpace && !preview,
@@ -453,6 +453,11 @@ public partial class MainPage : ContentPage
                 string details = operation == Operation.ZeroFreeSpace ?
                     "Pre-zeroing is for virtual-disk workflows that require it. It can expand thin storage and consume host capacity; it does not compact the disk itself." :
                     $"Run {_selectedPolicy.Name} on {request.Volume}, with {Limit(request.MaxMoveBytes, Format.Bytes, "no relocation limit")} and {Limit(request.MaxMinutes, n => $"{n}-minute limit", "no time limit")}?";
+                details += operation == Operation.ZeroFreeSpace
+                    ? "\n\nScope: free space on the entire volume."
+                    : request.SelectedPaths.Length == 0
+                    ? "\n\nScope: entire volume, subject to exclusions and file-size limits."
+                    : $"\n\nScope: included files only ({request.SelectedPaths.Length:N0} rules). Other files will not be moved.";
                 if (_volume?.SeekPenalty != true && operation is not (Operation.ReTrim or Operation.SlabConsolidate or Operation.Automatic or Operation.ZeroFreeSpace))
                     details += "\n\nThis is SSD or unknown media. Relocation adds writes. Greater logical contiguity can reduce host I/O requests, but the device controls internal placement. Review the previewed write estimate.";
                 if (request.CompressionTargets.Length > 0 && _volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) == true)
@@ -1190,15 +1195,28 @@ public partial class MainPage : ContentPage
     private void RefreshScopeSummary()
     {
         if (ScopeSummary == null) return;
-        string selection = _fileRules.Count == 0 ? "All files" : $"{_fileRules.Count:N0} file rules";
+        string selection = _fileRules.Count == 0 ? "Entire volume" : $"Included files only · {_fileRules.Count:N0} rules";
         int exclusions = _exclusionRules.Count;
         string fragments = string.IsNullOrWhiteSpace(MinFragmentsEntry?.Text) ? "20" : MinFragmentsEntry.Text;
-        string size = string.IsNullOrWhiteSpace(MinFileSizeEntry?.Text) && string.IsNullOrWhiteSpace(MaxFileSizeEntry?.Text) ? "all sizes" : "size-filtered";
+        string size = (MinFileSizeEntry?.Value ?? 0) == 0 && (MaxFileSizeEntry?.Value ?? 0) == 0 ? "all sizes" : "size-filtered";
         string compression = _compressionRules.Count == 0 ? "compression none"
             : $"{_compressionRules.Count:N0} compression targets · {_compressionExcludedExtensions.Count:N0} extensions ignored";
         ScopeSummary.Text = $"{selection} · {(exclusions == 0 ? "exclusions none" : $"{exclusions:N0} exclusions")} · {compression} · {fragments}-fragment defrag threshold · {size}";
+        EffectiveFileScope.Text = _fileRules.Count == 0
+            ? "Entire volume · exclusions and file-size limits apply."
+            : $"Included files only · {_fileRules.Count:N0} rules. Other files will not be moved.";
+        SettingsFileScope.Text = EffectiveFileScope.Text;
+        WholeVolumeButton.IsVisible = _fileRules.Count > 0;
         RenderRecommendation(CurrentSession?.LayoutSnapshot);
         UpdateVolumeActions();
+    }
+    private void OnUseEntireVolume(object? sender, EventArgs e)
+    {
+        _fileRules.Clear();
+        CancelRuleEdit(false);
+        RenderRuleList(FileRulesList, _fileRules, false);
+        RefreshScopeSummary();
+        SaveDesktopSettings();
     }
     private async void OnAddFileRule(object? sender, EventArgs e) => await AddRule(_fileRules, FileRulesList,
         FileRulePattern, FileRuleKind, FileRuleCommitButton, FileRuleCancelButton, _editingFileRule,

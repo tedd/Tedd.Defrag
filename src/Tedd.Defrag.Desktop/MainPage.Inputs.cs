@@ -59,7 +59,7 @@ public partial class MainPage
         updatingInputs = true;
         try
         {
-            MinFragmentsEntry.IsEnabled = _selectedPolicy.Operation is Operation.MinimumWrite or Operation.FilesOnly;
+            MinFragmentsEntry.IsEnabled = true;
             AffinityEntry.IsEnabled = supportedAffinity != 0;
             bool shrink = _selectedPolicy.Operation == Operation.PrepareShrink;
             BoundaryEntry.IsEnabled = shrink;

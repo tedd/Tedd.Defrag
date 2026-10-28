@@ -11,6 +11,61 @@ namespace Tedd.Defrag.Tests;
 public sealed class ExecutionContinuationTests
 {
     [Fact]
+    public void FinishedSelectedFilesDoNotImplyThatTheWholeVolumeIsOrdered()
+    {
+        var volume = Volume(6, [File(32, [new(0, 0, 1)]), File(33, [new(0, 2, 1)]), File(34, [new(0, 1, 1)])]);
+        var selected = Request(Operation.Alphabetical) with
+        {
+            SelectedPaths = [new(volume.Layout.Files[0].Path)], MinimumFragments = int.MaxValue
+        };
+        var limited = Run(volume, selected);
+        Assert.Equal(0, limited.BytesMoved);
+        Assert.Equal(1, limited.FilesConsidered);
+        Assert.Contains("Requested layout already satisfied within the selected scope", limited.Message);
+        Assert.Contains("1 inclusion rule; other files are outside this job", limited.Message);
+        Assert.Equal(2, volume.Layout.Files[1].Extents[0].Lcn);
+
+        var wholeVolume = Run(volume, selected with { Id = Guid.NewGuid(), SelectedPaths = [] });
+        Assert.Equal(JobState.Completed, wholeVolume.State);
+        Assert.Equal(3, wholeVolume.FilesConsidered);
+        Assert.True(wholeVolume.BytesMoved > 0);
+        Assert.Contains("Optimization scope: entire volume", wholeVolume.Message);
+        Assert.Equal(1, volume.Layout.Files[1].Extents[0].Lcn);
+        Assert.Equal(2, volume.Layout.Files[2].Extents[0].Lcn);
+    }
+
+    [Fact]
+    public void WholeVolumeOrderingStillPreservesExplicitExclusions()
+    {
+        var volume = Volume(6, [File(32, [new(0, 2, 1)]), File(33, [new(0, 0, 1)]), File(34, [new(0, 1, 1)])]);
+        var request = Request(Operation.Alphabetical) with { Exclusions = [new(volume.Layout.Files[1].Path)] };
+        var result = Run(volume, request);
+        Assert.True(result.BytesMoved > 0);
+        Assert.DoesNotContain(volume.Attempts, move => move.FileId == 33);
+        Assert.Equal(0, volume.Layout.Files[1].Extents[0].Lcn);
+    }
+
+    [Fact]
+    public void AnalysisReportIdentifiesTheScopeOfSubsequentOptimization()
+    {
+        var volume = ManyFiles(3);
+        var request = Request(Operation.Analyze) with { SelectedPaths = [new(volume.Layout.Files[0].Path)] };
+        var result = Run(volume, request);
+        Assert.Equal(3, result.TotalFiles);
+        Assert.Contains("Optimization scope: 1 inclusion rule", result.Message);
+    }
+
+    [Fact]
+    public void NoMoveReportStillDisclosesIncompleteFileCoverage()
+    {
+        var observed = Volume(3, [File(32, [new(0, 0, 1)])]).Layout with { Complete = false };
+        var result = Run(new TestVolume(observed), Request(Operation.Alphabetical));
+        Assert.Equal(JobState.Partial, result.State);
+        Assert.Equal(0, result.BytesMoved);
+        Assert.Contains("File coverage is partial", result.Message);
+    }
+
+    [Fact]
     public void OrderedJobCompletesAfterClearingOccupiedDestinations()
     {
         var volume = Volume(3, [File(32, [new(0, 1, 1)]), File(33, [new(0, 0, 1)])]);

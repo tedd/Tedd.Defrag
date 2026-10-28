@@ -159,7 +159,7 @@ public sealed class JobExecutor
                 SaveLayoutIndex();
             }
             Publish(true);
-            if (request.Operation == Operation.Analyze) { state = layout!.Complete && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; message = CompressionSummary() + (layout.Complete ? "Analysis complete" : "Analysis complete; file coverage is partial"); progress = 1; totalProgress = 1; return; }
+            if (request.Operation == Operation.Analyze) { state = layout!.Complete && compression.FilesFailed == 0 ? JobState.Completed : JobState.Partial; message = CompressionSummary() + (layout.Complete ? "Analysis complete. " : "Analysis complete; file coverage is partial. ") + ScopeSummary(); progress = 1; totalProgress = 1; return; }
             if (external || request.Operation == Operation.ZeroFreeSpace)
             {
                 if (request.Preview) { state = JobState.Completed; progress = 1; message = external
@@ -214,7 +214,7 @@ public sealed class JobExecutor
                 {
                     foreach (var move in plan.Moves) MapAggregator.Activity(map, layout.TotalClusters, move.DestinationLcn, move.Clusters, false);
                     state = JobState.Completed; progress = 1;
-                    message = $"Preview of first batch: {plan.Moves.Length:N0} moves · {Format.Bytes(batchPlannedBytes)} · {plan.FilesBlocked:N0} constrained files. Execution continues through further batches. No writes performed."; return;
+                    message = $"Preview of first batch: {plan.Moves.Length:N0} moves · {Format.Bytes(batchPlannedBytes)} · {plan.FilesBlocked:N0} constrained files. Execution continues through further batches. No writes performed. " + ScopeSummary(); return;
                 }
                 state = JobState.Running; int failuresBeforeBatch = failedMoves; bool allocationUncertain = false;
                 // Metadata moves remain serial. User queue depth applies to independent ordinary files.
@@ -329,16 +329,21 @@ public sealed class JobExecutor
             progress = 1; totalProgress = 1;
             message = CompressionSummary() + (noMovesPlanned
                 ? filesConsidered == 0
-                    ? "No files met the selected path, size, and fragmentation thresholds; no relocation changes were required."
+                    ? "No allocated streams matched the selected scope and limits."
                     : filesBlocked > 0
                     ? $"No relocations were possible: {filesBlocked:N0} of {filesConsidered:N0} considered files were constrained or ineligible."
+                    : unmetPlacements > 0
+                    ? $"No moves completed; {unmetPlacements:N0} planned placements remain unsatisfied."
+                    : ordered
+                    ? $"Requested layout already satisfied within the selected scope. Streams considered: {filesConsidered:N0}."
                     : $"No eligible extents required relocation among {filesConsidered:N0} considered files."
                 : (request.Resources.VerifyMoves
                     ? $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. "
                     : $"{Format.Bytes(moved)} relocated in {attemptedMoves - failedMoves:N0} moves; the final scan reconciled the resulting layout. ")
                     + (failedMoves > 0 ? $"{failedMoves:N0} moves failed across {session.BlockedFiles.Count:N0} files; other eligible files were processed. " : "")
                     + (unmetPlacements > 0 ? $"{unmetPlacements:N0} planned {(unmetPlacements == 1 ? "placement was" : "placements were")} not confirmed by the final scan. " : "")
-                    + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete."));
+                    + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete."))
+                    + (noMovesPlanned && !layout.Complete ? " File coverage is partial." : "") + " " + ScopeSummary();
 
             VolumeLayout? ScanVolume()
             {
@@ -504,6 +509,9 @@ public sealed class JobExecutor
         }
         string CompressionSummary() => request.CompressionTargets.Length == 0 || request.Preview || !compressionSupported ? ""
             : $"Compression: {compression.FilesChanged:N0} changed, {compression.FilesSkipped:N0} skipped, {compression.FilesFailed:N0} failed; {Format.StorageDelta(compression.BytesSaved)}. ";
+        string ScopeSummary() => request.SelectedPaths.Length == 0
+            ? "Optimization scope: entire volume."
+            : $"Optimization scope: {request.SelectedPaths.Length:N0} inclusion {(request.SelectedPaths.Length == 1 ? "rule" : "rules")}; other files are outside this job.";
         void SaveLayoutIndex()
         {
             if (!layoutIndexDirty || layout == null) return;
