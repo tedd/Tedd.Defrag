@@ -15,6 +15,14 @@ namespace Tedd.Defrag.Windows;
 public sealed unsafe class WorkerLimits : IDisposable
 {
     private readonly SafeFileHandle _job;
+    public static ulong SupportedAffinityMask()
+    {
+        if (PInvoke.GetActiveProcessorGroupCount() != 1) return 0;
+        nuint processMask = 0, systemMask = 0;
+        Check(PInvoke.GetProcessAffinityMask(PInvoke.GetCurrentProcess(), &processMask, &systemMask));
+        return (ulong)systemMask;
+    }
+
     public WorkerLimits(ResourcePolicy policy)
     {
         policy.Validate();

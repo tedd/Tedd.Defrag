@@ -96,11 +96,9 @@ public partial class MainPage : ContentPage
         FileRuleKind.SelectedIndex = ExclusionRuleKind.SelectedIndex = CompressionRuleKind.SelectedIndex = 0;
         CompressionModePicker.ItemsSource = CompressionModes.Supported.Select(CompressionModes.DisplayName).ToArray();
         CompressionModePicker.SelectedIndex = 1;
+        InitializeInputs();
         RestoreSettings();
         _settingsLoaded = true;
-        foreach (Entry entry in new[] { CompressionWorkersEntry, ScanWorkersEntry, PlanningWorkersEntry, MoveQueueEntry,
-                     MemoryEntry, IoEntry, AffinityEntry, BudgetEntry, MinutesEntry, BoundaryEntry })
-            entry.TextChanged += OnSettingsValueChanged;
         foreach (Switch toggle in new[] { IdleSwitch, AcSwitch, BackgroundSwitch })
             toggle.Toggled += OnSettingsValueChanged;
         PolicyList.ItemsSource = Policies; UpdateSelectedPolicy();
@@ -388,14 +386,23 @@ public partial class MainPage : ContentPage
     }
     private void UpdateVolumeActions()
     {
+        UpdateInputApplicability();
         var session = CurrentSession;
         bool jobActive = HasActiveJob(session);
         bool showJobControls = !_submitting && jobActive;
         PauseButton.IsVisible = CancelButton.IsVisible = showJobControls;
         PauseButton.IsEnabled = CancelButton.IsEnabled = showJobControls;
         PauseButton.Text = session?.Snapshot?.Id == session?.JobId && session?.Snapshot?.State == JobState.Paused ? "Resume" : "Pause";
-        AnalyzeButton.IsEnabled = !_submitting && !jobActive && _volume != null && FileSystemCapabilities.IsSupported(_volume.FileSystem);
-        PreviewButton.IsEnabled = OptimizeButton.IsEnabled = AnalyzeButton.IsEnabled && FileSystemCapabilities.Supports(_volume!.FileSystem, _selectedPolicy.Operation);
+        bool available = !_submitting && !jobActive && _volume != null && FileSystemCapabilities.IsSupported(_volume.FileSystem);
+        AnalyzeButton.IsEnabled = available && InvalidInput(Operation.Analyze) == null;
+        PreviewButton.IsEnabled = OptimizeButton.IsEnabled = available && InvalidInput(_selectedPolicy.Operation) == null && FileSystemCapabilities.Supports(_volume!.FileSystem, _selectedPolicy.Operation);
+        var invalid = InvalidInput(_selectedPolicy.Operation);
+        SettingsInputError.Text = invalid == null ? "" : $"{invalid.FieldName}: {invalid.Error}";
+        SettingsInputError.IsVisible = invalid != null;
+        ReviewInputButton.IsVisible = invalid != null;
+        var settingsInvalid = invalid ?? (ParallelEntry?.IsInputValid == false ? ParallelEntry : null);
+        SettingsPageInputError.Text = settingsInvalid == null ? "" : $"{settingsInvalid.FieldName}: {settingsInvalid.Error}";
+        SettingsPageInputError.IsVisible = settingsInvalid != null;
         RecommendationSteps.IsEnabled = AnalyzeButton.IsEnabled;
         RecommendationButton.IsEnabled = RecommendationSteps.IsEnabled && CurrentSession?.LayoutSnapshot == null;
         foreach (var button in VolumesPanel.Children.OfType<Button>())
@@ -413,17 +420,17 @@ public partial class MainPage : ContentPage
             Exclusions = _exclusionRules.Select(item => item.Rule).ToArray(),
             CompressionTargets = _compressionRules.Select(item => item.Target).ToArray(),
             CompressionExcludedExtensions = _compressionExcludedExtensions.ToArray(),
-            Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = ParseInt(MemoryEntry.Text, "Memory cap"), IoMiBPerSecond = ParseInt(IoEntry.Text, "Relocation bandwidth"),
-                CompressionWorkers = ParseInt(CompressionWorkersEntry.Text, "Compression workers"),
-                ScanWorkers = ParseInt(ScanWorkersEntry.Text, "MFT workers"), PlanningWorkers = ParseInt(PlanningWorkersEntry.Text, "Planner workers"),
-                MoveQueueDepth = ParseInt(MoveQueueEntry.Text, "Move queue depth", ResourcePolicy.Performance.MoveQueueDepth),
+            Resources = new() { CpuPercent = (int)CpuSlider.Value, MemoryMiB = (int)MemoryEntry.Value, IoMiBPerSecond = (int)IoEntry.Value,
+                CompressionWorkers = (int)CompressionWorkersEntry.Value,
+                ScanWorkers = (int)ScanWorkersEntry.Value, PlanningWorkers = (int)PlanningWorkersEntry.Value,
+                MoveQueueDepth = (int)MoveQueueEntry.Value,
                 VerifyMoves = VerifyMovesSwitch.IsToggled,
-                AffinityMask = string.IsNullOrWhiteSpace(AffinityEntry.Text) ? 0 : Convert.ToUInt64(AffinityEntry.Text.Replace("0x", "", StringComparison.OrdinalIgnoreCase), 16),
+                AffinityMask = AffinityEntry.Value,
                 IdleOnly = IdleSwitch.IsToggled, AcOnly = AcSwitch.IsToggled, Background = BackgroundSwitch.IsToggled },
-            MaxMoveBytes = ParseMiB(BudgetEntry.Text, "Write budget"), MaxMinutes = ParseInt(MinutesEntry.Text, "Time limit"),
-            MinimumFragments = ParseInt(MinFragmentsEntry.Text, "Minimum fragments", 20),
-            MinimumFileBytes = ParseMiB(MinFileSizeEntry.Text, "Minimum file size"), MaximumFileBytes = ParseMiB(MaxFileSizeEntry.Text, "Maximum file size"),
-            ShrinkBoundaryBytes = ParseMiB(BoundaryEntry.Text, "Shrink boundary"),
+            MaxMoveBytes = InputBytes(BudgetEntry), MaxMinutes = (int)MinutesEntry.Value,
+            MinimumFragments = operation is Operation.MinimumWrite or Operation.FilesOnly ? (int)MinFragmentsEntry.Value : 20,
+            MinimumFileBytes = InputBytes(MinFileSizeEntry), MaximumFileBytes = InputBytes(MaxFileSizeEntry),
+            ShrinkBoundaryBytes = operation == Operation.PrepareShrink ? InputBytes(BoundaryEntry) : 0,
             ConfirmVirtualDiskZeroing = operation == Operation.ZeroFreeSpace && !preview,
             AllowSsdRelocation = !preview // The run confirmation below explicitly discloses SSD/unknown-media relocation.
         };
@@ -432,6 +439,11 @@ public partial class MainPage : ContentPage
     private async Task Submit(Operation operation, bool preview)
     {
         if (_submitting || HasActiveJob(CurrentSession)) return;
+        UpdateInputApplicability();
+        if (InvalidInput(operation) is { } invalid)
+        {
+            ShowSettings(true); AdvancedPanel.IsVisible = true; invalid.Focus(); return;
+        }
         _submitting = true; UpdateVolumeActions();
         try
         {
@@ -820,6 +832,7 @@ public partial class MainPage : ContentPage
     private void UpdateSelectedPolicy()
     {
         SelectedMethodIcon.Text = _selectedPolicy.Icon; SelectedMethodName.Text = _selectedPolicy.Name; SelectedMethodDescription.Text = _selectedPolicy.Description;
+        UpdateVolumeActions();
     }
     private async void OnPause(object? sender, EventArgs e) => await Control(CurrentSession?.Snapshot?.State == JobState.Paused ? "resume" : "pause");
     private async void OnCancel(object? sender, EventArgs e) => await Control("cancel");
@@ -903,7 +916,7 @@ public partial class MainPage : ContentPage
     }
     private void SaveDesktopSettings()
     {
-        if (!_settingsLoaded || _restoringSettings) return;
+        if (!_settingsLoaded || _restoringSettings || numericInputs.Any(entry => !entry.IsInputValid)) return;
         try
         {
             _store.SaveDesktopSettings(new()
@@ -1597,7 +1610,8 @@ public partial class MainPage : ContentPage
     }
     private async void OnSaveConcurrency(object? sender, EventArgs e)
     {
-        try { await _client.Send(new("settings", Settings: new() { MaxConcurrentVolumes = int.Parse(ParallelEntry.Text), AllowParallelOnSharedStorage = SharedSwitch.IsToggled })); SaveDesktopSettings(); FooterStatus.Text = "Concurrency settings saved for subsequent jobs"; }
+        if (!ParallelEntry.IsInputValid) { ParallelEntry.Focus(); return; }
+        try { await _client.Send(new("settings", Settings: new() { MaxConcurrentVolumes = (int)ParallelEntry.Value, AllowParallelOnSharedStorage = SharedSwitch.IsToggled })); SaveDesktopSettings(); FooterStatus.Text = "Concurrency settings saved for subsequent jobs"; }
         catch (Exception ex) { await DisplayAlertAsync("Concurrency settings", ex.Message, "Close"); }
     }
     private async void OnHistory(object? sender, EventArgs e)
@@ -1631,20 +1645,6 @@ public partial class MainPage : ContentPage
             }
         }
         catch (Exception ex) { await DisplayAlertAsync("Activity", ex.Message, "Close"); }
-    }
-    private static int ParseInt(string? text, string name, int defaultValue = 0)
-    {
-        long value = ParseWholeNumber(text, name, defaultValue);
-        if (value > int.MaxValue) throw new ArgumentException($"{name} is too large.");
-        return (int)value;
-    }
-    private static long ParseMiB(string? text, string name) => checked(ParseWholeNumber(text, name) * 1024 * 1024);
-    private static long ParseWholeNumber(string? text, string name, long defaultValue = 0)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return defaultValue;
-        string normalized = text.Trim().Replace(",", "", StringComparison.Ordinal).Replace(" ", "", StringComparison.Ordinal).Replace("_", "", StringComparison.Ordinal);
-        if (!long.TryParse(normalized, NumberStyles.None, CultureInfo.InvariantCulture, out long value)) throw new ArgumentException($"{name} must be a nonnegative whole number.");
-        return value;
     }
     private VolumeSession? CurrentSession => _volume == null ? null : SessionFor(_volume);
     private VolumeSession SessionFor(VolumeInfo volume)
