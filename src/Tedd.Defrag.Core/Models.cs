@@ -141,11 +141,23 @@ public sealed record JobRequest
     {
         if (LegacySimulation) throw new NotSupportedException("Simulation jobs are no longer supported. Create a new job for a real volume.");
         Resources.Validate();
-        if (string.IsNullOrWhiteSpace(Volume) || Id == Guid.Empty || !Enum.IsDefined(Operation) || MaxMoveBytes < 0 || MaxMinutes < 0 ||
-            MinimumFragments < 2 || MinimumFileBytes < 0 || MaximumFileBytes < 0 || (MaximumFileBytes > 0 && MaximumFileBytes < MinimumFileBytes) ||
-            SelectedPaths.Length > 10000 || Exclusions.Length > 10000 || CompressionTargets.Length > 10000 ||
-            CompressionExcludedExtensions.Length > 1000 || FreeSpaceReserveBytes < 256L * 1024 * 1024)
-            throw new ArgumentException("Invalid job parameters.");
+        if (string.IsNullOrWhiteSpace(Volume)) throw new ArgumentException("Select an available volume.");
+        if (Id == Guid.Empty) throw new ArgumentException("The job identifier is missing.");
+        if (!Enum.IsDefined(Operation)) throw new ArgumentException("Select a supported operation.");
+        if (MaxMoveBytes < 0) throw new ArgumentException("Write budget must be zero or greater; zero means unlimited.");
+        if (MaxMinutes < 0) throw new ArgumentException("Time limit must be zero or greater; zero means unlimited.");
+        if (MinimumFragments < 0) throw new ArgumentException("Minimum fragments cannot be negative.");
+        if (Operation is Operation.MinimumWrite or Operation.FilesOnly && MinimumFragments < 2)
+            throw new ArgumentException("Minimum fragments must be at least 2 for file defragmentation. Use 2 to include every fragmented file.");
+        if (MinimumFileBytes < 0) throw new ArgumentException("Minimum file size must be zero or greater.");
+        if (MaximumFileBytes < 0) throw new ArgumentException("Maximum file size must be zero or greater; zero means unlimited.");
+        if (MaximumFileBytes > 0 && MaximumFileBytes < MinimumFileBytes)
+            throw new ArgumentException("Maximum file size must be at least the minimum file size, or zero for unlimited.");
+        if (SelectedPaths.Length > 10000) throw new ArgumentException("File selection cannot exceed 10,000 rules.");
+        if (Exclusions.Length > 10000) throw new ArgumentException("Exclusions cannot exceed 10,000 rules.");
+        if (CompressionTargets.Length > 10000) throw new ArgumentException("Compression targets cannot exceed 10,000 rules.");
+        if (CompressionExcludedExtensions.Length > 1000) throw new ArgumentException("Compression exclusions cannot exceed 1,000 file types.");
+        if (FreeSpaceReserveBytes < 256L * 1024 * 1024) throw new ArgumentException("Free-space reserve must be at least 256 MiB.");
         if (Operation == Operation.PrepareShrink && ShrinkBoundaryBytes <= 0) throw new ArgumentException("Supply a positive shrink boundary.");
         if (Operation == Operation.ZeroFreeSpace && !Preview && !ConfirmVirtualDiskZeroing)
             throw new ArgumentException("Virtual-disk pre-zeroing requires explicit acknowledgement.");

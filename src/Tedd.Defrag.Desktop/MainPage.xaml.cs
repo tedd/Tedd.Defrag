@@ -390,6 +390,10 @@ public partial class MainPage : ContentPage
     {
         var session = CurrentSession;
         bool jobActive = HasActiveJob(session);
+        bool showJobControls = !_submitting && jobActive;
+        PauseButton.IsVisible = CancelButton.IsVisible = showJobControls;
+        PauseButton.IsEnabled = CancelButton.IsEnabled = showJobControls;
+        PauseButton.Text = session?.Snapshot?.Id == session?.JobId && session?.Snapshot?.State == JobState.Paused ? "Resume" : "Pause";
         AnalyzeButton.IsEnabled = !_submitting && !jobActive && _volume != null && FileSystemCapabilities.IsSupported(_volume.FileSystem);
         PreviewButton.IsEnabled = OptimizeButton.IsEnabled = AnalyzeButton.IsEnabled && FileSystemCapabilities.Supports(_volume!.FileSystem, _selectedPolicy.Operation);
         RecommendationSteps.IsEnabled = AnalyzeButton.IsEnabled;
@@ -427,7 +431,7 @@ public partial class MainPage : ContentPage
     }
     private async Task Submit(Operation operation, bool preview)
     {
-        if (_submitting) return;
+        if (_submitting || HasActiveJob(CurrentSession)) return;
         _submitting = true; UpdateVolumeActions();
         try
         {
@@ -544,7 +548,6 @@ public partial class MainPage : ContentPage
         PhaseProgressText.Text = $"{(batch ? "This batch" : "This phase")}: {snapshot.Progress:P0}";
         ObservationText.Text = snapshot.ObservedAt.HasValue ? $"Observed {snapshot.ObservedAt.Value.ToLocalTime():HH:mm:ss} · logical volume allocation" :
             buildingMap ? $"{(snapshot.IsTerminal ? "Partial allocation map" : "Building allocation map")} · unread regions are blank · classifications provisional" : "Reading the current volume layout";
-        PauseButton.IsEnabled = CancelButton.IsEnabled = !snapshot.IsTerminal && session.JobId != Guid.Empty; PauseButton.Text = snapshot.State == JobState.Paused ? "Resume" : "Pause";
         if (!ReferenceEquals(FileList.ItemsSource, session.Files)) FileList.ItemsSource = session.Files;
         if (!ReferenceEquals(CompressedFileList.ItemsSource, session.CompressedFiles)) CompressedFileList.ItemsSource = session.CompressedFiles;
         if (_volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) != true)
@@ -820,7 +823,13 @@ public partial class MainPage : ContentPage
     }
     private async void OnPause(object? sender, EventArgs e) => await Control(CurrentSession?.Snapshot?.State == JobState.Paused ? "resume" : "pause");
     private async void OnCancel(object? sender, EventArgs e) => await Control("cancel");
-    private async Task Control(string action) { try { if (CurrentSession?.JobId is { } id && id != Guid.Empty) await _client.Send(new(action, Id: id)); } catch (Exception e) { await DisplayAlertAsync("Job control", e.Message, "Close"); } }
+    private async Task Control(string action)
+    {
+        var session = CurrentSession;
+        if (!HasActiveJob(session) || _submitting) return;
+        try { await _client.Send(new(action, Id: session!.JobId)); }
+        catch (Exception e) { await DisplayAlertAsync("Job control", e.Message, "Close"); }
+    }
     private async void OnRefreshVolumes(object? sender, EventArgs e) => await RefreshVolumes();
     private void OnOverview(object? sender, EventArgs e) { ShowSettings(false); OnResetZoom(sender, e); }
     private void OnSettings(object? sender, EventArgs e) => ShowSettings(true);

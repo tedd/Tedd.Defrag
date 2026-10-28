@@ -14,7 +14,7 @@ public sealed class ExecutionContinuationTests
     public void OrderedJobCompletesAfterClearingOccupiedDestinations()
     {
         var volume = Volume(3, [File(32, [new(0, 1, 1)]), File(33, [new(0, 0, 1)])]);
-        var request = Request(Operation.Alphabetical) with { Resources = Request(Operation.Alphabetical).Resources with { MoveQueueDepth = 4 } };
+        var request = Request(Operation.Alphabetical) with { MinimumFragments = 1, Resources = Request(Operation.Alphabetical).Resources with { MoveQueueDepth = 4 } };
         var result = Run(volume, request);
         Assert.Equal(JobState.Completed, result.State);
         Assert.Equal(3, result.VerifiedMoves);
