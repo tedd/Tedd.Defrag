@@ -14,15 +14,17 @@ public sealed class DiskMapDrawable
     public long StartCluster { get; private set; }
     public long ClusterCount { get; private set; }
     public long TotalClusters { get; private set; }
+    public bool IsSampled { get; private set; }
     private readonly HashSet<int> _highlightedCells = [];
     private uint[] _packedCells = [];
     private uint[] _rowTemplate = [];
     private float _width, _height;
     private int _columns, _rows;
     private int _selectionStart = -1, _selectionEnd = -1;
-    public void SetRegion(long start, long count, long total, MapCell[] cells)
+    public void SetRegion(long start, long count, long total, MapCell[] cells, bool sampled = false)
     {
         TotalClusters = Math.Max(0, total); Cells = cells;
+        IsSampled = sampled;
         _packedCells = [];
         if (TotalClusters == 0) { StartCluster = ClusterCount = 0; return; }
         StartCluster = Math.Clamp(start, 0, TotalClusters - 1);
