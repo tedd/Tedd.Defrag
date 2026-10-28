@@ -10,6 +10,105 @@ namespace Tedd.Defrag.Tests;
 
 public sealed class ExecutionContinuationTests
 {
+    [Fact]
+    public void OrderedJobCompletesAfterClearingOccupiedDestinations()
+    {
+        var volume = Volume(3, [File(32, [new(0, 1, 1)]), File(33, [new(0, 0, 1)])]);
+        var request = Request(Operation.Alphabetical) with { Resources = Request(Operation.Alphabetical).Resources with { MoveQueueDepth = 4 } };
+        var result = Run(volume, request);
+        Assert.Equal(JobState.Completed, result.State);
+        Assert.Equal(3, result.VerifiedMoves);
+        Assert.Equal(2, volume.Scans);
+        Assert.Equal(0, volume.Layout.Files[0].Extents[0].Lcn);
+        Assert.Equal(1, volume.Layout.Files[1].Extents[0].Lcn);
+    }
+
+    [Fact]
+    public void FinalReconciliationDetectsAChangedOrderedPlacementWithoutRestarting()
+    {
+        var volume = Volume(5, [File(32, [new(0, 2, 1)]), File(33, [new(0, 3, 1)])]);
+        volume.BeforeScan = () =>
+        {
+            if (volume.Scans == 1) LayoutMutation.Apply(volume.Layout, new(32, 0, 0, 0, 4, 1));
+        };
+        var result = Run(volume, Request(Operation.Alphabetical));
+        Assert.Equal(JobState.Partial, result.State);
+        Assert.Equal(2, volume.Scans);
+        Assert.Equal(2, result.VerifiedMoves);
+        Assert.Contains("1 planned placement was not confirmed", result.Message);
+    }
+
+    [Theory]
+    [InlineData(Operation.MinimumWrite)]
+    [InlineData(Operation.FilesOnly)]
+    [InlineData(Operation.PackAndDefrag)]
+    public void DefragJobCompletesAfterRelocatingAContiguousBlocker(Operation operation)
+    {
+        var volume = Volume(10, [File(32, [new(0, 0, 4), new(4, 8, 1)]), File(33, [new(0, 4, 4)])]);
+        var result = Run(volume, Request(operation));
+        Assert.Equal(JobState.Completed, result.State);
+        Assert.All(volume.Layout.Files, file => Assert.Single(file.Extents));
+        Assert.Equal(6 * 4096, result.BytesMoved);
+    }
+
+    [Fact]
+    public void RejectedOrderedMoveKeepsLaterTargetsAndReleasesSkippedReservations()
+    {
+        var volume = ManyFiles(3);
+        volume.BeforeMove = (file, _) =>
+        {
+            if (file.FileId == 32) throw new MovePreconditionException("File changed");
+        };
+        var result = Run(volume, Request(Operation.Alphabetical));
+        Assert.Equal(JobState.Partial, result.State);
+        Assert.Equal(1, result.FailedMoves);
+        Assert.Equal(0, volume.BitmapRefreshes);
+        Assert.Equal(2, volume.Layout.Files[1].Extents[0].Lcn);
+        Assert.Equal(4, volume.Layout.Files[2].Extents[0].Lcn);
+        Assert.Single(volume.Attempts, move => move.FileId == 32);
+    }
+
+    [Fact]
+    public void RelocationJobsDoNotInspectCompressionInventory()
+    {
+        var volume = ManyFiles(3);
+        var request = Request(Operation.Alphabetical);
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new JobStore(root); store.SaveRequest(request);
+            new JobExecutor(store, _ => volume, readCompressionInventory: (_, _, _) =>
+                throw new InvalidOperationException("Unexpected compression inspection")).Run(request, default);
+            var report = store.ReadReport(request.Id)!;
+            Assert.Equal(JobState.Completed, report.State);
+            Assert.Null(report.CompressionObservedAt);
+            Assert.Null(report.CompressedFiles);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void TemporaryPlacementConstraintsDoNotKeepAResolvedJobPartial()
+    {
+        var volume = Volume(13, [File(32, [new(0, 0, 4), new(4, 8, 1)]), File(33, [new(0, 4, 4)]),
+            File(34, [new(0, 10, 1), new(1, 12, 1)])]);
+        var result = Run(volume, Request(Operation.MinimumWrite));
+        Assert.Equal(JobState.Completed, result.State);
+        Assert.Equal(0, result.FilesBlocked);
+        Assert.All(volume.Layout.Files, file => Assert.Single(file.Extents));
+    }
+
+    [Fact]
+    public void MetadataCompletionIgnoresUnrelatedFragmentedData()
+    {
+        var mft = File(0, [new(0, 0, 4), new(4, 8, 1)]) with { Flags = StreamFlags.Metadata };
+        var volume = Volume(13, [mft, File(33, [new(0, 4, 4)]), File(34, [new(0, 10, 1), new(1, 12, 1)])]);
+        var result = Run(volume, Request(Operation.OptimizeMft));
+        Assert.Equal(JobState.Completed, result.State);
+        Assert.Single(volume.Layout.Files[0].Extents);
+        Assert.True(volume.Layout.Files[2].Fragmented);
+    }
+
     [Theory]
     [InlineData(Operation.Pack)]
     [InlineData(Operation.PackAndDefrag)]
@@ -501,12 +600,11 @@ public sealed class ExecutionContinuationTests
     }
 
     [Fact]
-    public void OrderedFileThatOnlyFitsAFreshBatchIsDeferredWithoutBeingDropped()
+    public void OrderedFileCanContinueAcrossAnExecutionWindowWithoutBeingDropped()
     {
         var volume = ManyFiles(513);
         var layout = volume.Layout;
-        // First 511 files need 1,022 moves. The next file needs three, so it
-        // must be retried at the beginning of the next batch.
+        // The next file spans the boundary of the 1,024-move execution window.
         var old = layout.Files[511];
         var extra = new Extent(2, 19000, 1);
         layout.Files[511] = old with { Extents = [.. old.Extents, extra], Size = 3 * 4096 };
@@ -514,12 +612,12 @@ public sealed class ExecutionContinuationTests
         var planner = new LayoutPlanner(); using var session = new PlanningSession();
 
         var first = planner.Plan(layout, Request(Operation.Alphabetical), session: session);
-        Assert.Equal(1022, first.Moves.Length);
+        Assert.Equal(1024, first.Moves.Length);
         foreach (var move in first.Moves) { LayoutMutation.Apply(layout, move); session.MoveVerified(move); }
         var second = planner.Plan(layout, Request(Operation.Alphabetical), session: session);
 
         Assert.Equal(old.FileId, second.Moves[0].FileId);
-        Assert.Equal(3, second.Moves.Count(m => m.FileId == old.FileId));
+        Assert.Single(second.Moves, m => m.FileId == old.FileId);
         Assert.Equal(0, second.FilesBlocked);
         Assert.Equal(513, second.FilesConsidered);
     }
@@ -543,7 +641,7 @@ public sealed class ExecutionContinuationTests
         Assert.NotEmpty(second.Moves);
         Assert.DoesNotContain("Sorting candidates", phases);
         Assert.DoesNotContain("Indexing free space", phases);
-        Assert.Contains("Candidate order ready", phases);
+        Assert.Contains("Continuing relocation plan", phases);
     }
 
     [Theory]
@@ -643,6 +741,7 @@ public sealed class ExecutionContinuationTests
             Assert.Equal(4096, report.CompressionBytesSaved);
             Assert.Equal("Compression complete", report.CompressionStatus);
             Assert.Equal(1, report.CompressedFileCount);
+            Assert.NotNull(report.CompressionObservedAt);
             Assert.Equal(4096, report.CompressedBytesSaved);
             Assert.Equal("XPRESS 4K", Assert.Single(report.CompressedFiles!).CompressionType);
         }

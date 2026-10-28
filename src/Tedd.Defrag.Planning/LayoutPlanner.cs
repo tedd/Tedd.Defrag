@@ -76,10 +76,17 @@ public sealed class LayoutPlanner
         {
             Report("Indexing free space", 0, layout.TotalClusters, "clusters", force: true);
             free = new FreeSpaceIndex(Ranges());
-            if (retainFreeSpace) session!.RememberFreeSpace(layout.Files, request.Operation, free);
+            if (retainFreeSpace) session!.RememberFreeSpace(layout.Files, request.Operation, free, layout.MftZone);
         }
         else Report("Free-space index ready", 1, 1, "allocation index", active: 0, peak: 0, force: true);
         using var freeOwner = retainFreeSpace ? null : free;
+        long remaining = request.MaxMoveBytes == 0 ? long.MaxValue : request.MaxMoveBytes / layout.Volume.BytesPerCluster;
+        long chunk = Math.Max(1, 16L * 1024 * 1024 / layout.Volume.BytesPerCluster);
+        if (session?.RelocationPlan is { } activePlan)
+        {
+            Report("Continuing relocation plan", 0, 0, "streams", active: 0, peak: 0, force: true);
+            return RelocationBatch(activePlan);
+        }
         bool ordered = request.Operation is Operation.Alphabetical or Operation.Size or Operation.Created or Operation.Modified or Operation.Extension or Operation.DirectoryLocality;
         bool reusableOrder = session != null && request.Operation != Operation.PackAndDefrag;
         int[]? rememberedOrder = reusableOrder && session != null ? session.CandidateOrder(layout.Files, request.Operation) : null;
@@ -180,18 +187,23 @@ public sealed class LayoutPlanner
             }
             else order = orderOwner.Array;
         }
+        if (ordered)
+        {
+            Report("Calculating fixed placements", 0, orderCount, "files", force: true);
+            var relocationPlan = new RelocationPlanningState(layout, order, orderCount, free, rules,
+                session?.BlockedFiles, Checkpoint);
+            if (session != null) session.RelocationPlan = relocationPlan;
+            return RelocationBatch(relocationPlan);
+        }
         using var moves = new PooledBuffer<PlannedMove>(maximumMoves);
-        long remaining = request.MaxMoveBytes == 0 ? long.MaxValue : request.MaxMoveBytes / layout.Volume.BytesPerCluster;
-        long planned = 0, cursor = ordered ? session?.DestinationCursor ?? 0 : 0;
-        long chunk = Math.Max(1, 16L * 1024 * 1024 / layout.Volume.BytesPerCluster);
-        int blocked = ordered ? session?.FilesBlocked ?? 0 : 0, considered = ordered ? session?.FilesConsidered ?? 0 : 0;
+        long planned = 0;
+        int blocked = 0, considered = 0;
         Report(request.Operation == Operation.MinimumWrite && rememberedOrder != null ? "Continuing minimum-write plan" : "Reserving destinations",
-            ordered ? session?.OrderedPosition ?? 0 : 0, orderCount, "files", force: true);
-        for (int position = ordered ? session?.OrderedPosition ?? 0 : 0; position < orderCount; position++)
+            0, orderCount, "files", force: true);
+        for (int position = 0; position < orderCount; position++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if ((position & 1023) == 0) { Checkpoint(); Report("Reserving destinations", position, orderCount, "files"); }
-            if (ordered && session != null) session.OrderedPosition = position + 1;
             int index = order[position];
             var file = layout.Files[index];
             if (!rules.IsSelected(file.Path)) continue;
@@ -239,34 +251,46 @@ public sealed class LayoutPlanner
             }
             else
             {
-                if (!ordered && request.Operation != Operation.PackAndDefrag && extents.Length < 2) continue;
-                // Preserve the first extent when the entire remaining tail fits immediately after it.
-                long tail = total - extents[0].Length;
-                long tailMoves = 0;
-                for (int extentIndex = 1; extentIndex < extents.Length; extentIndex++)
-                    tailMoves += (extents[extentIndex].Length - 1) / chunk + 1;
-                if (!ordered && extents.Length > 1 && tail <= remaining && free.Contains(extents[0].End, tail) && tailMoves <= maximumMoves - moves.Count)
+                if (request.Operation != Operation.PackAndDefrag && extents.Length < 2) continue;
+                long anchorTarget = -1, anchorClusters = 0;
+                if (extents.Length > 1)
                 {
-                    long destination = extents[0].End;
-                    for (int i = 1; i < extents.Length; i++) MoveExtent(extents[i], ref destination);
+                    var anchors = new Dictionary<long, long>();
+                    foreach (var extent in extents)
+                    {
+                        long anchor = extent.Lcn - extent.Vcn;
+                        if (anchor >= 0) anchors[anchor] = anchors.GetValueOrDefault(anchor) + extent.Length;
+                    }
+                    foreach (var (anchor, preserved) in anchors.OrderByDescending(item => item.Value))
+                    {
+                        if (total - preserved > remaining) continue;
+                        long required = 0; bool fits = true;
+                        foreach (var extent in extents)
+                        {
+                            if (extent.Lcn == anchor + extent.Vcn) continue;
+                            if (!free.Contains(anchor + extent.Vcn, extent.Length)) { fits = false; break; }
+                            required += (extent.Length - 1) / chunk + 1;
+                        }
+                        if (!fits || required > maximumMoves - moves.Count) continue;
+                        anchorTarget = anchor; anchorClusters = preserved; break;
+                    }
+                }
+                if (anchorTarget >= 0 && anchorClusters > 0)
+                {
+                    foreach (var extent in extents)
+                    {
+                        long destination = anchorTarget + extent.Vcn;
+                        if (extent.Lcn != destination) MoveExtent(extent, ref destination);
+                    }
                 }
                 else if (total <= remaining)
                 {
                     long before = request.Operation == Operation.PackAndDefrag ? extents.Min(e => e.Lcn) : long.MaxValue;
-                    long target = free.FindFirstFit(total, before, ordered ? cursor : 0);
+                    long target = free.FindFirstFit(total, before);
                     long requiredMoves = 0;
                     foreach (var extent in extents) requiredMoves += (extent.Length - 1) / chunk + 1;
-                    if (ordered && session != null && target >= 0 && requiredMoves <= maximumMoves && requiredMoves > maximumMoves - moves.Count)
-                    {
-                        // This file fits a fresh batch. Resume here instead of dropping it
-                        // merely because preceding files consumed this batch's capacity.
-                        session.OrderedPosition = position;
-                        considered--;
-                        break;
-                    }
                     if (target < 0 || requiredMoves > maximumMoves - moves.Count) { blocked++; continue; }
                     foreach (var extent in extents) MoveExtent(extent, ref target);
-                    if (ordered) cursor = target;
                 }
                 else blocked++;
 
@@ -282,17 +306,40 @@ public sealed class LayoutPlanner
             }
             if (moves.Count >= maximumMoves || remaining <= 0) break;
         }
-        if (ordered && session != null)
+        bool fragmentedTarget = false;
+        bool canRelocateBlockers = request.Operation is Operation.MinimumWrite or Operation.FilesOnly or Operation.PackAndDefrag or Operation.OptimizeMft or Operation.DirectoryIndexes;
+        if (canRelocateBlockers && moves.Count == 0 && remaining > 0)
+            for (int position = 0; position < orderCount; position++)
+            {
+                if ((position & 1023) == 0) Checkpoint();
+                var file = layout.Files[order[position]];
+                if (file.Fragmented && file.Movable && !rules.IsExcluded(file.Path) && session?.BlockedFiles.Contains(file.FileId) != true)
+                { fragmentedTarget = true; break; }
+            }
+        if (fragmentedTarget)
         {
-            session.DestinationCursor = cursor;
-            session.FilesConsidered = considered;
-            session.FilesBlocked = blocked;
+            // A lack of whole-file free ranges does not make a fragmented stream
+            // immovable. Preserve its largest feasible anchor and clear blockers.
+            var relocation = new RelocationPlanningState(layout, order, orderCount, free, rules,
+                session?.BlockedFiles, Checkpoint, request);
+            if (session != null) session.RelocationPlan = relocation;
+            return RelocationBatch(relocation);
         }
         progress?.Invoke(new("Plan ready", considered, orderCount, "considered files", workers, 0, peakWorkers,
             ElapsedMilliseconds: watch.ElapsedMilliseconds, Acceleration: WorkerPolicy.BitmapAcceleration + "; scalar sort / placement",
             Detail: $"{moves.Count:N0} moves, {planned:N0} clusters, {blocked:N0} constrained files. Up to {maximumMoves:N0} moves feed a continuously replenished execution queue."));
         return new(moves.ToArray(), planned, considered, blocked,
             "Bounded free-destination plan. Existing anchors are preserved where possible; excluded objects are never moved. Constraints may prevent full packing or ordering.");
+
+        MovePlan RelocationBatch(RelocationPlanningState relocation)
+        {
+            if (relocation.AllocationInvalid) relocation.Reconcile(free, session?.BlockedFiles);
+            var batch = relocation.NextBatch(remaining, chunk, maximumMoves);
+            progress?.Invoke(new("Plan ready", batch.FilesConsidered, batch.FilesConsidered, "considered files", 1, 0, peakWorkers,
+                ElapsedMilliseconds: watch.ElapsedMilliseconds,
+                Detail: $"{batch.Moves.Length:N0} moves, {batch.ClustersToMove:N0} clusters, {batch.FilesBlocked:N0} constrained files. Fixed targets persist across execution windows; verified source space unlocks dependent moves."));
+            return batch;
+        }
 
         void Add(int index, ulong id, long vcn, long source, long destination, long count)
         {

@@ -11,6 +11,8 @@ public sealed class PlanningSession : IDisposable
     private int[]? _candidateOrder;
     private PackPlanningState? _packPlan;
     private FreeSpaceIndex? _freeSpace;
+    private ClusterRange _reservedZone;
+    internal RelocationPlanningState? RelocationPlan { get; set; }
 
     public IReadOnlySet<ulong> BlockedFiles => _blockedFiles;
     public void BlockFile(ulong fileId) => _blockedFiles.Add(fileId);
@@ -30,13 +32,14 @@ public sealed class PlanningSession : IDisposable
     internal FreeSpaceIndex? FreeSpace(FileLayout[] files, Operation operation) =>
         ReferenceEquals(_candidateFiles, files) && _candidateOperation == operation ? _freeSpace : null;
 
-    internal void RememberFreeSpace(FileLayout[] files, Operation operation, FreeSpaceIndex freeSpace)
+    internal void RememberFreeSpace(FileLayout[] files, Operation operation, FreeSpaceIndex freeSpace, ClusterRange reservedZone = default)
     {
         EnsureContext(files, operation);
         _candidateFiles = files;
         _candidateOperation = operation;
         _freeSpace?.Dispose();
         _freeSpace = freeSpace;
+        _reservedZone = reservedZone;
     }
 
     internal PackPlanningState? PackPlan(FileLayout[] files) =>
@@ -55,13 +58,28 @@ public sealed class PlanningSession : IDisposable
         ? _packPlan != null
         : _candidateOperation == operation && (_candidateOrder != null || _freeSpace != null);
 
-    public void MoveVerified(PlannedMove move) => _freeSpace?.Release(move.SourceLcn, move.Clusters);
+    public void MoveVerified(PlannedMove move)
+    {
+        long start = move.SourceLcn, end = start + move.Clusters;
+        if (_reservedZone.Length == 0 || end <= _reservedZone.Start || start >= _reservedZone.End) Release(start, end - start);
+        else
+        {
+            if (start < _reservedZone.Start) Release(start, _reservedZone.Start - start);
+            if (end > _reservedZone.End) Release(_reservedZone.End, end - _reservedZone.End);
+        }
+        void Release(long address, long length)
+        {
+            _freeSpace?.Release(address, length);
+            RelocationPlan?.SpaceReleased(address, length);
+        }
+    }
     public void MoveRejected(PlannedMove move) => _freeSpace?.Release(move.DestinationLcn, move.Clusters);
 
     public void InvalidateAllocationPlan(Operation operation)
     {
         _freeSpace?.Dispose();
         _freeSpace = null;
+        if (RelocationPlan != null) RelocationPlan.AllocationInvalid = true;
         if (operation == Operation.Pack)
         {
             _candidateFiles = null;
@@ -75,24 +93,18 @@ public sealed class PlanningSession : IDisposable
         _candidateFiles = null;
         _candidateOrder = null;
         _packPlan = null;
+        RelocationPlan = null;
         _freeSpace?.Dispose();
         _freeSpace = null;
-        OrderedPosition = 0;
-        DestinationCursor = 0;
-        FilesConsidered = 0;
-        FilesBlocked = 0;
     }
 
     public void Dispose() => ResetPhysicalPlan();
+
+    public Dictionary<(ulong Id, string Stream), ClusterRange>? CapturePlacementGoals() => RelocationPlan?.CaptureGoals();
 
     private void EnsureContext(FileLayout[] files, Operation operation)
     {
         if (_candidateFiles == null || ReferenceEquals(_candidateFiles, files) && _candidateOperation == operation) return;
         ResetPhysicalPlan();
     }
-
-    internal int OrderedPosition;
-    internal long DestinationCursor;
-    internal int FilesConsidered;
-    internal int FilesBlocked;
 }

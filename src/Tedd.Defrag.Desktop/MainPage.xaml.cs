@@ -52,7 +52,7 @@ public partial class MainPage : ContentPage
     private Operation[] _recommendedOperations = [];
     private static readonly PolicyOption[] Policies =
     [
-        new("↯", "Minimum-write defrag", "Prioritizes heavily fragmented files and preserves their first extent when possible. Honors file scope and exclusions.", Operation.MinimumWrite),
+        new("↯", "Minimum-write defrag", "Prioritizes fragmented files, preserves feasible anchors, and relocates blockers within the selected scope.", Operation.MinimumWrite),
         new("✦", "Windows automatic", "Lets Windows select supported whole-volume maintenance for the detected media and current volume state.", Operation.Automatic),
         new("↻", "Windows defrag", "Asks Windows to defragment the whole volume where supported. File scope, exclusions, custom fragment thresholds and write budgets are unsupported.", Operation.WindowsDefrag),
         new("▰", "Defragment files", "Makes eligible fragmented files contiguous without trying to reorganize the whole volume.", Operation.FilesOnly),
@@ -489,6 +489,7 @@ public partial class MainPage : ContentPage
         if (snapshot.Map != null && !snapshot.Map.AsSpan().SequenceEqual(session.Cells)) session.Cells = snapshot.Map;
         if (snapshot.Files != null && (previous?.Files == null || !snapshot.Files.AsSpan().SequenceEqual(previous.Files)))
             session.Files = snapshot.Files.Select(f => new FileRow(f.Path, f.Extents, Format.Bytes(f.Bytes), f.Status)).ToArray();
+        if (snapshot.CompressionObservedAt.HasValue || snapshot.CompressedFileCount > 0) session.CompressionSnapshot = snapshot;
         if (snapshot.CompressedFiles != null && (previous?.CompressedFiles == null || !snapshot.CompressedFiles.AsSpan().SequenceEqual(previous.CompressedFiles)))
             session.CompressedFiles = snapshot.CompressedFiles.Select(file => new CompressedFileRow(file.Path,
             file.CompressionType, Format.Bytes(file.Size), Format.Bytes(file.BytesSaved),
@@ -548,13 +549,14 @@ public partial class MainPage : ContentPage
         if (!ReferenceEquals(CompressedFileList.ItemsSource, session.CompressedFiles)) CompressedFileList.ItemsSource = session.CompressedFiles;
         if (_volume?.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase) != true)
             CompressionInventorySummary.Text = "Compression inventory requires NTFS";
-        else if (layout?.ObservedAt.HasValue == true)
+        else if (session.CompressionSnapshot is { } inventory)
         {
-            double savedRatio = layout.CompressedLogicalBytes > 0
-                ? Math.Clamp((double)layout.CompressedBytesSaved / layout.CompressedLogicalBytes, 0, 1) : 0;
-            string limited = layout.CompressedFileCount > (session.CompressedFiles?.Length ?? 0)
+            double savedRatio = inventory.CompressedLogicalBytes > 0
+                ? Math.Clamp((double)inventory.CompressedBytesSaved / inventory.CompressedLogicalBytes, 0, 1) : 0;
+            string limited = inventory.CompressedFileCount > (session.CompressedFiles?.Length ?? 0)
                 ? $" · showing top {(session.CompressedFiles?.Length ?? 0):N0}" : "";
-            CompressionInventorySummary.Text = $"{layout.CompressedFileCount:N0} files · {Format.Bytes(layout.CompressedBytesSaved)} saved · {savedRatio:P1}{limited}";
+            string observed = inventory.CompressionObservedAt is { } at ? $" · observed {at.ToLocalTime():g}" : "";
+            CompressionInventorySummary.Text = $"{inventory.CompressedFileCount:N0} files · {Format.Bytes(inventory.CompressedBytesSaved)} saved · {savedRatio:P1}{limited}{observed}";
         }
         else CompressionInventorySummary.Text = "Awaiting analysis";
         WarningsText.Text = string.Join("\n", snapshot.Warnings ?? []);
@@ -1574,9 +1576,12 @@ public partial class MainPage : ContentPage
         string report = $"{snapshot.State}: {snapshot.Message}\n\n" +
             $"Planned moves: {snapshot.PlannedMoves:N0}\nAttempted moves: {snapshot.AttemptedMoves:N0}\n" +
             $"Verified moves: {snapshot.VerifiedMoves:N0}\nFailed moves: {snapshot.FailedMoves:N0}\n" +
+            $"Streams considered: {snapshot.FilesConsidered:N0}\nConstrained streams: {snapshot.FilesBlocked:N0}\n" +
             $"Relocated: {Format.Bytes(snapshot.BytesMoved)}\n" +
             $"Compression: {snapshot.CompressionFilesChanged:N0} changed, {snapshot.CompressionFilesSkipped:N0} skipped, {snapshot.CompressionFilesFailed:N0} failed; {Format.StorageDelta(snapshot.CompressionBytesSaved)}\n" +
-            $"Compressed inventory: {snapshot.CompressedFileCount:N0} files; {Format.Bytes(snapshot.CompressedBytesSaved)} saved\n" +
+            (snapshot.CompressionObservedAt.HasValue || snapshot.CompressedFileCount > 0
+                ? $"Compressed inventory: {snapshot.CompressedFileCount:N0} files; {Format.Bytes(snapshot.CompressedBytesSaved)} saved\n"
+                : "Compressed inventory: not inspected\n") +
             $"Fragmented streams: {snapshot.InitialFragmentedFiles:N0} before, {snapshot.FragmentedFiles:N0} after\n" +
             $"Elapsed: {TimeSpan.FromMilliseconds(snapshot.ElapsedMilliseconds):g}";
         if (await DisplayAlertAsync("Job report", report, "Export report", "Close")) await ExportReport(snapshot);
@@ -1651,6 +1656,7 @@ public partial class MainPage : ContentPage
         public JobSnapshot? Snapshot { get; set; }
         public long SnapshotReceivedAt { get; set; }
         public JobSnapshot? LayoutSnapshot { get; set; }
+        public JobSnapshot? CompressionSnapshot { get; set; }
         public MapCell[] Cells { get; set; } = [];
         public FileRow[]? Files { get; set; }
         public CompressedFileRow[]? CompressedFiles { get; set; }

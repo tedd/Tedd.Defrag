@@ -77,6 +77,7 @@ public sealed class JobExecutor
         CompressionProgress compressionProgress = new(request.CompressionTargets.Length == 0 ? "Not configured" : "Waiting to start",
             null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         CompressionInventoryResult compressionInventory = CompressionInventoryResult.Empty;
+        DateTimeOffset? compressionObservedAt = null;
         bool noMovesPlanned = false;
         bool layoutIndexDirty = false;
         bool compressionSupported = false;
@@ -206,7 +207,7 @@ public sealed class JobExecutor
                     }, Checkpoint);
                 long batchPlannedBytes = plan.ClustersToMove * layout.Volume.BytesPerCluster;
                 filesConsidered = Math.Max(filesConsidered, plan.FilesConsidered);
-                filesBlocked = Math.Max(filesBlocked, plan.FilesBlocked);
+                filesBlocked = plan.FilesBlocked;
                 if (plan.Moves.Length == 0) { noMovesPlanned = plannedMoves == 0; break; }
                 plannedBytes += batchPlannedBytes; plannedMoves += plan.Moves.Length;
                 if (request.Preview)
@@ -294,21 +295,37 @@ public sealed class JobExecutor
                     session.InvalidateAllocationPlan(request.Operation);
                     layoutIndexDirty = true; MapAggregator.Build(layout, map); SaveLayoutIndex();
                 }
+                else if (failedMoves > failuresBeforeBatch)
+                {
+                    // Reconstruct reservations for every skipped move while retaining final targets.
+                    session.InvalidateAllocationPlan(request.Operation);
+                }
             }
             totalProgress = .99;
             state = JobState.Scanning; progress = 0; scanWork = null;
             message = "Reconciling actual allocation after execution"; Publish(true);
+            var placementGoals = session.CapturePlacementGoals();
             session.ResetPhysicalPlan();
             ReleaseLayoutForRescan();
-            layout = InspectCompression(ReadScan());
+            layout = BuildMap(ReadScan());
             UpdateConditionMetrics();
             layoutIndexDirty = true;
             AddWarnings(layout.Warnings);
             bool remainingFragmentation = request.Operation is not (Operation.Pack or Operation.PrepareShrink) && layout.Files.Any(f => f.Fragmented && f.Movable && rules.IsSelected(f.Path) && !rules.IsExcluded(f.Path)
                 && f.Size >= request.MinimumFileBytes && (request.MaximumFileBytes == 0 || f.Size <= request.MaximumFileBytes)
+                && (request.Operation == Operation.OptimizeMft ? (f.FileId & 0xFFFFFFFFFFFF) == 0 : (f.Flags & StreamFlags.Metadata) == 0)
+                && (request.Operation == Operation.DirectoryIndexes ? (f.Flags & StreamFlags.Directory) != 0 : (f.Flags & StreamFlags.Directory) == 0 || request.Operation == Operation.DirectoryLocality)
                 && (request.Operation is not (Operation.MinimumWrite or Operation.FilesOnly) || f.Extents.Length >= request.MinimumFragments));
             bool budgetReached = request.MaxMoveBytes > 0 && request.MaxMoveBytes - moved < layout.Volume.BytesPerCluster;
-            state = compression.FilesFailed > 0 || failedMoves > 0 || filesBlocked > 0 || !layout.Complete || budgetReached || ordered || remainingFragmentation ? JobState.Partial : JobState.Completed;
+            if (placementGoals != null)
+                foreach (var file in layout.Files)
+                {
+                    if (!placementGoals.TryGetValue((file.FileId, file.StreamName), out var goal)) continue;
+                    if (file.Extents.Length == 1 && file.Extents[0] == new Extent(0, goal.Start, goal.Length))
+                        placementGoals.Remove((file.FileId, file.StreamName));
+                }
+            int unmetPlacements = placementGoals?.Count ?? 0;
+            state = compression.FilesFailed > 0 || failedMoves > 0 || filesBlocked > 0 || !layout.Complete || budgetReached || unmetPlacements > 0 || remainingFragmentation ? JobState.Partial : JobState.Completed;
             progress = 1; totalProgress = 1;
             message = CompressionSummary() + (noMovesPlanned
                 ? filesConsidered == 0
@@ -320,6 +337,7 @@ public sealed class JobExecutor
                     ? $"{Format.Bytes(moved)} relocated and verified in {verifiedMoves:N0} moves. "
                     : $"{Format.Bytes(moved)} relocated in {attemptedMoves - failedMoves:N0} moves; the final scan reconciled the resulting layout. ")
                     + (failedMoves > 0 ? $"{failedMoves:N0} moves failed across {session.BlockedFiles.Count:N0} files; other eligible files were processed. " : "")
+                    + (unmetPlacements > 0 ? $"{unmetPlacements:N0} planned {(unmetPlacements == 1 ? "placement was" : "placements were")} not confirmed by the final scan. " : "")
                     + (state == JobState.Partial ? "Budget, eligibility, scan, or placement constraints leave a partial result." : "Eligible optimization complete."));
 
             VolumeLayout? ScanVolume()
@@ -346,10 +364,9 @@ public sealed class JobExecutor
             }
             VolumeLayout InspectCompression(VolumeLayout observed)
             {
-                message = "Building allocation map"; progress = 0;
-                scanWork = new(message, 0, 0, "streams", ActiveWorkers: 1, PeakWorkers: 1);
-                Publish(true);
-                MapAggregator.Build(observed, map);
+                BuildMap(observed);
+                if (compressionObservedAt.HasValue) return observed;
+                if (request.Operation != Operation.Analyze && request.CompressionTargets.Length == 0) return observed;
                 if (!observed.Volume.FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
                 {
                     compressionInventory = CompressionInventoryResult.Empty;
@@ -367,9 +384,18 @@ public sealed class JobExecutor
                         Publish(p.Completed == 0 || p.Completed == p.Total);
                     });
                 AddWarnings(compressionInventory.Warnings);
+                compressionObservedAt = DateTimeOffset.UtcNow;
                 return observed;
 
                 void InventoryCheckpoint() { Checkpoint(); Publish(); }
+            }
+            VolumeLayout BuildMap(VolumeLayout observed)
+            {
+                message = "Building allocation map"; progress = 0;
+                scanWork = new(message, 0, 0, "streams", ActiveWorkers: 1, PeakWorkers: 1);
+                Publish(true);
+                MapAggregator.Build(observed, map);
+                return observed;
             }
         }
         catch (OperationCanceledException e) { state = JobState.Cancelled; message = string.IsNullOrEmpty(e.Message) ? "Cancelled at a safe boundary" : e.Message; }
@@ -415,11 +441,11 @@ public sealed class JobExecutor
                 initialFragmentedFiles, clock.ElapsedMilliseconds, BrokerProtocol.BuildVersion, diagnostics,
                 request.MinimumFragments, streamsAtThreshold, eligibleStreamsAtThreshold, mftExtents, fragmentedDirectoryIndexes,
                 directoryIndexesAtThreshold, layout?.TotalClusters ?? scanMap?.TotalClusters ?? 0, compressionProgress.FilesTotal, compressionProgress.FilesChanged,
-                compressionProgress.FilesSkipped, compressionProgress.FilesFailed, compressionProgress.BytesSaved, compressionInventory.Files,
+                compressionProgress.FilesSkipped, compressionProgress.FilesFailed, compressionProgress.BytesSaved, compressionObservedAt.HasValue ? compressionInventory.Files : null,
                 compressionInventory.TotalFiles, compressionInventory.TotalSize, compressionInventory.BytesSaved,
                 compressionProgress.FilesProcessed, compressionProgress.FilesWaiting, compressionProgress.BytesTotal,
                 compressionProgress.BytesProcessed, compressionProgress.BytesWaiting, compressionProgress.Status,
-                compressionProgress.Path, totalProgress));
+                compressionProgress.Path, totalProgress, compressionObservedAt));
             lastPublish = clock.ElapsedMilliseconds;
         }
         void UpdateConditionMetrics()
