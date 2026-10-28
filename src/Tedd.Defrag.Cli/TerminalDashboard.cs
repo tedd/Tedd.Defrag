@@ -6,6 +6,8 @@ using Tedd.TUI;
 using Tedd.TUI.Media;
 using Tedd.TUI.Platform.Console;
 using Tedd.TUI.Platform.WindowsTerminal;
+using Size = Tedd.TUI.Size;
+using KeyEventArgs = Tedd.TUI.KeyEventArgs;
 
 namespace Tedd.Defrag.Cli;
 

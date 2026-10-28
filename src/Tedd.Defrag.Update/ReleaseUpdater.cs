@@ -18,6 +18,8 @@ public sealed record AvailableRelease(
     Uri ReleasePageUri,
     ReleasePackageKind PackageKind);
 
+public sealed record UpdateProgress(string Message, double? Fraction = null);
+
 public sealed class PreparedUpdate
 {
     public AvailableRelease Release { get; }
@@ -102,7 +104,7 @@ public static class ReleaseUpdater
         LaunchPreparedUpdate(prepared, launcherName, launchArguments);
     }
 
-    public static async Task<PreparedUpdate> PrepareUpdateAsync(AvailableRelease release, CancellationToken cancellationToken = default)
+    public static async Task<PreparedUpdate> PrepareUpdateAsync(AvailableRelease release, CancellationToken cancellationToken = default, IProgress<UpdateProgress>? progress = null)
     {
         if (!IsPackaged) throw new InvalidOperationException("Self-update is available only in a release distribution.");
 
@@ -112,8 +114,11 @@ public static class ReleaseUpdater
         string archivePath = Path.Combine(updateDirectory, release.AssetName);
         string partialPath = archivePath + ".download";
 
+        progress?.Report(new("Reading release checksum…"));
         string expectedHash = await DownloadChecksumAsync(release.ChecksumUri, cancellationToken);
-        await DownloadFileAsync(release.DownloadUri, partialPath, cancellationToken);
+        progress?.Report(new("Downloading update…", 0));
+        await DownloadFileAsync(release.DownloadUri, partialPath, cancellationToken, progress);
+        progress?.Report(new("Verifying download…"));
         string actualHash;
         await using (Stream downloaded = File.OpenRead(partialPath))
             actualHash = Convert.ToHexString(await SHA256.HashDataAsync(downloaded, cancellationToken));
@@ -126,7 +131,7 @@ public static class ReleaseUpdater
         return new(release, archivePath, expectedHash);
     }
 
-    public static void LaunchPreparedUpdate(PreparedUpdate prepared, string launcherName, IReadOnlyList<string> launchArguments)
+    public static void LaunchPreparedUpdate(PreparedUpdate prepared, string launcherName, IReadOnlyList<string> launchArguments, bool restartAfterUpdate = true)
     {
         ArgumentNullException.ThrowIfNull(prepared);
         if (!IsPackaged) throw new InvalidOperationException("Self-update is available only in a release distribution.");
@@ -143,8 +148,10 @@ public static class ReleaseUpdater
                 Path.TrimEndingDirectorySeparator(DistributionDirectory),
                 prepared.PackagePath,
                 prepared.ExpectedSha256,
+                prepared.Release.DisplayVersion,
                 launcherName,
-                [.. launchArguments]);
+                [.. launchArguments],
+                restartAfterUpdate);
             StartUpdater(updaterPath, "--apply-installer-update", installerRequest);
             return;
         }
@@ -156,7 +163,8 @@ public static class ReleaseUpdater
             prepared.ExpectedSha256,
             prepared.Release.DisplayVersion,
             launcherName,
-            [.. launchArguments]);
+            [.. launchArguments],
+            restartAfterUpdate);
         StartUpdater(updaterPath, "--apply-update", request);
     }
 
@@ -166,48 +174,56 @@ public static class ReleaseUpdater
             throw new ArgumentException("The launcher must be a file in the installation directory.", nameof(launcherName));
     }
 
-    public static async Task<int> ApplyUpdateAsync(string requestPayload)
+    public static async Task<int> ApplyUpdateAsync(string requestPayload, IProgress<UpdateProgress>? progress = null, Func<Task>? stopWorker = null)
     {
-        UpdateRequest? request = null;
-        bool requestValidated = false;
         try
         {
             if (requestPayload.Length > 30_000) throw new InvalidDataException("The update request is too large.");
-            request = JsonSerializer.Deserialize<UpdateRequest>(Convert.FromBase64String(requestPayload), Json)
+            UpdateRequest request = JsonSerializer.Deserialize<UpdateRequest>(Convert.FromBase64String(requestPayload), Json)
                 ?? throw new InvalidDataException("The update request is invalid.");
             ValidateUpdateRequest(request);
-            requestValidated = true;
+            if (stopWorker is not null)
+            {
+                progress?.Report(new("Stopping execution worker…"));
+                await stopWorker();
+            }
+            progress?.Report(new("Waiting for Tedd.Defrag to close…"));
             await WaitForProcessAsync(request.ParentProcessId, TimeSpan.FromMinutes(2));
-            await WaitForInstallationProcessesAsync(request.TargetDirectory, TimeSpan.FromSeconds(30));
+            progress?.Report(new("Waiting for application processes to stop…"));
+            await WaitForInstallationProcessesAsync(request.TargetDirectory, TimeSpan.FromMinutes(2), progress);
+            progress?.Report(new("Verifying update package…"));
             await VerifyArchiveAsync(request.ArchivePath, request.ExpectedSha256);
-            ApplyArchive(request);
+            progress?.Report(new("Installing portable update…", 0));
+            ApplyArchive(request, progress);
+            progress?.Report(new("Update installed.", 1));
             return 0;
         }
         catch (Exception exception)
         {
             WriteLog(exception.ToString());
-            if (requestValidated && request is not null)
-            {
-                try { StartApplication(request.TargetDirectory, request.LauncherName, request.LaunchArguments); }
-                catch (Exception restartException) { WriteLog("The previous application could not be restarted: " + restartException); }
-            }
-            return 1;
+            throw;
         }
     }
 
-    public static async Task<int> ApplyInstallerUpdateAsync(string requestPayload)
+    public static async Task<int> ApplyInstallerUpdateAsync(string requestPayload, IProgress<UpdateProgress>? progress = null, Func<Task>? stopWorker = null)
     {
-        InstallerUpdateRequest? request = null;
-        bool requestValidated = false;
         try
         {
-            request = DeserializeRequest<InstallerUpdateRequest>(requestPayload);
+            InstallerUpdateRequest request = DeserializeRequest<InstallerUpdateRequest>(requestPayload);
             ValidateInstallerUpdateRequest(request);
-            requestValidated = true;
+            if (stopWorker is not null)
+            {
+                progress?.Report(new("Stopping execution worker…"));
+                await stopWorker();
+            }
+            progress?.Report(new("Waiting for Tedd.Defrag to close…"));
             await WaitForProcessAsync(request.ParentProcessId, TimeSpan.FromMinutes(2));
-            await WaitForInstallationProcessesAsync(request.TargetDirectory, TimeSpan.FromSeconds(30));
+            progress?.Report(new("Waiting for application processes to stop…"));
+            await WaitForInstallationProcessesAsync(request.TargetDirectory, TimeSpan.FromMinutes(2), progress);
+            progress?.Report(new("Verifying installer…"));
             await VerifyArchiveAsync(request.InstallerPath, request.ExpectedSha256);
 
+            progress?.Report(new("Installing update… Follow the installer progress window."));
             var start = new ProcessStartInfo(request.InstallerPath)
             {
                 UseShellExecute = true,
@@ -218,20 +234,20 @@ public static class ReleaseUpdater
             start.ArgumentList.Add("/norestart");
             using Process installer = Process.Start(start) ?? throw new IOException("The installer could not be started.");
             await installer.WaitForExitAsync();
-            if (installer.ExitCode is not (0 or 1641 or 3010))
+            if (installer.ExitCode is 1641 or 3010)
+                throw new InvalidOperationException("Windows must restart before the update can finish. The installed version has not been verified.");
+            if (installer.ExitCode != 0)
                 throw new InvalidOperationException($"The installer exited with code {installer.ExitCode}.");
-            StartApplication(request.TargetDirectory, request.LauncherName, request.LaunchArguments);
+            VerifyInstalledVersion(request.TargetDirectory, request.Version);
+            progress?.Report(new("Update installed.", 1));
+            if (request.RestartAfterUpdate)
+                StartApplication(request.TargetDirectory, request.LauncherName, request.LaunchArguments);
             return 0;
         }
         catch (Exception exception)
         {
             WriteLog(exception.ToString());
-            if (requestValidated && request is not null)
-            {
-                try { StartApplication(request.TargetDirectory, request.LauncherName, request.LaunchArguments); }
-                catch (Exception restartException) { WriteLog("The previous application could not be restarted: " + restartException); }
-            }
-            return 1;
+            throw;
         }
     }
 
@@ -267,7 +283,7 @@ public static class ReleaseUpdater
         return hash.ToUpperInvariant();
     }
 
-    private static async Task DownloadFileAsync(Uri uri, string destination, CancellationToken cancellationToken)
+    private static async Task DownloadFileAsync(Uri uri, string destination, CancellationToken cancellationToken, IProgress<UpdateProgress>? progress)
     {
         using var response = await Http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -276,6 +292,7 @@ public static class ReleaseUpdater
         await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 128, FileOptions.Asynchronous | FileOptions.SequentialScan);
         byte[] buffer = new byte[1024 * 128];
         long total = 0;
+        long lastReported = -1;
         while (true)
         {
             int read = await input.ReadAsync(buffer, cancellationToken);
@@ -283,6 +300,20 @@ public static class ReleaseUpdater
             total += read;
             if (total > MaximumPackageBytes) throw new InvalidDataException("The release package exceeded the download limit.");
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            if (response.Content.Headers.ContentLength is > 0 and var length)
+            {
+                long percent = Math.Min(100, total * 100 / length);
+                if (percent != lastReported)
+                {
+                    progress?.Report(new($"Downloading update… {percent}%", Math.Clamp((double)total / length, 0, 1)));
+                    lastReported = percent;
+                }
+            }
+            else if (total / 1_048_576 != lastReported)
+            {
+                lastReported = total / 1_048_576;
+                progress?.Report(new($"Downloading update… {lastReported} MiB"));
+            }
         }
         await output.FlushAsync(cancellationToken);
     }
@@ -295,7 +326,7 @@ public static class ReleaseUpdater
             throw new InvalidDataException("The staged release no longer matches its SHA-256 checksum.");
     }
 
-    private static void ApplyArchive(UpdateRequest request)
+    private static void ApplyArchive(UpdateRequest request, IProgress<UpdateProgress>? progress)
     {
         string target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.TargetDirectory));
         string parent = Directory.GetParent(target)?.FullName ?? throw new InvalidOperationException("The installation directory cannot be a drive root.");
@@ -305,13 +336,12 @@ public static class ReleaseUpdater
         Directory.CreateDirectory(staged);
         try
         {
-            ExtractArchive(request.ArchivePath, staged);
+            ExtractArchive(request.ArchivePath, staged, progress);
             ValidateStagedRelease(staged, request.Version, request.LauncherName);
             Directory.Move(target, backup);
             try
             {
                 Directory.Move(staged, target);
-                StartApplication(target, request.LauncherName, request.LaunchArguments);
             }
             catch
             {
@@ -319,8 +349,11 @@ public static class ReleaseUpdater
                 Directory.Move(backup, target);
                 throw;
             }
+            VerifyInstalledVersion(target, request.Version);
             try { Directory.Delete(backup, true); }
             catch (Exception exception) { WriteLog("Update succeeded, but the previous installation could not be removed: " + exception.Message); }
+            if (request.RestartAfterUpdate)
+                StartApplication(target, request.LauncherName, request.LaunchArguments);
         }
         finally
         {
@@ -338,11 +371,12 @@ public static class ReleaseUpdater
         using Process launched = Process.Start(start) ?? throw new IOException("The application could not be restarted.");
     }
 
-    private static void ExtractArchive(string archivePath, string stagedDirectory)
+    private static void ExtractArchive(string archivePath, string stagedDirectory, IProgress<UpdateProgress>? progress)
     {
         string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(stagedDirectory)) + Path.DirectorySeparatorChar;
         long total = 0;
         using var archive = ZipFile.OpenRead(archivePath);
+        long expected = archive.Entries.Sum(entry => entry.Length);
         foreach (ZipArchiveEntry entry in archive.Entries)
         {
             total = checked(total + entry.Length);
@@ -354,7 +388,15 @@ public static class ReleaseUpdater
             using Stream input = entry.Open();
             using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             input.CopyTo(output);
+            if (expected > 0) progress?.Report(new($"Installing portable update… {total * 100 / expected}%", Math.Clamp((double)total / expected, 0, 1)));
         }
+    }
+
+    internal static void VerifyInstalledVersion(string directory, string expectedVersion)
+    {
+        ReleaseManifest? manifest = ReadManifest(Path.Combine(directory, "release-manifest.json"));
+        if (manifest is null || !string.Equals(manifest.Version, expectedVersion, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"The installed version is not {expectedVersion}. The update did not complete.");
     }
 
     private static void ValidateStagedRelease(string staged, string expectedVersion, string launcherName)
@@ -399,7 +441,13 @@ public static class ReleaseUpdater
     {
         string requestPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, Json)));
         if (requestPayload.Length > 24_000) throw new InvalidOperationException("The command line is too long to preserve across the update.");
-        var start = new ProcessStartInfo(updaterPath) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(updaterPath)! };
+        var start = new ProcessStartInfo(updaterPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            WorkingDirectory = Path.GetDirectoryName(updaterPath)!
+        };
         start.ArgumentList.Add(command);
         start.ArgumentList.Add(requestPayload);
         using Process updater = Process.Start(start) ?? throw new IOException("The detached updater could not be started.");
@@ -423,10 +471,11 @@ public static class ReleaseUpdater
         catch (ArgumentException) { }
     }
 
-    private static async Task WaitForInstallationProcessesAsync(string directory, TimeSpan timeout)
+    private static async Task WaitForInstallationProcessesAsync(string directory, TimeSpan timeout, IProgress<UpdateProgress>? progress)
     {
         string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)) + Path.DirectorySeparatorChar;
         var deadline = Stopwatch.StartNew();
+        string blocker = "another application process";
         while (deadline.Elapsed < timeout)
         {
             bool found = false;
@@ -438,15 +487,21 @@ public static class ReleaseUpdater
                     try
                     {
                         string? path = process.MainModule?.FileName;
-                        if (path is not null && Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase)) { found = true; break; }
+                        if (path is not null && Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                        {
+                            blocker = $"{process.ProcessName} (PID {process.Id})";
+                            found = true;
+                            break;
+                        }
                     }
                     catch { }
                 }
             }
             if (!found) return;
+            progress?.Report(new($"Waiting for {blocker} to close…"));
             await Task.Delay(500);
         }
-        throw new IOException("An application process is still using the installation directory.");
+        throw new IOException($"Close {blocker} before installing the update, then retry. The previous version remains installed.");
     }
 
     internal static string FindDistributionDirectory(IEnumerable<string?> candidates)
@@ -507,8 +562,8 @@ public static class ReleaseUpdater
     }
 
     private sealed record ReleaseManifest(string Version, string Runtime, string AssetName, string? InstallType);
-    private sealed record UpdateRequest(int ParentProcessId, string TargetDirectory, string ArchivePath, string ExpectedSha256, string Version, string LauncherName, string[] LaunchArguments);
-    private sealed record InstallerUpdateRequest(int ParentProcessId, string TargetDirectory, string InstallerPath, string ExpectedSha256, string LauncherName, string[] LaunchArguments);
+    private sealed record UpdateRequest(int ParentProcessId, string TargetDirectory, string ArchivePath, string ExpectedSha256, string Version, string LauncherName, string[] LaunchArguments, bool RestartAfterUpdate);
+    private sealed record InstallerUpdateRequest(int ParentProcessId, string TargetDirectory, string InstallerPath, string ExpectedSha256, string Version, string LauncherName, string[] LaunchArguments, bool RestartAfterUpdate);
     private sealed record GitHubRelease(
         [property: JsonPropertyName("tag_name")] string TagName,
         [property: JsonPropertyName("html_url")] string HtmlUrl,

@@ -12,8 +12,10 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
-        if (args is ["--apply-update", var requestPayload]) return await ReleaseUpdater.ApplyUpdateAsync(requestPayload);
-        if (args is ["--apply-installer-update", var installerRequestPayload]) return await ReleaseUpdater.ApplyInstallerUpdateAsync(installerRequestPayload);
+        if (args is ["--apply-update", var requestPayload])
+            return await UpdateProgressWindow.Run(progress => ApplyUpdateWithStoppedWorker(requestPayload, progress, installer: false));
+        if (args is ["--apply-installer-update", var installerRequestPayload])
+            return await UpdateProgressWindow.Run(progress => ApplyUpdateWithStoppedWorker(installerRequestPayload, progress, installer: true));
         bool json = args.Contains("--json");
         try
         {
@@ -84,6 +86,17 @@ internal static class Program
         catch (FormatException e) { Error(e, json); return 2; }
         catch (OverflowException e) { Error(e, json); return 2; }
         catch (Exception e) { Error(e, json); return 1; }
+    }
+    private static async Task<int> ApplyUpdateWithStoppedWorker(string payload, IProgress<UpdateProgress> progress, bool installer)
+    {
+        async Task StopWorker()
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await new DefragClient().ShutdownWorker(timeout.Token);
+        }
+        return installer
+            ? await ReleaseUpdater.ApplyInstallerUpdateAsync(payload, progress, StopWorker)
+            : await ReleaseUpdater.ApplyUpdateAsync(payload, progress, StopWorker);
     }
     private static async Task<bool> OfferUpdate(string[] launchArguments, bool explicitRequest)
     {

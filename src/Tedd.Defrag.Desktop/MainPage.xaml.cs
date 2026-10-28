@@ -130,7 +130,7 @@ public partial class MainPage : ContentPage
         if (_updateOnExit is not { } prepared) return;
         try
         {
-            ReleaseUpdater.LaunchPreparedUpdate(prepared, "Tedd.Defrag.Desktop.exe", []);
+            ReleaseUpdater.LaunchPreparedUpdate(prepared, "Tedd.Defrag.Desktop.exe", [], restartAfterUpdate: false);
             _updateOnExit = null;
         }
         catch (Exception exception)
@@ -219,9 +219,13 @@ public partial class MainPage : ContentPage
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             AvailableRelease? release = await ReleaseUpdater.CheckForUpdateAsync(timeout.Token);
             if (release is null || Volatile.Read(ref _shuttingDown) != 0) return;
-            _ = PrepareUpdateForExit(release);
-            await DisplayAlertAsync("Update available",
-                $"Tedd.Defrag {release.DisplayVersion} is available. The update is downloading and will be installed when the application exits.", "OK");
+            const string installNow = "Install now";
+            const string installOnExit = "Install when I exit";
+            string? choice = await DisplayActionSheetAsync(
+                $"Tedd.Defrag {release.DisplayVersion} is available.",
+                "Later", null, installNow, installOnExit);
+            if (choice is not (installNow or installOnExit)) return;
+            await PrepareUpdate(release, choice == installNow);
         }
         catch (OperationCanceledException) { }
         catch (Exception exception)
@@ -230,22 +234,44 @@ public partial class MainPage : ContentPage
             System.Diagnostics.Debug.WriteLine(exception);
         }
     }
-    private async Task PrepareUpdateForExit(AvailableRelease release)
+    private async Task PrepareUpdate(AvailableRelease release, bool installNow)
     {
+        UpdateProgressPanel.IsVisible = true;
+        UpdateDownloadProgress.Progress = 0;
         try
         {
-            FooterStatus.Text = $"Downloading and verifying Tedd.Defrag {release.DisplayVersion}…";
-            PreparedUpdate prepared = await ReleaseUpdater.PrepareUpdateAsync(release);
+            var progress = new Progress<UpdateProgress>(update =>
+            {
+                UpdateStatus.Text = update.Message;
+                if (update.Fraction is { } fraction) UpdateDownloadProgress.Progress = Math.Clamp(fraction, 0, 1);
+            });
+            PreparedUpdate prepared = await ReleaseUpdater.PrepareUpdateAsync(release, progress: progress);
             if (Volatile.Read(ref _shuttingDown) != 0) return;
+            if (installNow)
+            {
+                try { await _client.Send(new("stop")); }
+                catch (TimeoutException) { }
+                catch (InvalidOperationException exception)
+                {
+                    _updateOnExit = prepared;
+                    await DisplayAlertAsync("Update deferred", exception.Message + " The update will install when the application exits.", "OK");
+                    return;
+                }
+                UpdateStatus.Text = "Starting installer…";
+                ReleaseUpdater.LaunchPreparedUpdate(prepared, "Tedd.Defrag.Desktop.exe", [], restartAfterUpdate: true);
+                Environment.Exit(0);
+            }
             _updateOnExit = prepared;
-            FooterStatus.Text = $"Tedd.Defrag {release.DisplayVersion} is ready and will install when the application exits";
+            UpdateStatus.Text = $"Tedd.Defrag {release.DisplayVersion} is ready and will install when the application exits";
+            UpdateDownloadProgress.Progress = 1;
         }
         catch (OperationCanceledException) { }
         catch (Exception exception)
         {
-            FooterStatus.Text = "Update download failed · the application remains ready";
+            UpdateStatus.Text = "Update failed · the application remains ready";
             System.Diagnostics.Debug.WriteLine(exception);
-            await DisplayAlertAsync("Update download failed", exception.Message, "Close");
+            if (Volatile.Read(ref _shuttingDown) == 0)
+                await DisplayAlertAsync("Update failed", exception.Message, "Close");
         }
     }
     private async Task RefreshVolumes()

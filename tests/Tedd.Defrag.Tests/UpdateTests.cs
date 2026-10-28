@@ -1,5 +1,9 @@
 using Tedd.Defrag.Update;
 using System.Runtime.InteropServices;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Xunit;
 
 namespace Tedd.Defrag.Tests;
@@ -53,4 +57,49 @@ public sealed class UpdateTests
         await Assert.ThrowsAsync<ArgumentException>(() =>
             ReleaseUpdater.LaunchUpdateAsync(release, @"..\Tedd.Defrag.Desktop.exe", []));
     }
+
+    [Fact]
+    public async Task PortableUpdateOnExitReplacesFilesWithoutRestarting()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            string current = Path.Combine(root, "current");
+            string next = Path.Combine(root, "next");
+            Directory.CreateDirectory(current);
+            Directory.CreateDirectory(next);
+            File.WriteAllText(Path.Combine(current, "release-manifest.json"), "{\"version\":\"0.1.8\"}");
+            foreach (string file in new[] { "Tedd.Defrag.Cli.exe", "Tedd.Defrag.Desktop.exe", "Tedd.Defrag.Worker.exe" })
+                File.WriteAllText(Path.Combine(next, file), "test payload");
+            File.WriteAllText(Path.Combine(next, "release-manifest.json"), "{\"version\":\"0.1.9\"}");
+            string archive = Path.Combine(root, "update.zip");
+            ZipFile.CreateFromDirectory(next, archive);
+            string hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive)));
+            string payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+            {
+                ParentProcessId = int.MaxValue, TargetDirectory = current, ArchivePath = archive,
+                ExpectedSha256 = hash, Version = "0.1.9", LauncherName = "Tedd.Defrag.Desktop.exe",
+                LaunchArguments = Array.Empty<string>(), RestartAfterUpdate = false
+            })));
+
+            Assert.Equal(0, await ReleaseUpdater.ApplyUpdateAsync(payload));
+            ReleaseUpdater.VerifyInstalledVersion(current, "0.1.9");
+            Assert.True(File.Exists(Path.Combine(current, "Tedd.Defrag.Desktop.exe")));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void InstalledVersionMustMatchBeforeReportingSuccess()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Tedd.Defrag.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(Path.Combine(root, "release-manifest.json"), "{\"version\":\"0.1.8\"}");
+            Assert.Throws<InvalidDataException>(() => ReleaseUpdater.VerifyInstalledVersion(root, "0.1.9"));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
 }
