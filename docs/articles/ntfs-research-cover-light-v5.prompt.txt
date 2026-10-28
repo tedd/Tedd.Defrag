@@ -1,0 +1,29 @@
+Generation method: built-in imagegen
+Initial edit target: docs/articles/ntfs-research-cover-light-v4.png
+
+Initial edit prompt:
+Use case: precise-object-edit and text-localization.
+Asset type: light-theme landscape LinkedIn article cover.
+Input image: Image 1 is the edit target.
+
+Make exactly these three changes:
+1. Replace the subtitle "Research. Defragmentation. Performance." immediately below the large "Tedd.Defrag" headline with the exact sentence "When building becomes cheaper than buying." Preserve the existing subtitle's left alignment, dark slate color, sans-serif style, and subordinate size. Keep the new sentence on one line.
+2. Completely remove the smaller redundant author line "Tedd.Defrag · Sol" below that subtitle. Restore the pale background and faint background grid seamlessly in that area. Leave that space empty; do not replace it with another line.
+3. Make EVERY cluster cell in the disk allocation map and enlarged inset a CLEAN, FLAT, SOLID color. Each category must have exactly ONE uniform fill color across all its cells: allocated cells deep teal #087f78; fragmented cells warm orange #b65e28; metadata cells muted lavender #9b86c5; free-space cells pale sage #dce9e7. Preserve each cell's category, location, dimensions, and the existing map arrangement. Keep narrow crisp white grid gutters. Eliminate all per-cell gradients, mottling, texture, speckles, reflections, lighting variation, translucent overlays, watercolor effects, bevels, and shadows. The entire cell surface must be a perfectly uniform swatch. Apply these exact same clean colors to the magnified inset. The map should have the precision of a flat vector diagram.
+
+Preserve everything else: large "Tedd.Defrag" headline with dark "Tedd." and teal "Defrag"; small top-left "Buy vs Build with Sol"; MFT, Runlists, and Free space annotations and connectors; lower-left "Illustrative cluster map"; lower-right "github.com/tedd/Tedd.Defrag" and underneath "tedd.no", both right aligned to the same edge; light background, faint background grid, composition, original dimensions and wide aspect ratio. Do not add text or objects, move the map, change the headline, alter footer alignment, or add decorations. Opaque background.
+
+Targeted refinement prompt:
+Use case: precise-object-edit.
+Input image: Image 1 is the edit target, an otherwise finished article cover.
+The ONLY remaining change is to redraw the cluster cells with COMPLETELY FLAT SOLID COLORS. The current image has cloudy diagonal highlights, blotches, grain, and color variation inside individual cells; REMOVE all of that.
+
+Replace the entire rectangular cluster grid and the cluster grid inside the enlarged inset with a clean, vector-style geometric diagram, following the exact same cell arrangement and category positions from the input image. Treat each square as a simple 2D rectangle filled from a single constant hexadecimal color, as if made using SVG rect fill:
+- ALL teal cells: #087F78 exactly.
+- ALL orange cells: #B65E28 exactly.
+- ALL purple cells: #9B86C5 exactly.
+- ALL pale free-space cells: #DCE9E7 exactly.
+- Thin gaps between cells: solid white.
+Every cell of a given category must have an IDENTICAL fill. Use NO gradient, lighting, cloudy diagonals, noise, grain, texture, transparency, watercolor, bevel, gloss, shadow, reflection, dither, or photographic treatment on these cells. The map must look like flat color swatches on a precise graph, not like colored glass or painted material. Flat color fills are the central requirement.
+
+Outside the cell interiors and gutters, preserve the cover exactly: all text, layout, background, annotations, connectors, inset border, original dimensions and wide aspect ratio. Keep headline "Tedd.Defrag", subtitle "When building becomes cheaper than buying.", top-left "Buy vs Build with Sol", MFT/Runlists/Free space labels, lower-left "Illustrative cluster map", right-aligned lower-right "github.com/tedd/Tedd.Defrag" and beneath it "tedd.no". The redundant author line must remain absent. Do not add or change anything else. Opaque background.

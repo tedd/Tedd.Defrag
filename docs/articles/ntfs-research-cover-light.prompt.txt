@@ -1,0 +1,12 @@
+Generation method: built-in imagegen
+Edit target: docs/articles/ntfs-research-cover.png
+Style source: site/styles.css
+
+Use case: style-transfer.
+Asset type: landscape LinkedIn article cover matching the light visual identity of Tedd.Defrag's GitHub Pages website.
+Input image: Image 1 is the edit target, the existing Inside NTFS cover.
+Primary request: restyle this existing cover into the site's light theme. Preserve the composition, proportions, disk allocation grid, magnified inset, annotations, and every existing word exactly. Change only the palette, surface treatment, typography styling, and line treatment necessary to match the light website.
+Website style reference from its actual CSS: off-white canvas #f7faf9, white panels #ffffff, pale sage surfaces #eef5f3, dark blue-green ink #13282f, muted text #61747b, fine pale sage borders #d6e3df, deep teal accent #087f78, darker teal #075f5c, pale mint #dff4f0, restrained warm orange #b65e28. Heading typography resembles Space Grotesk; secondary typography resembles DM Sans. The site has spacious, clean layouts, fine technical grid lines, restrained shadows, and generous white space.
+Editing instructions: replace the whole dark navy background with a bright off-white-to-pale-sage background, with an extremely faint technical grid that fades into white space. Render "Inside" in dark ink #13282f and "NTFS" in deep teal #087f78, retaining their size and hierarchy. Render body labels in muted dark slate. Restyle the disk map as a crisp flat grid with very fine pale sage gutters: allocated regions in deep teal and medium muted teal, fragmented regions in warm orange, metadata regions in muted lavender, free-space cells in very pale sage-grey. The map must retain high legibility on the light canvas. The inset has a white surface, a fine sage border, and delicate teal connector lines. Use subtle depth only, with no luminous or neon effect.
+Text invariants verbatim: "Inside NTFS"; "Research. Defragmentation. Performance."; "Tedd.Defrag · Sol"; "MFT"; "Runlists"; "Free space"; "Illustrative cluster map".
+Constraints: preserve the original wide aspect ratio and map structure. Opaque background. No added words, logos, charts, metrics, watermarks, objects, dark panels, heavy shadows, electric cyan, glow, or thick dark cell outlines. This must look like an editorial extension of the light website.

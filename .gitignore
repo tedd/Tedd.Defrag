@@ -429,6 +429,7 @@ FodyWeavers.xsd
 *.msp
 
 # Generated application distributions, recordings and benchmark intermediates.
+.codex-temp/
 artifacts/
 BenchmarkDotNet.Artifacts/
 TestResults/

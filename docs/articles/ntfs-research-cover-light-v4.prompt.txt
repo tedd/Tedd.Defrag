@@ -1,0 +1,9 @@
+Generation method: built-in imagegen
+Edit target: docs/articles/ntfs-research-cover-light-v3.png
+
+Use case: text-localization.
+Asset type: light-theme landscape LinkedIn cover.
+Input image: Image 1 is the edit target.
+Change ONLY the large headline from "Inside NTFS" to the exact text "Tedd.Defrag". Spell it exactly T-e-d-d-period-D-e-f-r-a-g, preserving capitalization and the period, without spaces.
+Use the existing headline's large bold geometric sans-serif style, left alignment, size, position, and baseline. Set "Tedd." in the existing dark blue-green ink and "Defrag" in the existing deep teal accent, keeping it as a single continuous headline on one line.
+Preserve absolutely everything else: top-left small gray caption "Buy vs Build with Sol"; supporting line "Research. Defragmentation. Performance."; "Tedd.Defrag · Sol"; the MFT, Runlists, and Free space annotations; the exact disk allocation map and magnified inset; pale background and faint grid; lower-left "Illustrative cluster map"; both lower-right footer lines "github.com/tedd/Tedd.Defrag" and beneath it "tedd.no", both right-aligned to the same edge. Preserve original dimensions, aspect ratio, margins, layout, and all cell colors. No added text, icons, logos, objects, or other changes. Opaque background.

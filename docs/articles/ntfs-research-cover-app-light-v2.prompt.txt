@@ -1,0 +1,22 @@
+Generation method: built-in imagegen
+Edit target: ntfs-research-cover-app-light.png
+Source screenshot: ntfs-app-light-analysis.png
+Aspect ratio: 5:4
+
+Use case: compositing and text-localization.
+Asset type: revised LinkedIn cover with a more square layout.
+Image 1 is the existing cover to edit.
+Image 2 is the original real light-mode app screenshot, a protected bitmap supporting insert.
+
+Revise the cover into a near-square 5:4 canvas (approximately 1920 by 1536), replacing its wide 16:9 layout. Use a compact vertical stack: small top-left caption, large headline, subtitle, large screenshot directly beneath the text, then the GitHub URL immediately beneath the screenshot. Reduce the generous left and right margins: approximately 2–3% of canvas width. Align the header and screenshot to the same left edge. The screenshot should span almost the full content width, substantially larger and more legible than in Image 1. Preserve the complete screenshot's native aspect ratio; do not crop, distort, or invent any of its content.
+
+Exact surrounding cover text:
+Small gray top-left caption: "Buy vs Build with Sol"
+Large headline: "Tedd.Defrag", with dark blue-green "Tedd." and deep teal "Defrag".
+Subtitle directly under headline, replace the old sentence entirely with the exact text: "Open Source as the viable option"
+One small gray footer line directly UNDER the screenshot, RIGHT ALIGNED to the screenshot's right edge: "github.com/tedd/Tedd.Defrag"
+REMOVE "tedd.no" completely. Do not retain the old subtitle. Do not add other text outside the screenshot.
+
+Keep the screenshot front-facing, sharply legible, with a thin pale-sage border and only a restrained shadow. Treat Image 2 as the actual screenshot pasted into the cover: preserve its interface, sidebar, real map, navigator, right-hand controls and recommendations, all numerical data and labels, and original completed-analysis state. Do not synthesize a new app interface, recolor its UI, change "Analyze · Partial", or invent active-defrag progress. Use Image 2 rather than a repeatedly regenerated imitation.
+
+Preserve the light site's visual identity: off-white #f7faf9 background, faint technical grid, dark ink #13282f, teal #087f78, muted gray sans-serif supporting typography. Keep the large bold geometric headline and clean hierarchy. Minimize empty space between subtitle and screenshot and between screenshot and URL, while preserving readable spacing. Modest bottom padding, tight outer margins. The screenshot sits beneath the text, and the URL sits beneath the screenshot, never beside it. No extra objects, illustrations, logos, badges, decorative copy, watermarks, or device mockups. Opaque background.

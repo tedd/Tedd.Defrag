@@ -1,0 +1,10 @@
+Generation method: built-in imagegen
+
+Use case: ads-marketing.
+Asset type: polished landscape LinkedIn article cover, approximately 16:9.
+Primary request: an editorial illustration about the research and engineering of raw NTFS reading, defragmentation algorithms, and measured performance in Tedd.Defrag, developed with Sol.
+Scene and subject: a large, intricate, mathematically regular rectangular disk allocation map made of hundreds of crisp tiny square cluster cells on a deep charcoal navy background. The disk map is the dominant visual, spanning most of the canvas. It contains contiguous turquoise extents, scattered warm amber fragmented extents, a few violet metadata bands, and muted slate free-space regions. Maintain a perfectly orthogonal grid with crisp uniform cell size. Include subtle technical linework and one restrained magnified strip of the grid to suggest inspecting filesystem structure. Show a single illustrative allocation map, without before-and-after claims.
+Style: premium technology magazine cover; sophisticated, restrained, precise, highly legible Swiss typography; sharp graphic design, very subtle dimensional depth and luminous accents, generous margins, strong visual hierarchy. No photographic device or monitor.
+Composition: wide landscape. Large readable title in the upper left on clean negative space, disk map sweeping through the lower two-thirds, small unobtrusive labels anchored to corresponding regions. All important content comfortably inside a central safe area.
+Text verbatim: headline "Inside NTFS"; supporting line "Research. Defragmentation. Performance."; small author/project line "Tedd.Defrag · Sol"; three small map annotations "MFT", "Runlists", "Free space"; very small lower caption "Illustrative cluster map".
+Constraints: professional publication-ready cover. Only the exact requested words, no other text. No screenshots, invented benchmark numbers, performance charts, logos, watermarks, robot faces, circuit-brain imagery, code walls, pseudo-code, 3D holographic clutter, or excessive glow. Opaque background.

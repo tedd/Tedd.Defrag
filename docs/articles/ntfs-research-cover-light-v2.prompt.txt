@@ -1,0 +1,10 @@
+Generation method: built-in imagegen
+Edit target: docs/articles/ntfs-research-cover-light.png
+
+Use case: text-localization.
+Asset type: final light-theme landscape LinkedIn article cover.
+Input image: Image 1 is the edit target.
+Make exactly two additions to this existing image:
+1. Add the exact text "Buy vs Build with Codex" in small, restrained, neutral gray sans-serif typography in the top left margin, above the large "Inside NTFS" headline. Left align it with the headline at approximately x=64 pixels, with its baseline approximately y=34 pixels in the original 1672 by 941 layout. Use approximately 18–20 pixel text, regular weight, muted gray #77858a. Keep it legible and clearly subordinate to the headline.
+2. Add the exact text "github.com/tedd/Tedd.Defrag" in the same small gray typography in the lower right margin, beneath the disk map. Right align it with the map's right edge, with approximately 40 pixels right inset, and vertically align it with the existing lower-left "Illustrative cluster map" caption. Preserve the capitalization and punctuation exactly. It must fit entirely within the canvas.
+Invariants: preserve all existing pixels as closely as possible outside the two small caption regions. Keep the light off-white background, faint background grid, existing title, supporting line, author line, MFT/Runlists/Free space annotations, inset, exact disk-map structure and colors, existing lower-left caption, aspect ratio, and dimensions. Do not move or resize any existing element. Do not change any existing wording. Do not add other text, decoration, icons, logos, or objects. Opaque background.

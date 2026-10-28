@@ -1,0 +1,11 @@
+Generation method: built-in imagegen
+Edit target: docs/articles/ntfs-research-cover-light-v2.png
+
+Use case: text-localization.
+Asset type: light-theme landscape LinkedIn article cover.
+Input image: Image 1 is the edit target.
+Make only these precise caption edits:
+1. In the top left, replace the existing small gray text "Buy vs Build with Codex" with the exact text "Buy vs Build with Sol". Keep the same small gray typography, regular weight, left alignment, and position above the large headline.
+2. In the lower right, preserve the first small gray line verbatim: "github.com/tedd/Tedd.Defrag".
+3. Add a second small gray line directly beneath it, verbatim: "tedd.no". Match the GitHub line's font, size, gray color, and regular weight. BOTH footer lines must be RIGHT ALIGNED to the EXACT SAME right edge near the disk map's right edge, with approximately 40 pixels of right margin. The shorter "tedd.no" line must finish directly beneath the end of the longer GitHub line. Use a comfortable line gap, with its baseline approximately 905 pixels in the original 1672 by 941 canvas, leaving safe bottom padding.
+Invariants: preserve the original dimensions and wide aspect ratio. Preserve every other element and word: large "Inside NTFS" headline, subtitle, "Tedd.Defrag · Sol", metadata annotations, inset, exact disk-map structure and cell colors, lower-left "Illustrative cluster map", light off-white background and faint grid. Do not move or resize any existing element outside the captions. No additional changes, text, icons, logos, shadows, or decoration. Opaque background.
